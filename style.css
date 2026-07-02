@@ -50,9 +50,24 @@
 #gp-fab.gp-fab-idle:hover {
     opacity: 0.6;
 }
-/* Тачскрины: hover нет, 0.2 на пёстром фоне почти невидимо — держим заметнее */
+/* Тачскрины: hover нет, полупрозрачный силуэт на пёстром фоне теряется.
+   На мобильных FAB — полноценный стеклянный кружок, всегда видимый. */
 @media (hover: none) {
-    #gp-fab.gp-fab-idle { opacity: 0.5; }
+    #gp-fab,
+    #gp-fab.gp-fab-idle,
+    #gp-fab.gp-fab-alert {
+        opacity: 1;
+        width: 46px;
+        height: 46px;
+        border-radius: 50%;
+        background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.05));
+        backdrop-filter: blur(20px) saturate(160%);
+        -webkit-backdrop-filter: blur(20px) saturate(160%);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        box-shadow:
+            0 10px 26px rgba(0, 0, 0, 0.45),
+            inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    }
 }
 
 /* При уведомлениях — чуть ярче */

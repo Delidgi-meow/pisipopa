@@ -130,7 +130,32 @@ function createFab() {
     });
 }
 
+// Кнопка «Телефон» в wand-меню (палочка у поля ввода) — гарантированный вход
+// на мобильных: FAB может быть не виден (позиция/прозрачность/чужой CSS),
+// а меню расширений есть всегда.
+function createWandButton() {
+    try {
+        const menu = document.getElementById('extensionsMenu');
+        if (!menu || document.getElementById('gp-wand-open')) return;
+        const item = document.createElement('div');
+        item.id = 'gp-wand-open';
+        item.className = 'list-group-item flex-container flexGap5 interactable';
+        item.tabIndex = 0;
+        item.innerHTML = `<i class="fa-solid fa-mobile-screen-button"></i><span>Телефон</span>`;
+        item.addEventListener('click', () => {
+            openPhone();
+        });
+        menu.appendChild(item);
+    } catch (e) {
+        console.warn('[GlassPhone] wand button failed:', e);
+    }
+}
+
 export function updateFabBadge() {
+    // Самовосстановление: если FAB пропал из DOM (чужой скрипт/перестройка) — пересоздаём
+    if (!document.getElementById('gp-fab')) {
+        try { createFab(); } catch (e) { /* ignore */ }
+    }
     const n = getTotalUnread();
     const badge = document.getElementById('gp-fab-badge');
     if (badge) {
@@ -1057,6 +1082,10 @@ export function resetIncomingCounters() {
 export function initUI() {
     createFab();
     createPhone();
+    createWandButton();
+    // Wand-меню может создаваться позже нашего init — доб. отложенные попытки
+    setTimeout(createWandButton, 2000);
+    setTimeout(createWandButton, 6000);
     updateFabBadge();
 }
 

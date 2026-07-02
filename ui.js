@@ -6,13 +6,13 @@
 import { sendMessageAsUser, Generate, generateQuietPrompt, saveSettingsDebounced } from '../../../../script.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
-    randomNumber, getTotalUnread, fmtTime, getRpDateLabel, keyOf, getHiddenMessageIndexes,
+    randomNumber, getTotalUnread, fmtTime, getRpDateLabel, getRpDateTime, keyOf, getHiddenMessageIndexes,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
-    generateTweetFeed, generateTweetComments, generateAuthorReply, generateIgFeed, generateIgComments,
+    generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
 } from './social.js';
@@ -278,15 +278,17 @@ function togglePhone() {
 }
 
 function tickClock() {
+    const rpDt = getRpDateTime();
     const el = document.getElementById('gp-clock');
     if (el) {
-        const d = new Date();
-        el.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        // RP-время если есть, иначе реальное
+        const h = rpDt?.hours ?? new Date().getHours();
+        const m = rpDt?.minutes ?? new Date().getMinutes();
+        el.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     }
     const rp = document.getElementById('gp-rpdate');
     if (rp) {
-        const label = getRpDateLabel();
-        rp.textContent = label || '';
+        rp.textContent = rpDt?.label || '';
     }
 }
 
@@ -326,14 +328,27 @@ function setHtmlKeepScroll(screen, selector, html) {
 function renderHome(screen) {
     currentScreen = 'home';
     const unread = getTotalUnread();
+    const rpDt = getRpDateTime();
     const d = new Date();
     const DAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
     const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
+    // RP-дата/время если доступно, иначе реальные
+    const clockH = rpDt?.hours ?? d.getHours();
+    const clockM = rpDt?.minutes ?? d.getMinutes();
+    let dateStr;
+    if (rpDt) {
+        // Для RP-даты вычисляем день недели через Date
+        const rpDate = new Date(rpDt.year, rpDt.month - 1, rpDt.day);
+        dateStr = `${DAYS[rpDate.getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`;
+    } else {
+        dateStr = `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+    }
+
     screen.innerHTML = `
         <div class="gp-home">
-            <div class="gp-home-clock">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</div>
-            <div class="gp-home-date">${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}</div>
+            <div class="gp-home-clock">${String(clockH).padStart(2, '0')}:${String(clockM).padStart(2, '0')}</div>
+            <div class="gp-home-date">${dateStr}</div>
             <div class="gp-home-grid">
                 <div class="gp-app" data-app="list">
                     <div class="gp-app-icon gp-app-msg">${ic('fa-comment-dots')}${unread > 0 ? `<span class="gp-app-badge">${unread > 9 ? '9+' : unread}</span>` : ''}</div>
@@ -604,6 +619,20 @@ function renderAdd(screen) {
 function twCard(t, { clickable = true } = {}) {
     const isUser = t.ak === 'user';
     const replyCount = t.replies?.length || 0;
+    
+    // Вложенная цитата
+    let quoteHtml = '';
+    if (t.quotedTweet) {
+        quoteHtml = `
+        <div class="gp-tw-quote">
+            <div class="gp-tw-meta">
+                <span class="gp-tw-name">${esc(t.quotedTweet.author)}</span>
+                <span class="gp-tw-handle">${esc(t.quotedTweet.handle)}</span>
+            </div>
+            <div class="gp-tw-text">${esc(t.quotedTweet.text)}</div>
+        </div>`;
+    }
+
     return `
     <div class="gp-tw-card${clickable ? ' gp-clickable' : ''}" data-tweet="${esc(t.id)}">
         ${avatarHtml(t.author, avatarForAuthor(t.ak), 'gp-avatar gp-avatar-sm')}
@@ -615,6 +644,7 @@ function twCard(t, { clickable = true } = {}) {
                 ${isUser ? `<button class="gp-tw-del" data-del="${esc(t.id)}" title="Удалить">${ic('fa-xmark')}</button>` : ''}
             </div>
             <div class="gp-tw-text">${esc(t.text)}</div>
+            ${quoteHtml}
             <div class="gp-tw-actions">
                 <button class="gp-tw-act" data-open="${esc(t.id)}">${ic('fa-comment')}<span>${replyCount || ''}</span></button>
                 <button class="gp-tw-act${t.rted ? ' gp-tw-on-rt' : ''}" data-rt="${esc(t.id)}">${ic('fa-retweet')}<span>${t.rts || ''}</span></button>
@@ -703,6 +733,9 @@ function renderTwThread(screen) {
     const replies = t.replies || [];
     const canAuthorReply = typeof t.ak === 'string' && t.ak.startsWith('contact:');
 
+    // Локальное состояние: на какой коммент отвечаем прямо сейчас
+    let replyTargetId = null;
+
     setHtmlKeepScroll(screen, '.gp-feed', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
@@ -718,7 +751,14 @@ function renderTwThread(screen) {
                     <div class="gp-reply">
                         ${avatarHtml(r.author, avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
-                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(r.author)}</span><span class="gp-tw-handle">${esc(r.handle || makeHandle(r.author))}</span><span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span><button class="gp-reply-del" data-del-reply="${esc(r.id)}" title="Удалить">${ic('fa-xmark')}</button></div>
+                            <div class="gp-tw-meta">
+                                <span class="gp-tw-name">${esc(r.author)}</span>
+                                <span class="gp-tw-handle">${esc(r.handle || makeHandle(r.author))}</span>
+                                <span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span>
+                                <button class="gp-reply-btn" data-replyto-tw="${esc(r.id)}" title="Ответить">${ic('fa-reply')}</button>
+                                <button class="gp-reply-del" data-del-reply="${esc(r.id)}" title="Удалить">${ic('fa-xmark')}</button>
+                            </div>
+                            ${r.replyTo ? `<div class="gp-reply-to">${ic('fa-reply')} ${esc(r.replyTo.author)}</div>` : ''}
                             <div class="gp-tw-text">${esc(r.text)}</div>
                         </div>
                     </div>`).join('')}
@@ -731,6 +771,20 @@ function renderTwThread(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('tw'));
     bindTwCardActions(screen, () => render());
+
+    const input = screen.querySelector('#gp-input');
+
+    // Клик на "Ответить" у конкретного коммента
+    screen.querySelectorAll('[data-replyto-tw]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rid = b.getAttribute('data-replyto-tw');
+        const r = replies.find(x => x.id === rid);
+        if (r && input) {
+            replyTargetId = rid;
+            input.value = `${r.handle} `;
+            input.focus();
+        }
+    }));
 
     // Удаление реплаев
     screen.querySelectorAll('[data-del-reply]').forEach(b => b.addEventListener('click', (e) => {
@@ -754,18 +808,35 @@ function renderTwThread(screen) {
         }
     });
 
-    const input = screen.querySelector('#gp-input');
     const doReply = async () => {
         const v = input?.value.trim();
         if (!v || sending) return;
-        addTweetReply(t.id, v);
+        
+        let targetComment = null;
+        if (replyTargetId) {
+            targetComment = replies.find(x => x.id === replyTargetId);
+        }
+        
+        // Добавляем реплай юзера (с указанием кому он отвечает)
+        addTweetReply(t.id, v, null, 'user', targetComment);
         input.value = '';
+        replyTargetId = null;
         render();
-        if (canAuthorReply) {
-            sending = true;
-            try { await generateAuthorReply('tw', t, v); }
-            catch (e) { console.error('[GlassPhone] author reply failed:', e); }
-            finally { sending = false; if (currentScreen === 'twthread') render(); }
+
+        sending = true;
+        try {
+            if (targetComment) {
+                // Если ответили на конкретный коммент — генерим ответ его автора (если он контакт)
+                await generateReplyToComment('tw', t, targetComment, v);
+            } else if (canAuthorReply) {
+                // Иначе генерим ответ автора треда (если он контакт)
+                await generateAuthorReply('tw', t, v);
+            }
+        } catch (e) {
+            console.error('[GlassPhone] author reply failed:', e);
+        } finally {
+            sending = false;
+            if (currentScreen === 'twthread') render();
         }
     };
     screen.querySelector('#gp-tw-reply')?.addEventListener('click', doReply);
@@ -919,6 +990,9 @@ function renderIgView(screen) {
     const comments = p.comments || [];
     const canAuthorReply = typeof p.ak === 'string' && p.ak.startsWith('contact:');
 
+    // Локальное состояние: на какой коммент отвечаем прямо сейчас
+    let replyTargetId = null;
+
     setHtmlKeepScroll(screen, '.gp-feed', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
@@ -934,7 +1008,13 @@ function renderIgView(screen) {
                     <div class="gp-reply">
                         ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
-                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(c.author)}</span><span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span><button class="gp-reply-del" data-del-igcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button></div>
+                            <div class="gp-tw-meta">
+                                <span class="gp-tw-name">${esc(c.author)}</span>
+                                <span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span>
+                                <button class="gp-reply-btn" data-replyto-ig="${esc(c.id)}" title="Ответить">${ic('fa-reply')}</button>
+                                <button class="gp-reply-del" data-del-igcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button>
+                            </div>
+                            ${c.replyTo ? `<div class="gp-reply-to">${ic('fa-reply')} ${esc(c.replyTo.author)}</div>` : ''}
                             <div class="gp-tw-text">${esc(c.text)}</div>
                         </div>
                     </div>`).join('')}
@@ -947,6 +1027,20 @@ function renderIgView(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('ig'));
     bindIgCardActions(screen);
+
+    const input = screen.querySelector('#gp-input');
+
+    // Клик на "Ответить" у конкретного коммента
+    screen.querySelectorAll('[data-replyto-ig]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const cid = b.getAttribute('data-replyto-ig');
+        const c = comments.find(x => x.id === cid);
+        if (c && input) {
+            replyTargetId = cid;
+            input.value = `@${c.author.replace(/\s+/g, '')} `;
+            input.focus();
+        }
+    }));
 
     // Удаление комментариев
     screen.querySelectorAll('[data-del-igcomment]').forEach(b => b.addEventListener('click', (e) => {
@@ -970,18 +1064,32 @@ function renderIgView(screen) {
         }
     });
 
-    const input = screen.querySelector('#gp-input');
     const doComment = async () => {
         const v = input?.value.trim();
         if (!v || sending) return;
-        addIgComment(p.id, v);
+
+        let targetComment = null;
+        if (replyTargetId) {
+            targetComment = comments.find(x => x.id === replyTargetId);
+        }
+
+        addIgComment(p.id, v, null, 'user', targetComment);
         input.value = '';
+        replyTargetId = null;
         render();
-        if (canAuthorReply) {
-            sending = true;
-            try { await generateAuthorReply('ig', p, v); }
-            catch (e) { console.error('[GlassPhone] ig author reply failed:', e); }
-            finally { sending = false; if (currentScreen === 'igview') render(); }
+
+        sending = true;
+        try {
+            if (targetComment) {
+                await generateReplyToComment('ig', p, targetComment, v);
+            } else if (canAuthorReply) {
+                await generateAuthorReply('ig', p, v);
+            }
+        } catch (e) {
+            console.error('[GlassPhone] ig author reply failed:', e);
+        } finally {
+            sending = false;
+            if (currentScreen === 'igview') render();
         }
     };
     screen.querySelector('#gp-ig-reply')?.addEventListener('click', doComment);

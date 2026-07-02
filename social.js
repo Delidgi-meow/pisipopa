@@ -108,12 +108,21 @@ export function harvestSocialTags() {
             seen.add(h); s.seenTags.push(h);
             const j = safeJson(m[1]);
             if (!j || !j.author || !j.text) continue;
-            s.tweets.unshift({
+            const tw = {
                 id: genId(), author: String(j.author), handle: j.handle || makeHandle(j.author),
                 ak: resolveAuthorKey(j.author), text: String(j.text).slice(0, 280),
                 time: Date.now(), likes: Math.floor(Math.random() * 40) + 2, liked: false,
                 rts: Math.floor(Math.random() * 10), replies: [],
-            });
+            };
+            // Цитата: персонаж цитирует чей-то твит из ролевой
+            if (j.quote && j.quote.author && j.quote.text) {
+                tw.quotedTweet = {
+                    author: String(j.quote.author),
+                    handle: j.quote.handle || makeHandle(j.quote.author),
+                    text: String(j.quote.text).slice(0, 280),
+                };
+            }
+            s.tweets.unshift(tw);
             newTweets++;
         }
 
@@ -181,7 +190,7 @@ export function delTweet(id) {
     saveMeta();
 }
 
-export function addTweetReply(tweetId, text, author = null, ak = 'user') {
+export function addTweetReply(tweetId, text, author = null, ak = 'user', replyTo = null) {
     const t = getTweets().find(x => x.id === tweetId);
     if (!t) return null;
     if (!Array.isArray(t.replies)) t.replies = [];
@@ -190,6 +199,7 @@ export function addTweetReply(tweetId, text, author = null, ak = 'user') {
         handle: makeHandle(author || getUserName()), ak,
         text: String(text).slice(0, 280), time: Date.now(),
     };
+    if (replyTo) r.replyTo = { id: replyTo.id, author: replyTo.author };
     t.replies.push(r);
     if (t.replies.length > MAX_COMMENTS) t.replies = t.replies.slice(-MAX_COMMENTS);
     saveMeta();
@@ -229,7 +239,7 @@ export function delIg(id) {
     saveMeta();
 }
 
-export function addIgComment(postId, text, author = null, ak = 'user') {
+export function addIgComment(postId, text, author = null, ak = 'user', replyTo = null) {
     const p = getIgPosts().find(x => x.id === postId);
     if (!p) return null;
     if (!Array.isArray(p.comments)) p.comments = [];
@@ -237,6 +247,7 @@ export function addIgComment(postId, text, author = null, ak = 'user') {
         id: genId(), author: author || getUserName(), ak,
         text: String(text).slice(0, 300), time: Date.now(),
     };
+    if (replyTo) c.replyTo = { id: replyTo.id, author: replyTo.author };
     p.comments.push(c);
     if (p.comments.length > MAX_COMMENTS) p.comments = p.comments.slice(-MAX_COMMENTS);
     saveMeta();
@@ -419,32 +430,49 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
 const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.`;
 
 export async function generateTweetFeed() {
+    // Последние твиты юзера — боты могут их цитировать (quote tweet)
+    const s = getSocial();
+    const userTweets = s.tweets.filter(t => t.ak === 'user').slice(0, 3);
+    const userTweetsBlock = userTweets.length > 0
+        ? `\n${getUserName()}'s recent tweets (characters may quote-retweet these with commentary):\n${userTweets.map(t => `- "${t.text.slice(0, 120)}"`).join('\n')}\n`
+        : '';
+
     const prompt = `${await taskHeader(`generate tweets for the Twitter-like feed on ${getUserName()}'s phone.`)}
 ${contactsBlock()}
-
+${userTweetsBlock}
 Generate 8-12 tweets for ${getUserName()}'s timeline:
 1. Tweets from known characters — in character, may reference recent RP events (from their point of view, no spoilers of hidden thoughts).
 2. Tweets from invented accounts fitting the setting: news, local spots, memes, random strangers, drama. These make the feed feel alive.
+3. 1-2 tweets MAY be quote-retweets of ${getUserName()}'s recent tweets (if she posted any) — a character reacts to her tweet with their own commentary. For these, add a "quote" field.
 
 Rules: max 280 chars each, SHORT like real tweets; mix of tones (news, shitpost, life update, ad, hot take). NO emojis.
 ${JSON_RULES}
-Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]`;
+Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]  
+For quote-retweets: {"author":"...","handle":"...","text":"their commentary","type":"contact|random","quote":{"author":"${getUserName()}","text":"original tweet text"}}`;
 
     const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048 }));
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
-    const s = getSocial();
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
-        s.tweets.unshift({
+        const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
             text: String(it.text).slice(0, 280),
             time: Date.now() - Math.floor(Math.random() * 5400000),
             likes: Math.floor(Math.random() * 60), liked: false,
             rts: Math.floor(Math.random() * 15), replies: [],
-        });
+        };
+        // Цитата (quote tweet)
+        if (it.quote && it.quote.author && it.quote.text) {
+            tw.quotedTweet = {
+                author: String(it.quote.author),
+                handle: it.quote.handle || makeHandle(it.quote.author),
+                text: String(it.quote.text).slice(0, 280),
+            };
+        }
+        s.tweets.unshift(tw);
         added++;
     }
     s.tweets.sort((a, b) => b.time - a.time);
@@ -483,7 +511,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
 }
 
 // Ответ автора-персонажа на реплику юзера (твит или инста-пост)
-export async function generateAuthorReply(kind, item, userText) {
+export async function generateAuthorReply(kind, item, userText, replyTo = null) {
     const prompt = `${await taskHeader(`write ONE short social-media reply as the character ${item.author}.`)}
 ${item.author} posted this ${kind === 'tw' ? 'tweet' : 'Instagram post'}: "${kind === 'tw' ? item.text : (item.caption || item.imgDesc)}"
 ${getUserName()} replied to it: "${userText}"
@@ -496,8 +524,38 @@ Output ONLY the reply text — no quotes, no labels, no JSON, no HTML comments, 
         .replace(/^["'«]|["'»]$/g, '').trim();
     if (!raw) return null;
     const text = raw.slice(0, 280);
-    if (kind === 'tw') return addTweetReply(item.id, text, item.author, item.ak);
-    return addIgComment(item.id, text, item.author, item.ak);
+    const userReplyRef = replyTo || null;
+    if (kind === 'tw') return addTweetReply(item.id, text, item.author, item.ak, userReplyRef);
+    return addIgComment(item.id, text, item.author, item.ak, userReplyRef);
+}
+
+// Ответ конкретного персонажа на коммент юзера (юзер ответил НА конкретный коммент)
+export async function generateReplyToComment(kind, item, targetComment, userText) {
+    const authorName = targetComment.author;
+    const ak = targetComment.ak;
+    const isContact = typeof ak === 'string' && ak.startsWith('contact:');
+    if (!isContact) return null; // рандомные аккаунты не отвечают
+
+    const postDesc = kind === 'tw'
+        ? `tweet by ${item.author}: "${item.text}"`
+        : `Instagram post by ${item.author}: "${item.caption || item.imgDesc}"`;
+    const prompt = `${await taskHeader(`write ONE short social-media reply as the character ${authorName}.`)}
+${postDesc}
+${authorName} commented: "${targetComment.text}"
+${getUserName()} replied to ${authorName}'s comment: "${userText}"
+
+Write ${authorName}'s response to ${getUserName()}'s reply: max 280 chars, in-character, natural social media tone, same language as the excerpt. NO emojis.
+Output ONLY the reply text — no quotes, no labels, no JSON, no HTML comments, no <think>.`;
+
+    const raw = (await socialGen(prompt, { maxTokens: 256 })).trim()
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/^["'«]|["'»]$/g, '').trim();
+    if (!raw) return null;
+    const text = raw.slice(0, 280);
+    // Ответ привязан к реплике юзера (которая была ответом на targetComment)
+    // Но мы вставляем как ответ на юзерский коммент — указываем replyTo на юзера
+    if (kind === 'tw') return addTweetReply(item.id, text, authorName, ak);
+    return addIgComment(item.id, text, authorName, ak);
 }
 
 export async function generateIgFeed() {

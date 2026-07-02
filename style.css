@@ -724,6 +724,16 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+.gp-tw-quote {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(0,0,0,0.15);
+}
+.gp-tw-quote .gp-tw-meta { margin-bottom: 2px; }
+.gp-tw-quote .gp-tw-text { margin-top: 0; font-size: 12.5px; opacity: 0.9; }
+
 .gp-tw-actions {
     display: flex;
     gap: 22px;
@@ -747,16 +757,26 @@
 .gp-tw-act.gp-tw-on { color: #ff6a8e; }
 .gp-tw-act.gp-tw-on-rt { color: #3ec9a7; }
 .gp-tw-act span { font-size: 10.5px; }
-.gp-tw-del {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: var(--gp-text-dim);
-    font-size: 11px;
-    cursor: pointer;
-    padding: 2px 5px;
+.gp-reply-del {
+    background: none; border: none; padding: 3px; margin-left: auto;
+    color: var(--gp-text-dim); opacity: 0; cursor: pointer; border-radius: 4px;
 }
-.gp-tw-del:hover { color: rgba(255,120,130,0.9); }
+.gp-reply:hover .gp-reply-del { opacity: 0.6; }
+.gp-reply-del:hover { opacity: 1 !important; color: #ff5e5e; background: rgba(255,94,94,0.15); }
+.gp-reply-btn {
+    background: none; border: none; padding: 3px;
+    color: var(--gp-text-dim); opacity: 0.6; cursor: pointer; border-radius: 4px; font-size: 11px;
+}
+.gp-reply-btn:hover { opacity: 1; color: var(--gp-text); background: rgba(255,255,255,0.1); }
+.gp-reply:hover .gp-reply-btn { opacity: 1; }
+.gp-reply-to {
+    font-size: 10px;
+    color: var(--gp-text-dim);
+    margin-top: -2px;
+    margin-bottom: 2px;
+    opacity: 0.8;
+}
+.gp-reply-to i { margin-right: 3px; }
 
 .gp-replies {
     display: flex;

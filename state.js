@@ -162,28 +162,68 @@ function parseMsgDate(msg) {
 
 export function fmtTime(date) {
     if (!date) return '';
-    const now = new Date();
-    const sameDay = date.getFullYear() === now.getFullYear()
-        && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+    // Сравниваем «сегодня» с RP-датой, а не с реальной
+    const rpNow = getRpDateTime();
+    let sameDay;
+    if (rpNow) {
+        sameDay = date.getDate() === rpNow.day
+            && (date.getMonth() + 1) === rpNow.month
+            && date.getFullYear() === rpNow.year;
+    } else {
+        const now = new Date();
+        sameDay = date.getFullYear() === now.getFullYear()
+            && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+    }
     if (sameDay) {
         return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     }
     return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// ── Последняя RP-дата из чата (синергия с Pregnancy — она хранит RP_DATE в сообщениях) ──
-const RP_DATE_RE = /<!--[\s\S]*?\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})\s*\][\s\S]*?-->/i;
-export function getRpDateLabel() {
+// ── Последняя RP-дата/время из чата (синергия с Pregnancy — она хранит RP_DATE в сообщениях) ──
+// Расширенный regex: ловит дату DD.MM.YYYY и опционально время HH:MM (если модель дописывает)
+const RP_DATE_RE = /<!--[\s\S]*?\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?\s*\][\s\S]*?-->/i;
+
+// Полный парсинг RP-даты → {day, month, year, hours?, minutes?, label}
+// Возвращает null если RP_DATE нет в чате
+let _rpDateCache = null;
+let _rpDateCacheLen = -1;
+export function getRpDateTime() {
     try {
         const chat = SillyTavern.getContext()?.chat || [];
+        // Простой кэш: пересчитываем только если длина чата изменилась
+        if (chat.length === _rpDateCacheLen && _rpDateCache !== undefined) return _rpDateCache;
+        _rpDateCacheLen = chat.length;
         for (let i = chat.length - 1; i >= 0; i--) {
             const mes = chat[i]?.mes;
             if (!mes || chat[i].is_system) continue;
             const m = mes.match(RP_DATE_RE);
-            if (m) return `${String(parseInt(m[1])).padStart(2, '0')}.${String(parseInt(m[2])).padStart(2, '0')}`;
+            if (m) {
+                const day = parseInt(m[1]);
+                const month = parseInt(m[2]);
+                let year = parseInt(m[3]);
+                if (year < 100) year += 2000;
+                const result = {
+                    day, month, year,
+                    label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`,
+                };
+                if (m[4] !== undefined && m[5] !== undefined) {
+                    result.hours = parseInt(m[4]);
+                    result.minutes = parseInt(m[5]);
+                }
+                _rpDateCache = result;
+                return result;
+            }
         }
-    } catch (e) { /* ignore */ }
+        _rpDateCache = null;
+    } catch (e) { _rpDateCache = null; }
     return null;
+}
+
+// Обратная совместимость: label «ДД.ММ»
+export function getRpDateLabel() {
+    const rp = getRpDateTime();
+    return rp ? rp.label : null;
 }
 
 // ═══════════════════════════════════════════

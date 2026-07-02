@@ -757,6 +757,22 @@
 .gp-tw-act.gp-tw-on { color: #ff6a8e; }
 .gp-tw-act.gp-tw-on-rt { color: #3ec9a7; }
 .gp-tw-act span { font-size: 10.5px; }
+
+.gp-tw-del {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--gp-text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 5px;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+.gp-tw-card:hover .gp-tw-del,
+.gp-ig-card:hover .gp-tw-del { opacity: 0.6; }
+.gp-tw-del:hover { opacity: 1 !important; color: rgba(255,120,130,0.9); }
+
 .gp-reply-del {
     background: none; border: none; padding: 3px; margin-left: auto;
     color: var(--gp-text-dim); opacity: 0; cursor: pointer; border-radius: 4px;

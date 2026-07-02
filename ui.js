@@ -824,6 +824,8 @@ function renderTwThread(screen) {
         render();
 
         sending = true;
+        genBusy = true;
+        render();
         try {
             if (targetComment) {
                 // Если ответили на конкретный коммент — генерим ответ его автора (если он контакт)
@@ -832,10 +834,13 @@ function renderTwThread(screen) {
                 // Иначе генерим ответ автора треда (если он контакт)
                 await generateAuthorReply('tw', t, v);
             }
+            // После ответа юзера — генерим дополнительные реакции от других
+            await generateTweetComments(t);
         } catch (e) {
             console.error('[GlassPhone] author reply failed:', e);
         } finally {
             sending = false;
+            genBusy = false;
             if (currentScreen === 'twthread') render();
         }
     };
@@ -1079,16 +1084,21 @@ function renderIgView(screen) {
         render();
 
         sending = true;
+        genBusy = true;
+        render();
         try {
             if (targetComment) {
                 await generateReplyToComment('ig', p, targetComment, v);
             } else if (canAuthorReply) {
                 await generateAuthorReply('ig', p, v);
             }
+            // После ответа юзера — генерим дополнительные реакции от других
+            await generateIgComments(p);
         } catch (e) {
             console.error('[GlassPhone] ig author reply failed:', e);
         } finally {
             sending = false;
+            genBusy = false;
             if (currentScreen === 'igview') render();
         }
     };

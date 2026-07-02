@@ -1135,13 +1135,15 @@ async function doSend(key) {
         const rawReply = await generateQuietPrompt(quietPrompt, false, false);
 
         if (rawReply && rawReply.trim()) {
-            // Вставляем ответ как системное сообщение — JS Runner и Extra блоки не триггерятся
+            // Трюк с призраком: вставляем is_system:true → ExtBlocks/JS Runner
+            // пропускают сообщение (их хэндлеры проверяют is_system). Через секунду
+            // снимаем призрака → сообщение остаётся в контексте модели.
             const chat = ctx?.chat;
             if (chat) {
                 const replyMsg = {
                     name: name,
                     is_user: false,
-                    is_system: true,
+                    is_system: true, // призрак — расширения не триггерятся
                     send_date: Date.now(),
                     mes: rawReply.trim(),
                     extra: { isSmsSilent: true },
@@ -1152,6 +1154,19 @@ async function doSend(key) {
                 if (typeof ctx.printMessages === 'function') {
                     ctx.printMessages();
                 }
+                // Снимаем призрака — сообщение попадёт в контекст модели при следующей генерации
+                setTimeout(async () => {
+                    replyMsg.is_system = false;
+                    // Обновляем DOM: убираем призрака с элемента сообщения
+                    const mesIdx = chat.indexOf(replyMsg);
+                    if (mesIdx >= 0) {
+                        const mesEl = document.querySelector(`.mes[mesid="${mesIdx}"]`);
+                        if (mesEl) {
+                            mesEl.setAttribute('is_system', 'false');
+                        }
+                    }
+                    if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+                }, 1500);
             }
         }
     } catch (e) {

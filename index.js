@@ -26,7 +26,7 @@ function setupSettingsPanel() {
     const html = `
 <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-        <b>GlassPhone — Телефон</b>
+        <b>Телефон</b>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
@@ -46,6 +46,11 @@ function setupSettingsPanel() {
             </select>
         </div>
         <small style="opacity:0.4;font-size:9px;display:block">Генерация лент/комментов всегда идёт БЕЗ RP-пресета. «Текущий API» — сырой запрос; отдельный профиль дополнительно включает вижн (модель видит фото постов).</small>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Глубина инжекта:</span>
+            <input type="number" id="gp-set-depth" class="text_pole" min="0" max="99" step="1" value="${s.injectDepth || 0}" style="width:55px;flex:0 0 auto">
+            <span style="font-size:8px;opacity:0.4">0 = последний ход</span>
+        </div>
         <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
         <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Смс живут прямо в сообщениях чата — телефон синхронизирован с ролевой всегда. Консоль: glassPhoneOpen()</small>
     </div>
@@ -71,6 +76,11 @@ function setupSettingsPanel() {
         getSettings().hideSmsInChat = this.checked;
         saveSettingsDebounced();
         applyChatHiding();
+    });
+    $('#gp-set-depth').on('change', function () {
+        getSettings().injectDepth = Math.max(0, Math.min(99, parseInt(this.value) || 0));
+        saveSettingsDebounced();
+        updatePhoneInjection();
     });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;

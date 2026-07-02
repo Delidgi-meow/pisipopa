@@ -972,3 +972,81 @@
     transition: background .15s, color .15s;
 }
 .gp-close:hover { background: var(--gp-glass-strong); color: var(--gp-text); }
+
+/* ═══ Кнопка удаления SMS на баблах ═══ */
+.gp-sms-del {
+    display: none;
+    background: none;
+    border: none;
+    color: rgba(255, 120, 130, 0.5);
+    font-size: 9px;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+    transition: color .15s;
+    line-height: 1;
+}
+.gp-bubble:hover .gp-sms-del,
+.gp-bubble:active .gp-sms-del {
+    display: inline-flex;
+}
+/* На тачскринах hover не работает — показываем всегда, но тусклой */
+@media (hover: none) {
+    .gp-sms-del {
+        display: inline-flex;
+        opacity: 0.3;
+    }
+}
+.gp-sms-del:hover { color: rgba(255, 120, 130, 0.9); }
+
+/* ═══ Кнопка перегенерации картинки поверх фото ═══ */
+.gp-ig-img-has {
+    position: relative;
+}
+.gp-ig-regenbtn {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    opacity: 0;
+    transition: opacity .2s, transform .15s, background .15s;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.gp-ig-img-has:hover .gp-ig-regenbtn { opacity: 1; }
+.gp-ig-regenbtn:hover { background: rgba(0, 0, 0, 0.7); transform: scale(1.08); }
+.gp-ig-regenbtn:active { transform: scale(0.92); }
+/* На тачскринах — всегда видна */
+@media (hover: none) {
+    .gp-ig-regenbtn { opacity: 0.7; }
+}
+
+/* ═══ Кнопка удаления комментариев/реплаев ═══ */
+.gp-reply-del {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.2);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 2px 4px;
+    transition: color .15s;
+    flex: 0 0 auto;
+}
+.gp-reply-del:hover { color: rgba(255, 120, 130, 0.9); }
+@media (hover: none) {
+    .gp-reply-del { color: rgba(255, 255, 255, 0.3); }
+}

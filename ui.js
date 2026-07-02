@@ -3,15 +3,15 @@
 // Стиль: liquid glass / glassmorphism, иконки FontAwesome, никаких эмодзи.
 // ═══════════════════════════════════════════
 
-import { sendMessageAsUser, Generate, saveSettingsDebounced } from '../../../../script.js';
+import { sendMessageAsUser, Generate, generateQuietPrompt, saveSettingsDebounced } from '../../../../script.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateLabel, keyOf, getHiddenMessageIndexes,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
-    getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply,
-    postIg, likeIg, delIg, addIgComment,
+    getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
+    postIg, likeIg, delIg, addIgComment, delIgComment,
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
@@ -418,7 +418,8 @@ function renderThread(screen) {
 
     let bubbles = '';
     let lastDay = '';
-    for (const m of t.messages) {
+    for (let mi = 0; mi < t.messages.length; mi++) {
+        const m = t.messages[mi];
         if (m.time) {
             const day = `${m.time.getDate()}.${m.time.getMonth()}.${m.time.getFullYear()}`;
             if (day !== lastDay) {
@@ -432,7 +433,7 @@ function renderThread(screen) {
         const tm = m.time ? fmtTime(m.time) : '';
         bubbles += `
         <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}">
-            <div class="gp-bubble">${esc(m.text)}</div>
+            <div class="gp-bubble">${esc(m.text)}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button></div>
             ${tm ? `<div class="gp-bubble-time">${esc(tm)}</div>` : ''}
         </div>`;
     }
@@ -511,6 +512,19 @@ function renderThread(screen) {
     });
     sendBtn?.addEventListener('click', () => doSend(t.key));
     screen.querySelector('#gp-regen')?.addEventListener('click', () => doRegen(t.key));
+    // Удаление отдельного SMS
+    screen.querySelectorAll('[data-smsdel]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mi = parseInt(b.getAttribute('data-smsdel'));
+        const msg = t.messages[mi];
+        if (!msg) return;
+        if (!confirm('Удалить это сообщение?')) return;
+        deleteSmsFromChat(msg);
+        render();
+        updatePhoneInjection();
+        applyChatHiding();
+        updateFabBadge();
+    }));
     input?.focus();
 }
 
@@ -704,7 +718,7 @@ function renderTwThread(screen) {
                     <div class="gp-reply">
                         ${avatarHtml(r.author, avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
-                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(r.author)}</span><span class="gp-tw-handle">${esc(r.handle || makeHandle(r.author))}</span><span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span></div>
+                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(r.author)}</span><span class="gp-tw-handle">${esc(r.handle || makeHandle(r.author))}</span><span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span><button class="gp-reply-del" data-del-reply="${esc(r.id)}" title="Удалить">${ic('fa-xmark')}</button></div>
                             <div class="gp-tw-text">${esc(r.text)}</div>
                         </div>
                     </div>`).join('')}
@@ -717,6 +731,13 @@ function renderTwThread(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('tw'));
     bindTwCardActions(screen, () => render());
+
+    // Удаление реплаев
+    screen.querySelectorAll('[data-del-reply]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        delTweetReply(t.id, b.getAttribute('data-del-reply'));
+        render();
+    }));
 
     screen.querySelector('#gp-tw-comments')?.addEventListener('click', async () => {
         if (genBusy) return;
@@ -760,16 +781,26 @@ let _imgGenReady = false;
 isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
 
 function igImageHtml(p) {
-    if (p.image) return `<div class="gp-ig-img"><img src="${esc(p.image)}" alt=""></div>`;
+    if (p.image) {
+        const busy = _imgGenBusy.has(p.id);
+        // Cache-busting: если URL не data:, добавляем ?t= для принудительной перезагрузки
+        const src = p.image.startsWith('data:') ? p.image : p.image + (p.image.includes('?') ? '&' : '?') + 't=' + (p._imgTs || '0');
+        return `<div class="gp-ig-img gp-ig-img-has">
+            <img src="${esc(src)}" alt="">
+            ${busy
+                ? `<div class="gp-ig-regen-overlay">${ic('fa-spinner fa-spin')}<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Перегенерация...</div></div>`
+                : `<button class="gp-ig-regenbtn" data-regenimg="${esc(p.id)}" title="Перегенерировать">${ic('fa-rotate-right')}</button>`}
+        </div>`;
+    }
     const busy = _imgGenBusy.has(p.id);
     // Сгенерированный «снимок»: стеклянная заглушка с описанием кадра.
-    // Если установлен novarakk — кнопка «нарисовать» прямо на заглушке.
+    // Кнопка «нарисовать» всегда видна — при клике проверяется доступность novarakk.
     return `<div class="gp-ig-img gp-ig-img-gen" style="${avatarStyle(p.author + (p.imgDesc || ''))}">
         <div class="gp-ig-img-inner">
             ${busy ? ic('fa-spinner fa-spin') : ic('fa-image')}
             ${p.imgDesc ? `<div class="gp-ig-img-desc">${esc(p.imgDesc)}</div>` : ''}
             ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>` : ''}
-            ${!busy && _imgGenReady ? `<button class="gp-ig-genbtn" data-genimg="${esc(p.id)}">${ic('fa-wand-magic-sparkles')} Нарисовать</button>` : ''}
+            ${!busy ? `<button class="gp-ig-genbtn" data-genimg="${esc(p.id)}">${ic('fa-wand-magic-sparkles')} Нарисовать</button>` : ''}
         </div>
     </div>`;
 }
@@ -797,12 +828,19 @@ function bindIgCardActions(root) {
     root.querySelectorAll('[data-like-ig]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); likeIg(b.getAttribute('data-like-ig')); render();
     }));
-    // Генерация картинки через novarakk
-    root.querySelectorAll('[data-genimg]').forEach(b => b.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = b.getAttribute('data-genimg');
+    // Генерация/перегенерация картинки через novarakk
+    const doGenImage = async (id) => {
         const post = getIgPosts().find(x => x.id === id);
         if (!post || _imgGenBusy.has(id)) return;
+        // Проверяем доступность при клике, а не при рендере
+        if (!_imgGenReady) {
+            const ready = await isImageGenAvailable();
+            if (!ready) {
+                toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation');
+                return;
+            }
+            _imgGenReady = true;
+        }
         _imgGenBusy.add(id);
         render();
         try {
@@ -810,6 +848,7 @@ function bindIgCardActions(root) {
                 const el = document.querySelector(`[data-genstatus="${CSS.escape(id)}"]`);
                 if (el) el.textContent = status;
             });
+            post._imgTs = Date.now(); // cache-busting для перезагрузки нового фото
             toast('Фото готово', 'fa-instagram');
         } catch (err) {
             console.error('[GlassPhone] image gen failed:', err);
@@ -818,6 +857,14 @@ function bindIgCardActions(root) {
             _imgGenBusy.delete(id);
             render();
         }
+    };
+    root.querySelectorAll('[data-genimg]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        doGenImage(b.getAttribute('data-genimg'));
+    }));
+    root.querySelectorAll('[data-regenimg]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        doGenImage(b.getAttribute('data-regenimg'));
     }));
     root.querySelectorAll('[data-del-ig]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -887,7 +934,7 @@ function renderIgView(screen) {
                     <div class="gp-reply">
                         ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
-                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(c.author)}</span><span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span></div>
+                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(c.author)}</span><span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span><button class="gp-reply-del" data-del-igcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button></div>
                             <div class="gp-tw-text">${esc(c.text)}</div>
                         </div>
                     </div>`).join('')}
@@ -900,6 +947,13 @@ function renderIgView(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('ig'));
     bindIgCardActions(screen);
+
+    // Удаление комментариев
+    screen.querySelectorAll('[data-del-igcomment]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        delIgComment(p.id, b.getAttribute('data-del-igcomment'));
+        render();
+    }));
 
     screen.querySelector('#gp-ig-comments')?.addEventListener('click', async () => {
         if (genBusy) return;
@@ -1005,6 +1059,51 @@ function renderIgNew(screen) {
     });
 }
 
+// ═══ Удаление отдельного SMS из чата ═══
+// SMS = HTML-коммент внутри сообщения чата. Вырезаем конкретный тег,
+// а если сообщение стало пустым — удаляем само сообщение.
+
+function deleteSmsFromChat(msg) {
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx?.chat;
+        if (!chat || !chat[msg.idx]) return;
+        const chatMsg = chat[msg.idx];
+        let text = chatMsg.mes;
+
+        if (msg.dir === 'out') {
+            // Юзерское сообщение: вырезаем tel:out тег + видимую часть [СМС → ...]
+            text = text.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->\s*/i, '');
+            text = text.replace(/\[СМС\s*→\s*[^\]]+\]\s*[\s\S]*/i, '');
+        } else {
+            // Входящее: вырезаем конкретный tel:sms тег, содержащий этот текст
+            const escapedText = msg.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 60);
+            const tagRe = new RegExp(`<!--\\s*tel:sms:\\{[\\s\\S]*?${escapedText}[\\s\\S]*?\\}\\s*-->\\s*`, 'i');
+            text = text.replace(tagRe, '');
+        }
+
+        text = text.trim();
+        // Если после удаления тега сообщение стало пустым (или осталось \u003c5 видимых символов) — удаляем сообщение
+        const visible = text.replace(/<!--[\s\S]*?-->/g, '').trim();
+        if (visible.length < 5) {
+            // Удаляем сообщение из чата
+            if (typeof ctx.deleteMessageByIndex === 'function') {
+                ctx.deleteMessageByIndex(msg.idx, false);
+            } else {
+                chat.splice(msg.idx, 1);
+                if (typeof ctx.saveChat === 'function') ctx.saveChat();
+            }
+        } else {
+            // Обновляем текст сообщения
+            chatMsg.mes = text;
+            if (typeof ctx.saveChat === 'function') ctx.saveChat();
+        }
+    } catch (e) {
+        console.error('[GlassPhone] deleteSmsFromChat failed:', e);
+        toast('Не удалось удалить', 'fa-circle-exclamation');
+    }
+}
+
 // ═══ Отправка смс ═══
 
 async function doSend(key) {
@@ -1027,12 +1126,33 @@ async function doSend(key) {
         typingKey = key;
         render(); // своя смс уже видна (она в чате), плюс «печатает…»
 
-        const ctx = SillyTavern.getContext();
         updatePhoneInjection();
-        if (ctx.groupId && typeof ctx.executeSlashCommandsWithOptions === 'function') {
-            await ctx.executeSlashCommandsWithOptions('/trigger');
-        } else {
-            await Generate('normal');
+
+        // Генерируем ответ «тихо» — generateQuietPrompt не триггерит JS Runner,
+        // Extra блоки и другие скрипты. Результат вставляем в чат вручную.
+        const ctx = SillyTavern.getContext();
+        const quietPrompt = `Continue the roleplay. ${name} just received this SMS from ${ctx?.name1 || 'User'}: "${text}". Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
+        const rawReply = await generateQuietPrompt(quietPrompt, false, false);
+
+        if (rawReply && rawReply.trim()) {
+            // Вставляем ответ как системное сообщение — JS Runner и Extra блоки не триггерятся
+            const chat = ctx?.chat;
+            if (chat) {
+                const replyMsg = {
+                    name: name,
+                    is_user: false,
+                    is_system: true,
+                    send_date: Date.now(),
+                    mes: rawReply.trim(),
+                    extra: { isSmsSilent: true },
+                };
+                chat.push(replyMsg);
+                if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+                // Подтолкнуть UI ST к обновлению
+                if (typeof ctx.printMessages === 'function') {
+                    ctx.printMessages();
+                }
+            }
         }
     } catch (e) {
         console.error('[GlassPhone] send failed:', e);

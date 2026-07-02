@@ -76,8 +76,9 @@ export function updatePhoneInjection() {
         if (!s.isEnabled || !s.injectPrompt) return;
 
         const prompt = buildPrompt();
-        setExtensionPrompt(CHAT_KEY, prompt, extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.USER);
-        setExtensionPrompt(SYS_KEY, prompt, extension_prompt_types.IN_PROMPT, 0);
+        const depth = s.injectDepth || 0;
+        setExtensionPrompt(CHAT_KEY, prompt, extension_prompt_types.IN_CHAT, depth, false, extension_prompt_roles.USER);
+        setExtensionPrompt(SYS_KEY, prompt, extension_prompt_types.IN_PROMPT, depth);
     } catch (e) {
         console.error('[GlassPhone] updatePhoneInjection error:', e);
     }

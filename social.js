@@ -196,6 +196,13 @@ export function addTweetReply(tweetId, text, author = null, ak = 'user') {
     return r;
 }
 
+export function delTweetReply(tweetId, replyId) {
+    const t = getTweets().find(x => x.id === tweetId);
+    if (!t || !Array.isArray(t.replies)) return;
+    t.replies = t.replies.filter(r => r.id !== replyId);
+    saveMeta();
+}
+
 export function postIg({ image = null, imgDesc = '', caption = '' }) {
     const s = getSocial();
     const post = {
@@ -234,6 +241,13 @@ export function addIgComment(postId, text, author = null, ak = 'user') {
     if (p.comments.length > MAX_COMMENTS) p.comments = p.comments.slice(-MAX_COMMENTS);
     saveMeta();
     return c;
+}
+
+export function delIgComment(postId, commentId) {
+    const p = getIgPosts().find(x => x.id === postId);
+    if (!p || !Array.isArray(p.comments)) return;
+    p.comments = p.comments.filter(c => c.id !== commentId);
+    saveMeta();
 }
 
 // ═══ Генерация через основной API ═══

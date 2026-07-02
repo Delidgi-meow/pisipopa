@@ -32,6 +32,7 @@ const defaultSettings = () => ({
     injectPrompt: true,
     showFab: true,
     fabPos: null, // {right, bottom} — сохранённая позиция кнопки
+    injectDepth: 0, // глубина инжекта (0 = последний ход)
     // Прятать смс-переписку из ленты чата (сообщения ОСТАЮТСЯ в истории и контексте
     // модели — скрывается только отображение; телефон это единственное «окно» в смс)
     hideSmsInChat: true,
@@ -217,7 +218,9 @@ export function scanChat() {
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (!msg || !msg.mes || msg.is_system) continue;
+        if (!msg || !msg.mes) continue;
+        // Системные сообщения пропускаем, НО наши SMS-ответы (is_system с tel: тегами) — парсим
+        if (msg.is_system && !ANY_TEL_RE.test(msg.mes)) continue;
         const text = msg.mes;
         const time = parseMsgDate(msg);
 
@@ -403,7 +406,9 @@ export function getHiddenMessageIndexes() {
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return out; }
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (!msg || !msg.mes || msg.is_system) continue;
+        if (!msg || !msg.mes) continue;
+        // Системные сообщения пропускаем, но наши SMS-ответы прячем
+        if (msg.is_system && !ANY_TEL_RE.test(msg.mes) && !SILENT_RE.test(msg.mes)) continue;
         if (msg.is_user) {
             if (OUT_RE.test(msg.mes)) out.push(i);
             continue;

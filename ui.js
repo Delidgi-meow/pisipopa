@@ -699,12 +699,24 @@ function renderTw(screen) {
     const input = screen.querySelector('#gp-tw-input');
     const postBtn = screen.querySelector('#gp-tw-post');
     input?.addEventListener('input', () => { postBtn.disabled = !input.value.trim(); });
-    const doPost = () => {
+    const doPost = async () => {
         const v = input?.value.trim();
-        if (!v) return;
+        if (!v || genBusy) return;
         postTweet(v);
         updatePhoneInjection(); // персонажи «видят» твит юзера
+        
+        genBusy = true;
         render();
+        try {
+            const n = await generateTweetFeed();
+            toast(n > 0 ? `Новых твитов: ${n}` : 'Отправлено', n > 0 ? 'fa-x-twitter' : 'fa-check');
+        } catch (e) {
+            console.error('[GlassPhone] tw feed auto-gen failed:', e);
+            toast('Твит отправлен, но лента не обновилась', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'tw') render();
+        }
     };
     postBtn?.addEventListener('click', doPost);
     input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doPost(); } });

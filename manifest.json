@@ -1,0 +1,13 @@
+{
+    "display_name": "GlassPhone",
+    "loading_order": 12,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Delidgi1",
+    "version": "1.0.0",
+    "homePage": "",
+    "source": "",
+    "auto_update": false
+}

@@ -929,11 +929,25 @@
 
 /* ═══ Мобильная адаптация: телефон на весь экран ═══ */
 @media (max-width: 600px) {
+    /* iOS Safari плохо переваривает огромные поверхности с backdrop-filter
+       (рендерит белый огрызок) — как у fetish-manager: сплошной фон без блюра
+       на больших слоях. Мелкие стеклянные элементы внутри блюр сохраняют. */
+    #gp-overlay {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        background: rgba(8, 8, 14, 0.72);
+    }
     #gp-phone {
         width: 100% !important;
         height: 100% !important;
         max-height: none !important;
         border-radius: 0 !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        background:
+            radial-gradient(120% 90% at 15% -5%, rgba(122, 108, 255, 0.14), transparent 55%),
+            radial-gradient(120% 90% at 95% 105%, rgba(90, 170, 255, 0.11), transparent 55%),
+            linear-gradient(160deg, #191926, #10101a 45%, #141422);
     }
     #gp-fab { right: 12px; bottom: 150px; }
     /* остров не нужен на реальном телефоне — там свой */

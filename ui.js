@@ -209,14 +209,21 @@ function createPhone() {
                 <span class="gp-status-right">
                     <span id="gp-rpdate" class="gp-rpdate"></span>
                     ${ic('fa-signal')}${ic('fa-wifi')}${ic('fa-battery-three-quarters')}
+                    <button class="gp-close" id="gp-close" title="Закрыть">${ic('fa-xmark')}</button>
                 </span>
             </div>
             <div id="gp-screen"></div>
-            <div class="gp-homebar"></div>
+            <div class="gp-homebar" title="Закрыть"></div>
         </div>`;
     document.body.appendChild(ov);
     ov.addEventListener('pointerdown', (e) => {
         if (e.target === ov) closePhone();
+    });
+    // Закрытие: крестик в статус-баре и «хоумбар» (на мобильном фуллскрине фона нет)
+    ov.querySelector('#gp-close')?.addEventListener('click', closePhone);
+    ov.querySelector('.gp-homebar')?.addEventListener('click', closePhone);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && isPhoneOpen()) closePhone();
     });
 }
 
@@ -236,6 +243,27 @@ export function openPhone(threadKey = null) {
     tickClock();
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = setInterval(tickClock, 20000);
+
+    // Страховка от «белой полосы»: если корпус телефона схлопнулся
+    // (старый Safari без inset/dvh, контейнер-квирки ST 1.18) —
+    // принудительно растягиваем инлайн-стилями на весь экран.
+    setTimeout(() => {
+        try {
+            const ph = document.getElementById('gp-phone');
+            if (!ph) return;
+            const r = ph.getBoundingClientRect();
+            if (r.height < 200 || r.width < 200) {
+                console.warn(`[GlassPhone] Phone collapsed (${Math.round(r.width)}x${Math.round(r.height)}) — forcing fullscreen fallback`);
+                Object.assign(ov.style, {
+                    position: 'fixed', top: '0', left: '0',
+                    width: '100vw', height: '100vh', display: 'flex',
+                });
+                Object.assign(ph.style, {
+                    width: '100vw', height: '100vh', maxHeight: 'none', borderRadius: '0',
+                });
+            }
+        } catch (e) { /* ignore */ }
+    }, 80);
 }
 
 export function closePhone() {

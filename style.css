@@ -101,9 +101,19 @@
 @keyframes gp-dot-pop { from { transform: scale(0); } to { transform: scale(1); } }
 
 /* ═══ Оверлей и корпус ═══ */
+/* ВАЖНО для iOS Safari и ST 1.18: НЕ используем `inset` (старые Safari не знают),
+   размеры задаём явно с dvh-фоллбеком, !important — чтобы контейнеры/чужой CSS
+   не пересчитали fixed-позиционирование. */
 #gp-overlay {
-    position: fixed;
-    inset: 0;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    margin: 0 !important;
     z-index: 2147483050;
     display: none;
     align-items: center;
@@ -119,6 +129,7 @@
     position: relative;
     width: min(384px, 94vw);
     height: min(768px, 92vh);
+    height: min(768px, 92dvh);
     border-radius: var(--gp-radius);
     display: flex;
     flex-direction: column;
@@ -916,12 +927,34 @@
     text-overflow: ellipsis;
 }
 
-/* ═══ Мобильная адаптация ═══ */
-@media (max-width: 480px) {
+/* ═══ Мобильная адаптация: телефон на весь экран ═══ */
+@media (max-width: 600px) {
     #gp-phone {
-        width: 100vw;
-        height: 100%;
-        border-radius: 0;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: none !important;
+        border-radius: 0 !important;
     }
     #gp-fab { right: 12px; bottom: 150px; }
+    /* остров не нужен на реальном телефоне — там свой */
+    .gp-island { display: none; }
+    .gp-statusbar { padding-top: 12px; }
 }
+
+/* Кнопка закрытия в статус-баре (на мобильном фуллскрине «тапнуть мимо» нельзя) */
+.gp-close {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--gp-border-soft);
+    background: var(--gp-glass);
+    color: var(--gp-text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    margin-left: 4px;
+    transition: background .15s, color .15s;
+}
+.gp-close:hover { background: var(--gp-glass-strong); color: var(--gp-text); }

@@ -9,12 +9,22 @@ import {
     randomNumber, getTotalUnread, fmtTime, getRpDateLabel, keyOf, getHiddenMessageIndexes,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
+import {
+    getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply,
+    postIg, likeIg, delIg, addIgComment,
+    generateTweetFeed, generateTweetComments, generateAuthorReply, generateIgFeed, generateIgComments,
+    compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
+    timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
+} from './social.js';
 
 // ── Локальное UI-состояние (не персистится) ──
-let currentScreen = 'list';     // 'list' | 'thread' | 'add'
+let currentScreen = 'home';     // 'home' | 'list' | 'thread' | 'add' | 'tw' | 'twthread' | 'ig' | 'igview' | 'ignew'
 let currentThreadKey = null;
+let currentTweetId = null;
+let currentPostId = null;
 let typingKey = null;           // тред, в котором «печатает…»
 let sending = false;
+let genBusy = false;            // идёт генерация ленты/комментов
 let clockTimer = null;
 let prevIncomingCounts = new Map(); // для детекта новых входящих (тосты)
 
@@ -45,6 +55,16 @@ function initialOf(name) {
     return esc(t.charAt(0).toUpperCase() || '?');
 }
 
+// Аватар: фото если загружено, иначе градиент с инициалом
+function avatarHtml(name, avatarUrl, cls = 'gp-avatar') {
+    if (avatarUrl) {
+        return `<div class="${cls} gp-avatar-img"><img src="${esc(avatarUrl)}" alt=""></div>`;
+    }
+    return `<div class="${cls}" style="${avatarStyle(name)}">${initialOf(name)}</div>`;
+}
+
+function brand(name) { return `<i class="fa-brands ${name}"></i>`; }
+
 // ═══ FAB ═══
 
 function createFab() {
@@ -54,11 +74,22 @@ function createFab() {
     fab.innerHTML = `${ic('fa-mobile-screen-button')}<span id="gp-fab-badge" class="gp-hidden"></span>`;
     document.body.appendChild(fab);
 
+    // Позиция: сохранённая (после перетаскивания) ВСЕГДА зажимается в границы
+    // ТЕКУЩЕГО вьюпорта. Иначе позиция, сохранённая на широком мониторе
+    // (например right: 800px), на телефоне уносит кнопку за экран — «иконки нет».
+    const applyFabPos = () => {
+        const st = getSettings();
+        if (!st.fabPos || typeof st.fabPos.right !== 'number') return; // CSS-дефолт
+        const maxR = Math.max(4, window.innerWidth - 44);
+        const maxB = Math.max(4, window.innerHeight - 44);
+        fab.style.right = `${Math.min(Math.max(4, st.fabPos.right), maxR)}px`;
+        fab.style.bottom = `${Math.min(Math.max(4, st.fabPos.bottom), maxB)}px`;
+    };
+    applyFabPos();
+    window.addEventListener('resize', applyFabPos);
+    window.addEventListener('orientationchange', () => setTimeout(applyFabPos, 200));
+
     const s = getSettings();
-    if (s.fabPos && typeof s.fabPos.right === 'number') {
-        fab.style.right = `${s.fabPos.right}px`;
-        fab.style.bottom = `${s.fabPos.bottom}px`;
-    }
     if (!s.showFab || !s.isEnabled) fab.classList.add('gp-hidden');
 
     // Drag + click
@@ -213,7 +244,62 @@ export function render() {
     if (!screen || !isPhoneOpen()) return;
     if (currentScreen === 'thread' && currentThreadKey) renderThread(screen);
     else if (currentScreen === 'add') renderAdd(screen);
-    else renderList(screen);
+    else if (currentScreen === 'list') renderList(screen);
+    else if (currentScreen === 'tw') renderTw(screen);
+    else if (currentScreen === 'twthread' && currentTweetId) renderTwThread(screen);
+    else if (currentScreen === 'ig') renderIg(screen);
+    else if (currentScreen === 'igview' && currentPostId) renderIgView(screen);
+    else if (currentScreen === 'ignew') renderIgNew(screen);
+    else renderHome(screen);
+}
+
+function goto(screenName) {
+    currentScreen = screenName;
+    render();
+}
+
+// Сохранение позиции скролла ленты при перерисовке (innerHTML сбрасывает scrollTop,
+// из-за этого клик по «Нарисовать»/лайку дёргал экран наверх)
+function setHtmlKeepScroll(screen, selector, html) {
+    const prev = screen.querySelector(selector)?.scrollTop ?? null;
+    screen.innerHTML = html;
+    if (prev !== null) {
+        const el = screen.querySelector(selector);
+        if (el) el.scrollTop = prev;
+    }
+}
+
+// ── Домашний экран ──
+function renderHome(screen) {
+    currentScreen = 'home';
+    const unread = getTotalUnread();
+    const d = new Date();
+    const DAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+    const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+    screen.innerHTML = `
+        <div class="gp-home">
+            <div class="gp-home-clock">${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</div>
+            <div class="gp-home-date">${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}</div>
+            <div class="gp-home-grid">
+                <div class="gp-app" data-app="list">
+                    <div class="gp-app-icon gp-app-msg">${ic('fa-comment-dots')}${unread > 0 ? `<span class="gp-app-badge">${unread > 9 ? '9+' : unread}</span>` : ''}</div>
+                    <div class="gp-app-name">Сообщения</div>
+                </div>
+                <div class="gp-app" data-app="tw">
+                    <div class="gp-app-icon gp-app-tw">${brand('fa-x-twitter')}</div>
+                    <div class="gp-app-name">Twitter</div>
+                </div>
+                <div class="gp-app" data-app="ig">
+                    <div class="gp-app-icon gp-app-ig">${brand('fa-instagram')}</div>
+                    <div class="gp-app-name">Instagram</div>
+                </div>
+            </div>
+        </div>`;
+
+    screen.querySelectorAll('.gp-app').forEach(el => {
+        el.addEventListener('click', () => goto(el.getAttribute('data-app')));
+    });
 }
 
 // ── Экран «Сообщения» ──
@@ -229,7 +315,7 @@ function renderList(screen) {
         const time = t.last && t.last.time ? fmtTime(t.last.time) : '';
         rows += `
         <div class="gp-row" data-key="${esc(t.key)}">
-            <div class="gp-avatar" style="${avatarStyle(t.name)}">${initialOf(t.name)}</div>
+            ${avatarHtml(t.name, getContactAvatar(t.key))}
             <div class="gp-row-mid">
                 <div class="gp-row-name">${esc(t.name)}</div>
                 <div class="gp-row-preview">${preview}</div>
@@ -241,8 +327,9 @@ function renderList(screen) {
         </div>`;
     }
 
-    screen.innerHTML = `
+    setHtmlKeepScroll(screen, '.gp-list', `
         <div class="gp-header">
+            <button class="gp-iconbtn" id="gp-home-btn">${ic('fa-chevron-left')}</button>
             <div class="gp-title">Сообщения</div>
             <button class="gp-iconbtn" id="gp-add-btn" title="Добавить контакт">${ic('fa-plus')}</button>
         </div>
@@ -253,8 +340,9 @@ function renderList(screen) {
                 <div class="gp-empty-title">Пусто</div>
                 <div class="gp-empty-text">Пока никто не дал тебе номер.<br>Получи номер в ролевой — контакт появится сам.<br>Или добавь вручную по кнопке&nbsp;${ic('fa-plus')}</div>
             </div>`}
-        </div>`;
+        </div>`);
 
+    screen.querySelector('#gp-home-btn')?.addEventListener('click', () => goto('home'));
     screen.querySelector('#gp-add-btn')?.addEventListener('click', () => {
         currentScreen = 'add';
         render();
@@ -303,7 +391,8 @@ function renderThread(screen) {
     screen.innerHTML = `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
-            <div class="gp-avatar gp-avatar-sm" style="${avatarStyle(t.name)}">${initialOf(t.name)}</div>
+            <span id="gp-ava-btn" title="Клик — загрузить фото контакта" style="cursor:pointer">${avatarHtml(t.name, getContactAvatar(t.key), 'gp-avatar gp-avatar-sm')}</span>
+            <input type="file" id="gp-ava-file" accept="image/*" style="display:none">
             <div class="gp-thread-title">
                 <div class="gp-row-name">${esc(t.name)}</div>
                 <div class="gp-thread-number">${esc(t.number || 'номер неизвестен')}</div>
@@ -328,6 +417,21 @@ function renderThread(screen) {
         currentScreen = 'list';
         currentThreadKey = null;
         render();
+    });
+    // Аватар контакта: клик → загрузка фото (сжимается до 128px)
+    const avaBtn = screen.querySelector('#gp-ava-btn');
+    const avaFile = screen.querySelector('#gp-ava-file');
+    avaBtn?.addEventListener('click', () => avaFile?.click());
+    avaFile?.addEventListener('change', async () => {
+        const file = avaFile.files?.[0];
+        if (!file) return;
+        try {
+            const dataUrl = await compressImage(file, 128, 0.85);
+            setContactAvatar(t.key, dataUrl);
+            render();
+        } catch (e) {
+            toast('Не удалось загрузить фото', 'fa-circle-exclamation');
+        }
     });
     screen.querySelector('#gp-del')?.addEventListener('click', () => {
         if (!confirm(`Удалить контакт «${t.name}» из телефона?\n(Сообщения в самом чате останутся.)`)) return;
@@ -428,6 +532,426 @@ function renderAdd(screen) {
     screen.querySelector('#gp-add-name')?.focus();
 }
 
+// ═══ TWITTER ═══
+
+function twCard(t, { clickable = true } = {}) {
+    const isUser = t.ak === 'user';
+    const replyCount = t.replies?.length || 0;
+    return `
+    <div class="gp-tw-card${clickable ? ' gp-clickable' : ''}" data-tweet="${esc(t.id)}">
+        ${avatarHtml(t.author, avatarForAuthor(t.ak), 'gp-avatar gp-avatar-sm')}
+        <div class="gp-tw-body">
+            <div class="gp-tw-meta">
+                <span class="gp-tw-name">${esc(t.author)}</span>
+                <span class="gp-tw-handle">${esc(t.handle || makeHandle(t.author))}</span>
+                <span class="gp-tw-time">· ${esc(timeAgo(t.time))}</span>
+                ${isUser ? `<button class="gp-tw-del" data-del="${esc(t.id)}" title="Удалить">${ic('fa-xmark')}</button>` : ''}
+            </div>
+            <div class="gp-tw-text">${esc(t.text)}</div>
+            <div class="gp-tw-actions">
+                <button class="gp-tw-act" data-open="${esc(t.id)}">${ic('fa-comment')}<span>${replyCount || ''}</span></button>
+                <button class="gp-tw-act${t.rted ? ' gp-tw-on-rt' : ''}" data-rt="${esc(t.id)}">${ic('fa-retweet')}<span>${t.rts || ''}</span></button>
+                <button class="gp-tw-act${t.liked ? ' gp-tw-on' : ''}" data-like="${esc(t.id)}">${ic('fa-heart')}<span>${t.likes || ''}</span></button>
+            </div>
+        </div>
+    </div>`;
+}
+
+function bindTwCardActions(root, rerender) {
+    root.querySelectorAll('[data-like]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation(); likeTweet(b.getAttribute('data-like')); rerender();
+    }));
+    root.querySelectorAll('[data-rt]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation(); rtTweet(b.getAttribute('data-rt')); rerender();
+    }));
+    root.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm('Удалить твит?')) { delTweet(b.getAttribute('data-del')); rerender(); }
+    }));
+    root.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation(); currentTweetId = b.getAttribute('data-open'); goto('twthread');
+    }));
+    root.querySelectorAll('.gp-tw-card.gp-clickable').forEach(el => el.addEventListener('click', () => {
+        currentTweetId = el.getAttribute('data-tweet'); goto('twthread');
+    }));
+}
+
+function renderTw(screen) {
+    currentScreen = 'tw';
+    const tweets = getTweets();
+
+    setHtmlKeepScroll(screen, '.gp-feed', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">${brand('fa-x-twitter')}</div>
+            <button class="gp-iconbtn" id="gp-tw-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+        </div>
+        <div class="gp-tw-compose">
+            ${avatarHtml(getUserName(), '', 'gp-avatar gp-avatar-sm')}
+            <input type="text" id="gp-tw-input" maxlength="280" placeholder="Что происходит?">
+            <button class="gp-send gp-send-sm" id="gp-tw-post" disabled>${ic('fa-feather')}</button>
+        </div>
+        <div class="gp-feed" id="gp-tw-feed">
+            ${tweets.length === 0
+                ? `<div class="gp-empty"><div class="gp-empty-icon">${brand('fa-x-twitter')}</div><div class="gp-empty-title">Лента пуста</div><div class="gp-empty-text">Нажми ${ic('fa-wand-magic-sparkles')} — лента сгенерируется<br>по событиям твоей ролевой</div></div>`
+                : tweets.map(t => twCard(t)).join('')}
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+
+    const input = screen.querySelector('#gp-tw-input');
+    const postBtn = screen.querySelector('#gp-tw-post');
+    input?.addEventListener('input', () => { postBtn.disabled = !input.value.trim(); });
+    const doPost = () => {
+        const v = input?.value.trim();
+        if (!v) return;
+        postTweet(v);
+        updatePhoneInjection(); // персонажи «видят» твит юзера
+        render();
+    };
+    postBtn?.addEventListener('click', doPost);
+    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doPost(); } });
+
+    screen.querySelector('#gp-tw-gen')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const n = await generateTweetFeed();
+            toast(n > 0 ? `Новых твитов: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-x-twitter' : 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] tw feed failed:', e);
+            toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'tw') render();
+        }
+    });
+
+    bindTwCardActions(screen, () => render());
+}
+
+function renderTwThread(screen) {
+    const t = getTweets().find(x => x.id === currentTweetId);
+    if (!t) { goto('tw'); return; }
+    const replies = t.replies || [];
+    const canAuthorReply = typeof t.ak === 'string' && t.ak.startsWith('contact:');
+
+    setHtmlKeepScroll(screen, '.gp-feed', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">Тред</div>
+            <button class="gp-iconbtn" id="gp-tw-comments" title="Сгенерировать обсуждение" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-comments')}</button>
+        </div>
+        <div class="gp-feed">
+            ${twCard(t, { clickable: false })}
+            <div class="gp-replies">
+                ${replies.length === 0
+                    ? `<div class="gp-empty-text gp-replies-empty">Комментариев нет — нажми ${ic('fa-comments')}</div>`
+                    : replies.map(r => `
+                    <div class="gp-reply">
+                        ${avatarHtml(r.author, avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
+                        <div class="gp-reply-body">
+                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(r.author)}</span><span class="gp-tw-handle">${esc(r.handle || makeHandle(r.author))}</span><span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span></div>
+                            <div class="gp-tw-text">${esc(r.text)}</div>
+                        </div>
+                    </div>`).join('')}
+            </div>
+        </div>
+        <div class="gp-inputbar">
+            <textarea id="gp-input" rows="1" placeholder="Ответить..."></textarea>
+            <button class="gp-send" id="gp-tw-reply" ${sending ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('tw'));
+    bindTwCardActions(screen, () => render());
+
+    screen.querySelector('#gp-tw-comments')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const n = await generateTweetComments(t);
+            if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] tw comments failed:', e);
+            toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'twthread') render();
+        }
+    });
+
+    const input = screen.querySelector('#gp-input');
+    const doReply = async () => {
+        const v = input?.value.trim();
+        if (!v || sending) return;
+        addTweetReply(t.id, v);
+        input.value = '';
+        render();
+        if (canAuthorReply) {
+            sending = true;
+            try { await generateAuthorReply('tw', t, v); }
+            catch (e) { console.error('[GlassPhone] author reply failed:', e); }
+            finally { sending = false; if (currentScreen === 'twthread') render(); }
+        }
+    };
+    screen.querySelector('#gp-tw-reply')?.addEventListener('click', doReply);
+    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doReply(); } });
+}
+
+// ═══ INSTAGRAM ═══
+
+// Посты, для которых прямо сейчас генерится картинка (спиннер)
+const _imgGenBusy = new Set();
+// Доступен ли novarakk (кэш; уточняется асинхронно при первом рендере инсты)
+let _imgGenReady = false;
+isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
+
+function igImageHtml(p) {
+    if (p.image) return `<div class="gp-ig-img"><img src="${esc(p.image)}" alt=""></div>`;
+    const busy = _imgGenBusy.has(p.id);
+    // Сгенерированный «снимок»: стеклянная заглушка с описанием кадра.
+    // Если установлен novarakk — кнопка «нарисовать» прямо на заглушке.
+    return `<div class="gp-ig-img gp-ig-img-gen" style="${avatarStyle(p.author + (p.imgDesc || ''))}">
+        <div class="gp-ig-img-inner">
+            ${busy ? ic('fa-spinner fa-spin') : ic('fa-image')}
+            ${p.imgDesc ? `<div class="gp-ig-img-desc">${esc(p.imgDesc)}</div>` : ''}
+            ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>` : ''}
+            ${!busy && _imgGenReady ? `<button class="gp-ig-genbtn" data-genimg="${esc(p.id)}">${ic('fa-wand-magic-sparkles')} Нарисовать</button>` : ''}
+        </div>
+    </div>`;
+}
+
+function igCard(p, { clickable = true } = {}) {
+    const isUser = p.ak === 'user';
+    return `
+    <div class="gp-ig-card" data-post="${esc(p.id)}">
+        <div class="gp-ig-head">
+            ${avatarHtml(p.author, avatarForAuthor(p.ak), 'gp-avatar gp-avatar-xs')}
+            <span class="gp-ig-name">${esc(p.author)}</span>
+            <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
+            ${isUser ? `<button class="gp-tw-del" data-del-ig="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>` : ''}
+        </div>
+        <div class="${clickable ? 'gp-clickable' : ''}" data-open-ig="${esc(p.id)}">${igImageHtml(p)}</div>
+        <div class="gp-ig-actions">
+            <button class="gp-tw-act${p.liked ? ' gp-tw-on' : ''}" data-like-ig="${esc(p.id)}">${ic('fa-heart')}<span>${p.likes || ''}</span></button>
+            <button class="gp-tw-act" data-open-ig2="${esc(p.id)}">${ic('fa-comment')}<span>${p.comments?.length || ''}</span></button>
+        </div>
+        ${p.caption ? `<div class="gp-ig-caption"><b>${esc(p.author)}</b> ${esc(p.caption)}</div>` : ''}
+    </div>`;
+}
+
+function bindIgCardActions(root) {
+    root.querySelectorAll('[data-like-ig]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation(); likeIg(b.getAttribute('data-like-ig')); render();
+    }));
+    // Генерация картинки через novarakk
+    root.querySelectorAll('[data-genimg]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = b.getAttribute('data-genimg');
+        const post = getIgPosts().find(x => x.id === id);
+        if (!post || _imgGenBusy.has(id)) return;
+        _imgGenBusy.add(id);
+        render();
+        try {
+            await generatePostImage(post, (status) => {
+                const el = document.querySelector(`[data-genstatus="${CSS.escape(id)}"]`);
+                if (el) el.textContent = status;
+            });
+            toast('Фото готово', 'fa-instagram');
+        } catch (err) {
+            console.error('[GlassPhone] image gen failed:', err);
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally {
+            _imgGenBusy.delete(id);
+            render();
+        }
+    }));
+    root.querySelectorAll('[data-del-ig]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm('Удалить пост?')) { delIg(b.getAttribute('data-del-ig')); render(); }
+    }));
+    const open = (id) => { currentPostId = id; goto('igview'); };
+    root.querySelectorAll('[data-open-ig]').forEach(b => b.addEventListener('click', () => open(b.getAttribute('data-open-ig'))));
+    root.querySelectorAll('[data-open-ig2]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation(); open(b.getAttribute('data-open-ig2'));
+    }));
+}
+
+function renderIg(screen) {
+    currentScreen = 'ig';
+    const posts = getIgPosts();
+
+    setHtmlKeepScroll(screen, '.gp-feed', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">${brand('fa-instagram')}</div>
+            <button class="gp-iconbtn" id="gp-ig-new" title="Новый пост">${ic('fa-plus')}</button>
+            <button class="gp-iconbtn" id="gp-ig-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+        </div>
+        <div class="gp-feed" id="gp-ig-feed">
+            ${posts.length === 0
+                ? `<div class="gp-empty"><div class="gp-empty-icon">${brand('fa-instagram')}</div><div class="gp-empty-title">Лента пуста</div><div class="gp-empty-text">${ic('fa-wand-magic-sparkles')} — сгенерировать ленту<br>${ic('fa-plus')} — выложить своё фото</div></div>`
+                : posts.map(p => igCard(p)).join('')}
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelector('#gp-ig-new')?.addEventListener('click', () => goto('ignew'));
+    screen.querySelector('#gp-ig-gen')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const n = await generateIgFeed();
+            toast(n > 0 ? `Новых постов: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-instagram' : 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] ig feed failed:', e);
+            toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'ig') render();
+        }
+    });
+    bindIgCardActions(screen);
+}
+
+function renderIgView(screen) {
+    const p = getIgPosts().find(x => x.id === currentPostId);
+    if (!p) { goto('ig'); return; }
+    const comments = p.comments || [];
+    const canAuthorReply = typeof p.ak === 'string' && p.ak.startsWith('contact:');
+
+    setHtmlKeepScroll(screen, '.gp-feed', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">Пост</div>
+            <button class="gp-iconbtn" id="gp-ig-comments" title="Сгенерировать реакции" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-comments')}</button>
+        </div>
+        <div class="gp-feed">
+            ${igCard(p, { clickable: false })}
+            <div class="gp-replies">
+                ${comments.length === 0
+                    ? `<div class="gp-empty-text gp-replies-empty">Комментариев нет — нажми ${ic('fa-comments')}, пусть отреагируют</div>`
+                    : comments.map(c => `
+                    <div class="gp-reply">
+                        ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
+                        <div class="gp-reply-body">
+                            <div class="gp-tw-meta"><span class="gp-tw-name">${esc(c.author)}</span><span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span></div>
+                            <div class="gp-tw-text">${esc(c.text)}</div>
+                        </div>
+                    </div>`).join('')}
+            </div>
+        </div>
+        <div class="gp-inputbar">
+            <textarea id="gp-input" rows="1" placeholder="Комментировать..."></textarea>
+            <button class="gp-send" id="gp-ig-reply" ${sending ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('ig'));
+    bindIgCardActions(screen);
+
+    screen.querySelector('#gp-ig-comments')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const n = await generateIgComments(p);
+            if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] ig comments failed:', e);
+            toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'igview') render();
+        }
+    });
+
+    const input = screen.querySelector('#gp-input');
+    const doComment = async () => {
+        const v = input?.value.trim();
+        if (!v || sending) return;
+        addIgComment(p.id, v);
+        input.value = '';
+        render();
+        if (canAuthorReply) {
+            sending = true;
+            try { await generateAuthorReply('ig', p, v); }
+            catch (e) { console.error('[GlassPhone] ig author reply failed:', e); }
+            finally { sending = false; if (currentScreen === 'igview') render(); }
+        }
+    };
+    screen.querySelector('#gp-ig-reply')?.addEventListener('click', doComment);
+    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doComment(); } });
+}
+
+// Новый пост юзера с загрузкой фото
+let _igDraftImage = null;
+function renderIgNew(screen) {
+    screen.innerHTML = `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">Новый пост</div>
+        </div>
+        <div class="gp-add-form">
+            <div class="gp-ig-pick${_igDraftImage ? ' gp-ig-pick-has' : ''}" id="gp-ig-pick">
+                ${_igDraftImage ? `<img src="${esc(_igDraftImage)}" alt="">` : `${ic('fa-camera')}<span>Выбрать фото</span>`}
+            </div>
+            <input type="file" id="gp-ig-file" accept="image/*" style="display:none">
+            <label class="gp-field">
+                <span>Что на фото <i style="opacity:0.5;text-transform:none;letter-spacing:0">(необязательно)</i></span>
+                <input type="text" id="gp-ig-desc" maxlength="200" placeholder="Модели с виженом увидят фото сами">
+            </label>
+            <label class="gp-field">
+                <span>Подпись</span>
+                <input type="text" id="gp-ig-caption" maxlength="400" placeholder="Подпись к посту">
+            </label>
+            <button class="gp-primary" id="gp-ig-publish">${ic('fa-check')} Опубликовать</button>
+            <div class="gp-add-hint">Фото прикладывается к запросу — vision-модели смотрят на него сами. Описание нужно только для моделей без вижена (и для реакций в самой ролевой).</div>
+        </div>`;
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => { _igDraftImage = null; goto('ig'); });
+
+    const pick = screen.querySelector('#gp-ig-pick');
+    const file = screen.querySelector('#gp-ig-file');
+    pick?.addEventListener('click', () => file?.click());
+    file?.addEventListener('change', async () => {
+        const f = file.files?.[0];
+        if (!f) return;
+        try {
+            _igDraftImage = await compressImage(f, 720, 0.82);
+            render();
+        } catch (e) {
+            toast('Не удалось загрузить фото', 'fa-circle-exclamation');
+        }
+    });
+
+    screen.querySelector('#gp-ig-publish')?.addEventListener('click', async () => {
+        const desc = screen.querySelector('#gp-ig-desc')?.value.trim() || '';
+        const caption = screen.querySelector('#gp-ig-caption')?.value.trim() || '';
+        if (!_igDraftImage && !desc) {
+            toast('Выбери фото или опиши, что на нём', 'fa-circle-exclamation');
+            return;
+        }
+        const post = postIg({ image: _igDraftImage, imgDesc: desc, caption });
+        _igDraftImage = null;
+        updatePhoneInjection(); // персонажи «видят» пост юзера
+        currentPostId = post.id;
+        goto('igview');
+        toast('Опубликовано', 'fa-instagram');
+
+        // Авто-реакции: комменты генерятся сразу после публикации
+        if (!genBusy) {
+            genBusy = true;
+            render();
+            try {
+                await generateIgComments(post);
+            } catch (e) {
+                console.error('[GlassPhone] auto-comments failed:', e);
+            } finally {
+                genBusy = false;
+                if (currentScreen === 'igview') render();
+            }
+        }
+    });
+}
+
 // ═══ Отправка смс ═══
 
 async function doSend(key) {
@@ -480,7 +1004,9 @@ export function setTyping(key) {
 export function toast(text, icon = 'fa-comment-dots', threadKey = null) {
     const el = document.createElement('div');
     el.className = 'gp-toast';
-    el.innerHTML = `<span class="gp-toast-icon">${ic(icon)}</span><span class="gp-toast-text">${esc(text)}</span>`;
+    // Бренд-иконки (twitter/instagram) — семейство fa-brands, остальные fa-solid
+    const fam = /^fa-(x-twitter|twitter|instagram)$/.test(icon) ? 'fa-brands' : 'fa-solid';
+    el.innerHTML = `<span class="gp-toast-icon"><i class="${fam} ${icon}"></i></span><span class="gp-toast-text">${esc(text)}</span>`;
     document.body.appendChild(el);
     requestAnimationFrame(() => el.classList.add('gp-toast-show'));
     if (threadKey) {

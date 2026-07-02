@@ -50,6 +50,10 @@
 #gp-fab.gp-fab-idle:hover {
     opacity: 0.6;
 }
+/* Тачскрины: hover нет, 0.2 на пёстром фоне почти невидимо — держим заметнее */
+@media (hover: none) {
+    #gp-fab.gp-fab-idle { opacity: 0.5; }
+}
 
 /* При уведомлениях — чуть ярче */
 #gp-fab.gp-fab-alert {
@@ -313,6 +317,7 @@
     scrollbar-width: none;
 }
 .gp-msgs::-webkit-scrollbar { display: none; }
+.gp-msgs > * { flex: 0 0 auto; }
 
 .gp-day {
     display: flex;
@@ -533,6 +538,324 @@
 .gp-primary:hover { transform: translateY(-1px); }
 .gp-primary:active { transform: scale(0.98); }
 .gp-add-hint { font-size: 10px; color: var(--gp-text-dim); text-align: center; line-height: 1.5; padding: 0 12px; }
+
+/* ═══ Домашний экран ═══ */
+.gp-home {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 26px 18px 0;
+}
+.gp-home-clock {
+    font-size: 56px;
+    font-weight: 200;
+    letter-spacing: 1px;
+    color: var(--gp-text);
+    text-shadow: 0 2px 18px rgba(0,0,0,0.35);
+    margin-top: 24px;
+}
+.gp-home-date {
+    font-size: 13px;
+    color: var(--gp-text-dim);
+    margin-bottom: 40px;
+    text-transform: lowercase;
+}
+.gp-home-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px 14px;
+    width: 100%;
+    padding: 0 8px;
+}
+.gp-app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.gp-app-icon {
+    position: relative;
+    width: 62px; height: 62px;
+    border-radius: 19px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: rgba(255,255,255,0.92);
+    border: 1px solid var(--gp-border);
+    backdrop-filter: blur(16px);
+    box-shadow: inset 0 1.5px 0 rgba(255,255,255,0.3), inset 0 -4px 10px rgba(0,0,0,0.18), 0 8px 20px rgba(0,0,0,0.3);
+    transition: transform .18s cubic-bezier(.34,1.5,.64,1);
+}
+.gp-app:hover .gp-app-icon { transform: scale(1.08) translateY(-2px); }
+.gp-app:active .gp-app-icon { transform: scale(0.94); }
+.gp-app-msg { background: linear-gradient(140deg, rgba(64,200,120,0.55), rgba(40,150,90,0.45)); }
+.gp-app-tw  { background: linear-gradient(140deg, rgba(40,44,60,0.75), rgba(15,17,26,0.7)); }
+.gp-app-ig  { background: linear-gradient(140deg, rgba(255,110,60,0.5), rgba(220,50,120,0.5), rgba(120,60,220,0.5)); }
+.gp-app-name {
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.75);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.gp-app-badge {
+    position: absolute;
+    top: -5px; right: -5px;
+    min-width: 18px; height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #ff5f7a, #ff8a5f);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid rgba(0,0,0,0.35);
+}
+
+/* ═══ Общее для лент ═══ */
+.gp-feed {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 8px 2px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    scrollbar-width: none;
+}
+.gp-feed::-webkit-scrollbar { display: none; }
+/* КРИТИЧНО: дети flex-колонки по умолчанию сжимаются (flex-shrink:1) —
+   при длинных комментах карточка поста схлопывала картинку в полоску.
+   Запрещаем сжатие: лента скроллится, элементы держат натуральную высоту. */
+.gp-feed > * { flex: 0 0 auto; }
+.gp-clickable { cursor: pointer; }
+.gp-title-app {
+    flex: 1;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.gp-avatar-xs { width: 28px; height: 28px; font-size: 12px; flex: 0 0 auto; }
+.gp-avatar-img { overflow: hidden; padding: 0; }
+.gp-avatar-img img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+
+/* ═══ Twitter ═══ */
+.gp-tw-compose {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px 10px;
+    border-bottom: 1px solid var(--gp-border-soft);
+}
+.gp-tw-compose input {
+    flex: 1;
+    border-radius: 17px;
+    padding: 9px 14px;
+    font-size: 13px;
+    color: var(--gp-text);
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    outline: none;
+    font-family: inherit;
+}
+.gp-tw-compose input:focus { border-color: rgba(140,160,255,0.45); }
+.gp-tw-compose input::placeholder { color: var(--gp-text-dim); }
+.gp-send-sm { width: 36px; height: 36px; font-size: 12px; }
+
+.gp-tw-card {
+    display: flex;
+    gap: 10px;
+    padding: 11px 12px;
+    border-radius: 18px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.09);
+    transition: background .15s;
+}
+.gp-tw-card.gp-clickable:hover { background: var(--gp-glass-strong); }
+.gp-tw-body { flex: 1; min-width: 0; }
+.gp-tw-meta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    flex-wrap: wrap;
+}
+.gp-tw-name { font-weight: 700; color: var(--gp-text); font-size: 12.5px; }
+.gp-tw-handle { color: var(--gp-text-dim); }
+.gp-tw-time { color: var(--gp-text-dim); font-size: 10px; }
+.gp-tw-text {
+    font-size: 13px;
+    line-height: 1.42;
+    margin-top: 3px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.gp-tw-actions {
+    display: flex;
+    gap: 22px;
+    margin-top: 8px;
+}
+.gp-tw-act {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: var(--gp-text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    transition: color .15s, transform .12s;
+    font-family: inherit;
+}
+.gp-tw-act:hover { color: var(--gp-text); }
+.gp-tw-act:active { transform: scale(0.9); }
+.gp-tw-act.gp-tw-on { color: #ff6a8e; }
+.gp-tw-act.gp-tw-on-rt { color: #3ec9a7; }
+.gp-tw-act span { font-size: 10.5px; }
+.gp-tw-del {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--gp-text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 5px;
+}
+.gp-tw-del:hover { color: rgba(255,120,130,0.9); }
+
+.gp-replies {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 2px 4px 10px;
+    border-left: 1.5px solid var(--gp-border-soft);
+    margin-left: 14px;
+}
+.gp-reply { display: flex; gap: 8px; padding: 6px 4px; }
+.gp-reply-body { flex: 1; min-width: 0; }
+.gp-replies-empty { text-align: center; padding: 14px 8px; color: var(--gp-text-dim); font-size: 11px; }
+
+/* ═══ Instagram ═══ */
+.gp-ig-card {
+    border-radius: 20px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.09);
+    overflow: hidden;
+    padding-bottom: 8px;
+}
+.gp-ig-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+}
+.gp-ig-name { font-weight: 700; font-size: 12.5px; }
+.gp-ig-img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    background: rgba(0,0,0,0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.gp-ig-img img { width: 100%; height: 100%; object-fit: cover; }
+.gp-ig-img-gen { position: relative; }
+.gp-ig-img-gen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(160deg, rgba(0,0,0,0.15), rgba(0,0,0,0.45));
+}
+.gp-ig-img-inner {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: rgba(255,255,255,0.85);
+    font-size: 26px;
+    padding: 16px;
+    text-align: center;
+}
+.gp-ig-img-desc {
+    font-size: 11.5px;
+    font-style: italic;
+    line-height: 1.5;
+    color: rgba(255,255,255,0.85);
+    text-shadow: 0 1px 6px rgba(0,0,0,0.5);
+    max-width: 240px;
+}
+.gp-ig-genbtn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    border-radius: 16px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.92);
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.25);
+    backdrop-filter: blur(14px);
+    cursor: pointer;
+    font-family: inherit;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 4px 14px rgba(0,0,0,0.3);
+    transition: transform .15s, background .15s;
+}
+.gp-ig-genbtn:hover { background: rgba(255,255,255,0.2); transform: scale(1.04); }
+.gp-ig-genbtn:active { transform: scale(0.96); }
+.gp-ig-genstatus {
+    font-size: 10px;
+    color: rgba(255,255,255,0.75);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+.gp-ig-actions {
+    display: flex;
+    gap: 18px;
+    padding: 8px 12px 2px;
+}
+.gp-ig-caption {
+    padding: 2px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    word-break: break-word;
+}
+.gp-ig-caption b { margin-right: 5px; }
+
+/* Новый пост: пикер фото */
+.gp-ig-pick {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    max-height: 260px;
+    border-radius: 20px;
+    border: 1.5px dashed var(--gp-border);
+    background: var(--gp-glass);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--gp-text-dim);
+    font-size: 24px;
+    cursor: pointer;
+    overflow: hidden;
+    transition: background .15s;
+}
+.gp-ig-pick span { font-size: 12px; }
+.gp-ig-pick:hover { background: var(--gp-glass-strong); }
+.gp-ig-pick-has { border-style: solid; padding: 0; }
+.gp-ig-pick-has img { width: 100%; height: 100%; object-fit: cover; }
 
 /* ═══ Тост ═══ */
 .gp-toast {

@@ -9,6 +9,7 @@
 
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 import { getSettings, scanChat, EXT_NAME } from './state.js';
+import { getSocialActivitySummary } from './social.js';
 
 const CHAT_KEY = EXT_NAME;
 const SYS_KEY = EXT_NAME + '_sys';
@@ -41,6 +42,18 @@ function buildPrompt() {
     p += `- Reply with 1-5 <!--tel:sms:...--> tags (RULE 2 format) in the character's own texting voice: short, informal, realistic pacing; style matches the character.\n`;
     p += `- If the character realistically would NOT reply right now (asleep, busy, offended, phone off, needs time), output exactly this single hidden line instead: <!--tel:silent-->\n`;
     p += `- Resume normal RP prose ONLY when the user sends a normal (non-СМС) message. When resuming, you MUST naturally weave the phone interaction into the scene: {{user}} was physically holding her phone, reading and typing — this took real time and attention. Other characters present may have noticed (glanced at her, waited, commented, reacted to her expression while reading). Do NOT resume as if nothing happened — the texting was a real in-world event.\n\n`;
+
+    p += `[RULE 4 — SOCIAL MEDIA TAGS] {{user}}'s phone also has Twitter and Instagram apps. If in THIS reply a character posts something publicly (a tweet, an Instagram photo) as a story event, append the matching hidden comment at the END of your reply:\n`;
+    p += `<!--tel:tweet:{"author":"CharacterName","text":"tweet text"}-->\n`;
+    p += `<!--tel:insta:{"author":"CharacterName","photo":"short visual description of the photo","caption":"caption text"}-->\n`;
+    p += `Use these ONLY when the story actually involves the character posting — do not spam.\n`;
+
+    let social = '';
+    try { social = getSocialActivitySummary(); } catch (e) { /* ignore */ }
+    if (social) {
+        p += `\n[{{user}}'S RECENT SOCIAL MEDIA ACTIVITY] Characters who follow her (friends, contacts) may have seen these and can react naturally in the story or in comments:\n${social}\n`;
+    }
+    p += `\n`;
 
     p += `[FORMAT RULES — critical]\n`;
     p += `- Tags MUST be HTML comments: start with \`<!--\` and end with \`-->\`. They are INVISIBLE to the reader.\n`;

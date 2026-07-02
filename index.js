@@ -7,7 +7,8 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { getSettings } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast } from './ui.js';
+import { harvestSocialTags } from './social.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -33,6 +34,19 @@ function setupSettingsPanel() {
         <label class="checkbox_label"><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели (теги смс/контактов)</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Профиль для соцсетей:</span>
+            <select id="gp-set-profile" class="text_pole" style="flex:1"></select>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Контекст соцсетей:</span>
+            <select id="gp-set-ctxmode" class="text_pole" style="flex:1">
+                <option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option>
+                <option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option>
+            </select>
+        </div>
+        <small style="opacity:0.4;font-size:9px;display:block">Генерация лент/комментов всегда идёт БЕЗ RP-пресета. «Текущий API» — сырой запрос; отдельный профиль дополнительно включает вижн (модель видит фото постов).</small>
+        <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
         <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Смс живут прямо в сообщениях чата — телефон синхронизирован с ролевой всегда. Консоль: glassPhoneOpen()</small>
     </div>
 </div>`;
@@ -58,6 +72,37 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
         applyChatHiding();
     });
+    $('#gp-reset-fab').on('click', function () {
+        getSettings().fabPos = null;
+        saveSettingsDebounced();
+        const fab = document.getElementById('gp-fab');
+        if (fab) { fab.style.right = ''; fab.style.bottom = ''; }
+    });
+
+    // Профиль подключения для соцсетей (из Connection Manager)
+    const fillProfiles = () => {
+        const sel = document.getElementById('gp-set-profile');
+        if (!sel) return;
+        const cur = getSettings().socialProfileId || '';
+        let profiles = [];
+        try {
+            profiles = SillyTavern.getContext()?.extensionSettings?.connectionManager?.profiles || [];
+        } catch (e) { /* ignore */ }
+        sel.innerHTML = `<option value="">Текущий API (изолированно, без пресета)</option>`
+            + profiles.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${$('<i>').text(p.name || p.id).html()}</option>`).join('');
+        sel.value = profiles.some(p => p.id === cur) ? cur : '';
+    };
+    fillProfiles();
+    // Профили могли добавиться позже — обновляем список при открытии выпадашки
+    $('#gp-set-profile').on('mousedown', fillProfiles);
+    $('#gp-set-profile').on('change', function () {
+        getSettings().socialProfileId = this.value;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-ctxmode').on('change', function () {
+        getSettings().socialContextMode = this.value;
+        saveSettingsDebounced();
+    });
 }
 
 jQuery(async () => {
@@ -74,6 +119,12 @@ jQuery(async () => {
         const onNewMessage = () => {
             if (!getSettings().isEnabled) return;
             checkNewIncoming();
+            // Персонаж запостил из ролевой (теги tel:tweet / tel:insta) → в ленты + тост
+            try {
+                const { tweets, posts } = harvestSocialTags();
+                if (tweets > 0) toast(`Новый твит в ленте`, 'fa-x-twitter');
+                if (posts > 0) toast(`Новый пост в Instagram`, 'fa-instagram');
+            } catch (e) { console.warn('[GlassPhone] harvest failed:', e); }
             updatePhoneInjection();
             applyChatHiding();
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST
@@ -111,6 +162,7 @@ jQuery(async () => {
             eventSource.on(event_types.CHAT_CHANGED, () => {
                 setTimeout(() => {
                     resetIncomingCounters();
+                    try { harvestSocialTags(); } catch (e) { /* ignore */ }
                     updatePhoneInjection();
                     applyChatHiding();
                     if (isPhoneOpen()) render();

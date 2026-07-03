@@ -1116,3 +1116,177 @@
 @media (hover: none) {
     .gp-reply-del { color: rgba(255, 255, 255, 0.3); }
 }
+
+/* ═══ v1.5: скины ═══ */
+#gp-phone.gp-skin-rose {
+    --gp-accent-a: #ff6a9e;
+    --gp-accent-b: #c66bff;
+}
+#gp-phone.gp-skin-rose:not(.gp-noglass) {
+    background:
+        radial-gradient(120% 90% at 15% -5%, rgba(255, 106, 158, 0.16), transparent 55%),
+        radial-gradient(120% 90% at 95% 105%, rgba(198, 107, 255, 0.13), transparent 55%),
+        linear-gradient(160deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.06));
+}
+#gp-phone.gp-skin-emerald {
+    --gp-accent-a: #3ec9a7;
+    --gp-accent-b: #4a90d9;
+}
+#gp-phone.gp-skin-emerald:not(.gp-noglass) {
+    background:
+        radial-gradient(120% 90% at 15% -5%, rgba(62, 201, 167, 0.15), transparent 55%),
+        radial-gradient(120% 90% at 95% 105%, rgba(74, 144, 217, 0.12), transparent 55%),
+        linear-gradient(160deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.06));
+}
+#gp-phone.gp-skin-mono {
+    --gp-accent-a: #9aa3b2;
+    --gp-accent-b: #6b7280;
+}
+#gp-phone.gp-skin-mono:not(.gp-noglass) {
+    background:
+        linear-gradient(160deg, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.05));
+}
+
+/* ═══ v1.5: OnlyFans ═══ */
+.gp-app-of { background: linear-gradient(140deg, rgba(0,150,240,0.55), rgba(0,90,200,0.45)); }
+.gp-of-title i { color: #29a3ff; }
+.gp-of-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9px;
+    color: #7cc7ff;
+    border: 1px solid rgba(41, 163, 255, 0.35);
+    background: rgba(41, 163, 255, 0.1);
+}
+.gp-of-tips {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #6fdc9c;
+}
+.gp-of-tip-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #6fdc9c;
+    border: 1px solid rgba(111, 220, 156, 0.35);
+}
+.gp-of-stats {
+    display: flex;
+    gap: 8px;
+    padding: 4px 2px 10px;
+    border-bottom: 1px solid var(--gp-border-soft);
+}
+.gp-of-stat {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+}
+.gp-of-stat b { display: block; font-size: 15px; }
+.gp-of-stat span { font-size: 9px; color: var(--gp-text-dim); }
+.gp-of-primary { background: linear-gradient(135deg, #29a3ff, #0077cc); border-color: rgba(41,163,255,0.4); }
+.gp-of-card { border-color: rgba(41, 163, 255, 0.18); }
+
+/* ═══ v1.5: группы ═══ */
+.gp-avatar-group {
+    background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06));
+    font-size: 15px;
+    color: rgba(255,255,255,0.8);
+}
+.gp-bubble-sender {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--gp-accent-a);
+    margin-bottom: 3px;
+}
+.gp-group-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.gp-member-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 12px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 11px;
+    cursor: pointer;
+}
+.gp-member-check:has(input:checked) {
+    border-color: rgba(140, 160, 255, 0.5);
+    background: var(--gp-glass-strong);
+}
+
+/* ═══ v1.5: фото в смс ═══ */
+.gp-bubble-img {
+    margin: 2px 0 6px;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.gp-bubble-img img { width: 100%; max-height: 280px; object-fit: contain; display: block; border-radius: 12px; }
+.gp-bubble-img-gen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 18px 14px;
+    text-align: center;
+    font-size: 16px;
+    color: rgba(255,255,255,0.85);
+}
+.gp-bubble-img-gen i { font-size: 10.5px; font-style: italic; opacity: 0.85; line-height: 1.4; }
+.gp-sms-attach {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    margin: 0 4px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 11px;
+    color: var(--gp-text-dim);
+}
+.gp-sms-attach img { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; }
+.gp-sms-attach span { flex: 1; }
+.gp-sms-attach .gp-iconbtn { width: 26px; height: 26px; font-size: 10px; }
+
+/* v1.2: кликабельные статы OnlyFans */
+.gp-of-stat-btn { cursor: pointer; transition: background .15s, transform .15s; }
+.gp-of-stat-btn:hover { background: var(--gp-glass-strong); transform: translateY(-1px); }
+#gp-of-withdraw b { color: #6fdc9c; }
+
+/* v1.2.1: плашка «что видит модель» под постом */
+.gp-imgdesc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 10.5px;
+    font-style: italic;
+    color: var(--gp-text-dim);
+    line-height: 1.45;
+}
+.gp-imgdesc-note i.fa-solid { margin-top: 2px; flex: 0 0 auto; }
+.gp-imgdesc-warn { border-color: rgba(255, 170, 60, 0.3); color: rgba(255, 190, 110, 0.8); }

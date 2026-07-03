@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════
-// GLASSPHONE STATE — данные телефона
+// ТЕЛЕФОН — STATE: контакты, треды, теги, per-chat данные
 //
 // АРХИТЕКТУРА: чат SillyTavern = ЕДИНСТВЕННЫЙ источник правды.
 // СМС и контакты живут прямо в сообщениях чата в виде скрытых HTML-комментариев,
@@ -43,6 +43,23 @@ const defaultSettings = () => ({
     // 'rich' — карточка бота + персона + триггернутый лорбук + история чата (дефолт)
     // 'lite' — только короткий срез чата (максимальная изоляция)
     socialContextMode: 'rich',
+    // Генерация картинок (novarakk): модель-оверрайд ('' = модель из настроек novarakk)
+    imageGenModel: '',
+    // Квадрат 1:1 для инста-постов
+    imageGenSquare: true,
+    // Скин телефона: indigo | rose | emerald | mono
+    skin: 'indigo',
+    // Кастомный CSS телефона
+    customCss: '',
+    // Автоматически тянуть аватарки из карточек персонажей/персоны
+    autoAvatars: true,
+    // Прикладывать фото к генерации комментов, даже когда есть описание (дороже по токенам)
+    visionInComments: false,
+    // Журнал соцсетей: посты юзера пишутся скрытой строкой в чат — попадают в контекст
+    // по месту в истории и в саммарайз (долговременная память без роста инжекта)
+    socialLogToChat: true,
+    // Компактные правила в инжекте (экономия ~60% токенов директивы)
+    compactRules: false,
 });
 
 export function getSettings() {
@@ -65,7 +82,26 @@ export function getMeta() {
     if (!Array.isArray(m.contacts)) m.contacts = [];
     if (!m.lastRead || typeof m.lastRead !== 'object') m.lastRead = {};
     if (!Array.isArray(m.hidden)) m.hidden = [];
+    // Ники (@handle): per-chat, override поверх авто-генерации из имени
+    if (!m.handles || typeof m.handles !== 'object') m.handles = {};
+    if (typeof m.userHandle !== 'string') m.userHandle = '';
+    // Групповые смс-чаты: [{id, name, members: [имена]}]
+    if (!Array.isArray(m.groups)) m.groups = [];
     return m;
+}
+
+// ── Группы ──
+export function addGroup(name, members) {
+    const m = getMeta();
+    const id = 'g' + Date.now().toString(36);
+    m.groups.push({ id, name: String(name).trim(), members: (members || []).map(x => String(x).trim()).filter(Boolean) });
+    saveMeta();
+    return id;
+}
+export function delGroup(groupKey) {
+    const m = getMeta();
+    m.groups = m.groups.filter(g => `group:${keyOf(g.name)}` !== groupKey);
+    saveMeta();
 }
 
 export function saveMeta() {
@@ -75,6 +111,17 @@ export function saveMeta() {
 // ── Ключ треда/контакта: нормализованное имя ──
 export function keyOf(name) {
     return String(name || '').trim().toLowerCase();
+}
+
+// ── Вырезать CoT-блоки (<think> и подобные) ──
+// КРИТИЧНО: reasoning-модели иногда пишут теги tel:sms с текстами сообщений прямо
+// в цепочке размышлений → сканер видел их и ДУБЛИРОВАЛ сообщения в телефоне.
+// Всё, что внутри think-блоков, для телефона не существует.
+export function stripThink(text) {
+    return String(text || '')
+        .replace(/<(think|thinking|reasoning|analysis|reflection)[^>]*>[\s\S]*?<\/\1>/gi, '')
+        // незакрытый think — режем до конца (видимый ответ был бы после закрывающего тега)
+        .replace(/<(think|thinking|reasoning)[^>]*>[\s\S]*$/gi, '');
 }
 
 // ── Толерантный JSON-парсер (модели любят одинарные кавычки и висячие запятые) ──
@@ -92,10 +139,14 @@ const TAG_RE = /<!--\s*tel:(contact|sms):(\{[\s\S]*?\})\s*-->/gi;
 const OUT_RE = /<!--\s*tel:out:(\{[\s\S]*?\})\s*-->/i;
 // «Персонаж решил не отвечать на смс» — пустой ответ телефона
 const SILENT_RE = /<!--\s*tel:silent\s*-->/i;
+// Журнальная запись соцсетей (скрыта из ленты, но в контексте модели)
+const LOG_RE = /<!--\s*tel:log\s*-->/i;
 // Любой наш тег (для детекта смс-only сообщений)
-const ANY_TEL_RE = /<!--\s*tel:(sms|contact|out|silent)/i;
+const ANY_TEL_RE = /<!--\s*tel:(sms|contact|out|silent|log)/i;
 // Видимый формат исходящей смс (парсим как fallback, если JSON битый)
 const OUT_VISIBLE_RE = /\[СМС\s*→\s*([^\]]+)\]\s*([\s\S]*)/;
+// Видимый формат групповой исходящей смс: [СМС в чат «Название»] текст
+const OUT_VISIBLE_GROUP_RE = /\[СМС\s+в\s+чат\s*[«"]([^»"]+)[»"]\]\s*([\s\S]*)/
 
 // ── Бэктик-смс в обычной RP-прозе: бот пишет смс в стиле `текст` ──
 // Ловим ТОЛЬКО при наличии смс-контекста рядом (±150 симв.) — бэктики используются
@@ -104,18 +155,23 @@ const BACKTICK_RE = /`([^`\n]{2,300})`/g;
 const BACKTICK_CTX_RE = /(смс|sms|сообщени|телефон|мобильн|экран[еа]?|вибр|уведомлен|написал[аи]?|отправил[аи]?|пришл[оа]|прилетел[оа]|мессендж|messenger|text(?:ed|s)?\b|notification)/i;
 
 // НЕ телефон юзера: бот от первого лица описывает СВОЙ телефон.
-// Проверяем proximity (близость), а не смежность — «В моем кармане вибрирует телефон»
-// тоже ловим, хотя «моем» и «телефон» разделены словами.
+// Проверяем proximity (близость) В ПРЕДЕЛАХ ОДНОЙ СТРОКИ — кросс-абзацный
+// матч «мой вечер» + «улыбается в телефон» (другой персонаж, дневник НПС) давал
+// ложное срабатывание и глушил все tel:sms-теги в ответе бота.
 // ВНИМАНИЕ: \b в JS НЕ работает с кириллицей! Используем [^а-яёА-ЯЁ] вместо \b.
 function isBotsOwnPhone(text) {
     // Паттерн 1: притяжательное «мой/моём/моего/моему/моих/...» рядом с «телефон/экран/...»
+    // ТОЛЬКО в пределах одной строки (не пересекаем \n)
     const POSS_RE = /(?:^|[^а-яёА-ЯЁ])мо[йеёию][гмй]?[а-яё]*/gi;
     const PHONE_RE = /(?:телефон|смартфон|мобильн|экран[еау]?|трубк)/i;
     let m;
     while ((m = POSS_RE.exec(text)) !== null) {
-        const start = Math.max(0, m.index - 60);
-        const end = Math.min(text.length, m.index + m[0].length + 120);
-        if (PHONE_RE.test(text.slice(start, end))) return true;
+        // Границы строки, содержащей матч
+        const lineStart = text.lastIndexOf('\n', m.index) + 1;
+        let lineEnd = text.indexOf('\n', m.index);
+        if (lineEnd === -1) lineEnd = text.length;
+        const line = text.slice(lineStart, lineEnd);
+        if (PHONE_RE.test(line)) return true;
     }
     // Паттерн 2: «мне пришло/написали/звякнуло»
     if (/мне\s+(?:пришл|прилетел|написал|отправил|звякнул)/i.test(text)) return true;
@@ -246,10 +302,17 @@ export function scanChat() {
         }
     };
 
-    const pushMsg = (name, entry) => {
-        const k = keyOf(name);
-        if (!k) return;
-        if (!threads.has(k)) threads.set(k, { name: String(name).trim(), messages: [] });
+    // name может быть готовым ключом 'group:xxx' (displayName тогда обязателен)
+    const pushMsg = (name, entry, displayName = null) => {
+        const k = String(name).startsWith('group:') ? String(name) : keyOf(name);
+        if (!k || k === 'group:') return;
+        if (!threads.has(k)) {
+            threads.set(k, {
+                name: displayName || String(name).trim(),
+                messages: [],
+                isGroup: k.startsWith('group:'),
+            });
+        }
         threads.get(k).messages.push(entry);
     };
 
@@ -261,7 +324,8 @@ export function scanChat() {
         if (!msg || !msg.mes) continue;
         // Системные сообщения пропускаем, НО наши SMS-ответы (is_system с tel: тегами) — парсим
         if (msg.is_system && !ANY_TEL_RE.test(msg.mes)) continue;
-        const text = msg.mes;
+        // Теги внутри CoT-блоков не считаются (иначе дубли сообщений)
+        const text = stripThink(msg.mes);
         const time = parseMsgDate(msg);
 
         if (msg.is_user) {
@@ -269,11 +333,22 @@ export function scanChat() {
             const om = text.match(OUT_RE);
             if (om) {
                 const j = safeJson(om[1]) || {};
-                const vis = text.replace(OUT_RE, '').trim().match(OUT_VISIBLE_RE);
-                const to = j.to || (vis ? vis[1].trim() : null);
-                const body = vis ? vis[2].trim() : (j.text || '');
-                if (to && body) {
-                    pushMsg(to, { dir: 'out', text: body, idx: i, time });
+                const stripped = text.replace(OUT_RE, '').trim();
+                const vis = stripped.match(OUT_VISIBLE_RE);
+                const visGroup = !vis ? stripped.match(OUT_VISIBLE_GROUP_RE) : null;
+                let to = j.to || (vis ? vis[1].trim() : null);
+                const body = vis ? vis[2].trim() : (visGroup ? visGroup[2].trim() : (j.text || ''));
+                // Групповой чат: to = "группа:Название" (или поле group)
+                const groupName = j.group || (typeof to === 'string' && to.match(/^группа:\s*(.+)$/i)?.[1]) || null;
+                const entry = { dir: 'out', text: body, idx: i, time };
+                // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.image (ST-нативно)
+                if (j.img) entry.img = j.img;
+                else if (msg.extra?.image) entry.img = msg.extra.image;
+                if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
+                if (groupName) {
+                    if (body || entry.img) pushMsg(`group:${keyOf(groupName)}`, entry, groupName);
+                } else if (to && (body || entry.img)) {
+                    pushMsg(to, entry);
                     // Раз юзер пишет этому имени — контакт точно есть
                     addContact(to, '', 'implicit');
                 }
@@ -299,9 +374,23 @@ export function scanChat() {
             if (!j) continue;
             if (kind === 'contact' && j.name) {
                 addContact(j.name, j.number || '', 'tag');
-            } else if (kind === 'sms' && j.from && j.text && !botsPhone) {
-                pushMsg(j.from, { dir: 'in', text: String(j.text), idx: i, time });
-                addContact(j.from, j.number || '', 'implicit');
+            } else if (kind === 'sms' && j.from && (j.text || j.photo)) {
+                // Если сработал детектор "телефон бота", блокируем чужие смс (галлюцинации входящих),
+                // но РАЗРЕШАЕМ смс от самого бота (значит, он пишет юзеру, просто упомянул телефон в тексте).
+                if (botsPhone && keyOf(j.from) !== keyOf(msg.name)) {
+                    console.log(`[GlassPhone] Пропущена галлюцинация: смс от ${j.from} на телефон бота`);
+                    continue;
+                }
+                const entry = { dir: 'in', from: String(j.from), text: String(j.text || ''), idx: i, time };
+                // ММС от персонажа: описание фото → стеклянная заглушка в пузыре
+                if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
+                if (j.chat) {
+                    // Сообщение в групповой чат
+                    pushMsg(`group:${keyOf(j.chat)}`, entry, String(j.chat));
+                } else {
+                    pushMsg(j.from, entry);
+                    addContact(j.from, j.number || '', 'implicit');
+                }
                 smsTagsInMsg++;
             }
         }
@@ -369,17 +458,28 @@ export function getThreadList() {
     const meta = getMeta();
     const list = [];
     const keys = new Set([...contacts.keys(), ...threads.keys()]);
+    // Группы из метаданных — даже пустые (только что созданные)
+    const groupByKey = new Map();
+    for (const g of meta.groups) {
+        const gk = `group:${keyOf(g.name)}`;
+        groupByKey.set(gk, g);
+        keys.add(gk);
+    }
     for (const k of keys) {
         const c = contacts.get(k);
         const t = threads.get(k);
+        const g = groupByKey.get(k);
         const msgs = t ? t.messages : [];
         const last = msgs.length > 0 ? msgs[msgs.length - 1] : null;
         const incoming = msgs.filter(m => m.dir === 'in').length;
         const read = meta.lastRead[k] || 0;
+        const isGroup = k.startsWith('group:');
         list.push({
             key: k,
-            name: (c && c.name) || (t && t.name) || k,
+            name: (g && g.name) || (c && c.name) || (t && t.name) || k,
             number: (c && c.number) || '',
+            isGroup,
+            members: g ? g.members : (isGroup ? [...new Set(msgs.filter(m => m.from).map(m => m.from))] : []),
             last,
             lastIdx: last ? last.idx : -1,
             unread: Math.max(0, incoming - read),
@@ -450,11 +550,13 @@ export function getHiddenMessageIndexes() {
         // Системные сообщения пропускаем, но наши SMS-ответы прячем
         if (msg.is_system && !ANY_TEL_RE.test(msg.mes) && !SILENT_RE.test(msg.mes)) continue;
         if (msg.is_user) {
-            if (OUT_RE.test(msg.mes)) out.push(i);
+            if (OUT_RE.test(msg.mes) || LOG_RE.test(msg.mes)) out.push(i);
             continue;
         }
-        if (!ANY_TEL_RE.test(msg.mes) && !SILENT_RE.test(msg.mes)) continue;
-        const visible = msg.mes.replace(/<!--[\s\S]*?-->/g, '').trim();
+        // Think-блоки не учитываем ни в детекте тегов, ни в «видимом остатке»
+        const clean = stripThink(msg.mes);
+        if (!ANY_TEL_RE.test(clean) && !SILENT_RE.test(clean)) continue;
+        const visible = clean.replace(/<!--[\s\S]*?-->/g, '').trim();
         if (visible.length <= 4) out.push(i);
     }
     return out;

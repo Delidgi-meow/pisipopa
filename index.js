@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════
-// GLASSPHONE — точка входа
+// ТЕЛЕФОН — точка входа
 // Телефон для SillyTavern: смс-переписка с персонажами, контакты «подхватываются»
 // когда персонаж даёт номер. Чат = источник правды, синхронизация абсолютная.
 // ═══════════════════════════════════════════
@@ -7,8 +7,8 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { getSettings } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast } from './ui.js';
-import { harvestSocialTags } from './social.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin } from './ui.js';
+import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -45,11 +45,39 @@ function setupSettingsPanel() {
                 <option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option>
             </select>
         </div>
-        <small style="opacity:0.4;font-size:9px;display:block">Генерация лент/комментов всегда идёт БЕЗ RP-пресета. «Текущий API» — сырой запрос; отдельный профиль дополнительно включает вижн (модель видит фото постов).</small>
+        <small style="opacity:0.4;font-size:9px;display:block">Генерация лент/комментов всегда идёт БЕЗ RP-пресета. Вижн работает в обоих режимах; отдельный профиль полезен, чтобы поставить дешёвую не-reasoning модель.</small>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Глубина инжекта:</span>
             <input type="number" id="gp-set-depth" class="text_pole" min="0" max="99" step="1" value="${s.injectDepth || 0}" style="width:55px;flex:0 0 auto">
             <span style="font-size:8px;opacity:0.4">0 = последний ход</span>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Твой ник (@):</span>
+            <input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени" style="flex:1">
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Модель картинок:</span>
+            <input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" value="${s.imageGenModel || ''}" placeholder="пусто = из novarakk" style="flex:1">
+            <datalist id="gp-imgmodels"></datalist>
+            <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей из novarakk" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
+        </div>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-visioncomments" ${s.visionInComments ? 'checked' : ''}><span>Прикладывать фото к комментам (дороже; иначе — по описанию)</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат (память для саммарайза)</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте (экономия токенов)</span></label>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Скин:</span>
+            <select id="gp-set-skin" class="text_pole" style="flex:1">
+                <option value="indigo" ${s.skin === 'indigo' || !s.skin ? 'selected' : ''}>Индиго (стандарт)</option>
+                <option value="rose" ${s.skin === 'rose' ? 'selected' : ''}>Роза</option>
+                <option value="emerald" ${s.skin === 'emerald' ? 'selected' : ''}>Изумруд</option>
+                <option value="mono" ${s.skin === 'mono' ? 'selected' : ''}>Монохром</option>
+            </select>
+        </div>
+        <div class="menu_button" id="gp-css-toggle" style="font-size:10px;text-align:center;margin-top:4px">CSS телефона ▼</div>
+        <div id="gp-css-panel" style="display:none;flex-direction:column;gap:4px">
+            <textarea id="gp-set-css" class="text_pole" rows="8" style="font-family:monospace;font-size:10px;resize:vertical" placeholder="/* Свой CSS: #gp-phone, .gp-bubble, .gp-tw-card, .gp-ig-card, ... */">${s.customCss || ''}</textarea>
+            <button id="gp-css-apply" class="menu_button">Применить</button>
         </div>
         <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
         <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Смс живут прямо в сообщениях чата — телефон синхронизирован с ролевой всегда. Консоль: glassPhoneOpen()</small>
@@ -81,6 +109,70 @@ function setupSettingsPanel() {
         getSettings().injectDepth = Math.max(0, Math.min(99, parseInt(this.value) || 0));
         saveSettingsDebounced();
         updatePhoneInjection();
+    });
+    // Ник юзера хранится per-chat (в метаданных) — подставляем при открытии панели
+    try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* чат ещё не загружен */ }
+    $('#gp-set-handle').on('change', function () {
+        setUserHandle(this.value);
+        updatePhoneInjection();
+    });
+    $('#gp-set-imgmodel').on('change', function () {
+        getSettings().imageGenModel = this.value.trim();
+        saveSettingsDebounced();
+    });
+    // Список доступных моделей — из активного провайдера novarakk
+    $('#gp-imgmodel-refresh').on('click', async function () {
+        const btn = $(this);
+        btn.find('i').addClass('fa-spin');
+        try {
+            const provMod = await import('/scripts/extensions/third-party/novarakk/src/providers.js');
+            const setMod = await import('/scripts/extensions/third-party/novarakk/src/settings.js');
+            const provider = provMod.resolveActiveProvider(setMod.getSettings());
+            if (!provider) throw new Error('провайдер novarakk не настроен');
+            const models = await provider.fetchModels();
+            if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
+            $('#gp-imgmodels').html(models.map(m => `<option value="${$('<i>').text(m).html()}">`).join(''));
+            toast(`Моделей: ${models.length} — открой поле, появится список`, 'fa-check');
+        } catch (e) {
+            console.warn('[GlassPhone] fetch models failed:', e);
+            toast(`Не удалось: ${String(e?.message || e).slice(0, 50)}`, 'fa-circle-exclamation');
+        } finally {
+            btn.find('i').removeClass('fa-spin');
+        }
+    });
+    $('#gp-set-square').on('change', function () {
+        getSettings().imageGenSquare = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-visioncomments').on('change', function () {
+        getSettings().visionInComments = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-sociallog').on('change', function () {
+        getSettings().socialLogToChat = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-compact').on('change', function () {
+        getSettings().compactRules = this.checked;
+        saveSettingsDebounced();
+        updatePhoneInjection();
+    });
+    $('#gp-set-skin').on('change', function () {
+        getSettings().skin = this.value;
+        saveSettingsDebounced();
+        applySkin();
+    });
+    $('#gp-css-toggle').on('click', function () {
+        const panel = $('#gp-css-panel');
+        const visible = panel.is(':visible');
+        panel.css('display', visible ? 'none' : 'flex');
+        $(this).text(visible ? 'CSS телефона ▼' : 'CSS телефона ▲');
+    });
+    $('#gp-css-apply').on('click', function () {
+        getSettings().customCss = $('#gp-set-css').val() || '';
+        saveSettingsDebounced();
+        applySkin();
+        toast('CSS применён', 'fa-check');
     });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;
@@ -175,6 +267,8 @@ jQuery(async () => {
                     try { harvestSocialTags(); } catch (e) { /* ignore */ }
                     updatePhoneInjection();
                     applyChatHiding();
+                    // Ник юзера per-chat — обновляем поле в настройках
+                    try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* ignore */ }
                     if (isPhoneOpen()) render();
                 }, 150);
             });

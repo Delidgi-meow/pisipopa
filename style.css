@@ -507,7 +507,14 @@
     flex-direction: column;
     gap: 14px;
     padding: 18px 10px;
+    /* Скролл: при куче контактов (чекбоксы группы) форма выше экрана */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
 }
+.gp-add-form::-webkit-scrollbar { display: none; }
+.gp-add-form > * { flex: 0 0 auto; }
 .gp-add-avatar {
     width: 84px; height: 84px;
     margin: 4px auto 6px;

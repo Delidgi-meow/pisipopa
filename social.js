@@ -426,12 +426,11 @@ Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`;
 
 function cleanGenOutput(raw) {
     let t = String(raw || '');
+    // Закрытые think-блоки — вырезаем целиком
     t = t.replace(/<(think|thinking|reasoning|analysis)[^>]*>[\s\S]*?<\/\1>/gi, '');
-    t = t.replace(/<(think|thinking|reasoning)[^>]*>[\s\S]*/gi, (m) => {
-        // незакрытый think без ответа после — выкидываем целиком
-        const close = m.match(/<\/(think|thinking|reasoning)>/i);
-        return close ? m.slice(m.indexOf(close[0]) + close[0].length) : '';
-    });
+    // Незакрытый <think> — обычно префилл пресета (актуально для quiet-пути):
+    // убираем маркер, содержимое ОСТАВЛЯЕМ — там и есть ответ
+    t = t.replace(/<\/?(think|thinking|reasoning|analysis)[^>]*>/gi, '');
     return t.trim();
 }
 

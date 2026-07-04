@@ -126,12 +126,37 @@ export function stripThink(text) {
 
 // ── Толерантный JSON-парсер (модели любят одинарные кавычки и висячие запятые) ──
 function safeJson(raw) {
-    try { return JSON.parse(raw); } catch (e) {
-        try {
-            const fixed = raw.replace(/,\s*([}\]])/g, '$1').replace(/'/g, '"');
-            return JSON.parse(fixed);
-        } catch (e2) { return null; }
-    }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch (e) {}
+    try {
+        const fixed = raw.replace(/,\s*([}\]])/g, '$1').replace(/'/g, '"');
+        return JSON.parse(fixed);
+    } catch (e2) {}
+    try {
+        // Fallback для неэкранированных переносов строк внутри значений (частая ошибка моделей)
+        let f = raw.replace(/,\s*([}\]])/g, '$1').replace(/'/g, '"');
+        f = f.replace(/([^\\])\n/g, '$1\\n').replace(/([^\\])\r/g, '$1\\r');
+        return JSON.parse(f);
+    } catch (e3) {}
+    try {
+        // Последняя надежда: извлекаем ключи регулярками
+        const res = {};
+        const extract = (key) => {
+            const re = new RegExp(`"${key}"\\s*:\\s*"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"`, 'i');
+            const m = raw.match(re) || raw.replace(/'/g, '"').match(re);
+            if (m) return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+            return null;
+        };
+        res.from = extract('from');
+        res.text = extract('text');
+        res.to = extract('to');
+        res.photo = extract('photo');
+        res.chat = extract('chat');
+        res.name = extract('name');
+        res.number = extract('number');
+        if (res.from || res.name) return res;
+    } catch (e4) {}
+    return null;
 }
 
 // ── Регэкспы тегов ──
@@ -400,39 +425,6 @@ export function scanChat() {
                 }
                 smsTagsInMsg++;
             }
-        }
-
-        // Fallback: бэктик-смс в прозе (`текст`) — только если тегов tel:sms нет
-        // и это не телефон бота
-        if (smsTagsInMsg === 0 && msg.name && !botsPhone) {
-            const fromMatch = text.match(SMS_FROM_RE);
-            const realSender = fromMatch ? fromMatch[1].trim() : msg.name;
-
-            BACKTICK_RE.lastIndex = 0;
-            let bm, caught = 0;
-            while ((bm = BACKTICK_RE.exec(text)) !== null && caught < 4) {
-                const start = Math.max(0, bm.index - 150);
-                const end = Math.min(text.length, bm.index + bm[0].length + 150);
-                const ctxText = text.slice(start, end);
-                if (!BACKTICK_CTX_RE.test(ctxText)) continue;
-                
-                // Проверяем, не адресовано ли сообщение боту в 3-м лице ("Вадиму пришло...")
-                // или прямым обращением внутри текста ("Вадим, ...")
-                const shortName = msg.name ? msg.name.split(' ')[0] : '';
-                if (shortName.length > 2) {
-                    const toBotRe = new RegExp(`(?:^|[^a-zA-Zа-яёА-ЯЁ])${shortName}[a-zа-яё]*`, 'i');
-                    const inCtx = new RegExp(`(?:смс|sms|сообщени[еяю]|написал[a-zа-яё]*)[^\\.\\?!]*${shortName}[a-zа-яё]*|${shortName}[a-zа-яё]*[^\\.\\?!]*(?:смс|sms|сообщени[ея]|получил[a-zа-яё]*)`, 'i');
-                    if (inCtx.test(ctxText) || toBotRe.test(bm[1].slice(0, 30))) {
-                        console.log(`[GlassPhone] Пропущено бэктик-смс: адресовано боту (${msg.name})`);
-                        continue;
-                    }
-                }
-
-                pushMsg(realSender, { dir: 'in', text: bm[1].trim(), idx: i, time });
-                addContact(realSender, '', 'implicit');
-                caught++;
-            }
-            if (caught > 0) console.log(`[GlassPhone] Поймано ${caught} бэктик-смс из прозы (отправитель: ${realSender})`);
         }
 
         // Fallback: номер в прозе без тега («подхватываем»)

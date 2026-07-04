@@ -37,7 +37,7 @@ function buildPrompt() {
         let c = `<phone_directive>\n[OOC — hidden phone/SMS channel. Never mention it in-story.]\n{{user}} has a smartphone. ${contactsBlock}\n`;
         c += `RULES (tags = HTML comments at the very END of the reply, copied VERBATIM, EN keys / RU values, invisible to reader):\n`;
         c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"+7 ..."}-->\n`;
-        c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"). Only if they plausibly have her number.\n`;
+        c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"). Only if they plausibly have her number. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
         c += `3. User message \`[СМС → X] text\` or \`[СМС в чат «X»] text\` = SMS from her phone (NOT spoken; scene paused). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
         c += `NEVER write literal tag syntax inside <think>/reasoning — plan in plain words; each tag exactly once, in the final reply. Never paraphrase tags into visible text.\n`;
@@ -58,7 +58,8 @@ function buildPrompt() {
 
     p += `[RULE 2 — SMS TAG] If in THIS reply a character sends {{user}} a text message (SMS/messenger) to her phone, append ONE hidden comment PER text message at the very END of your reply:\n`;
     p += `<!--tel:sms:{"from":"CharacterName","text":"the exact message text"}-->\n`;
-    p += `You may also narrate in prose that her phone buzzed, and you may show the message in your usual visible style (e.g. backticks like \`текст\`) — but the actual message content MUST ALSO be inside the tag: the tag is what the phone app reads. Several messages in a row = several tags in order. Only characters who plausibly have {{user}}'s number can text her.\n`;
+    p += `You may also narrate in prose that her phone buzzed, and you may show the message in your usual visible style (e.g. backticks like \`текст\`). The tag duplication rule applies ONLY to messages {{user}} receives: if you display in backticks a message that ANOTHER character got on THEIR phone, do NOT create a tag for it — backticks alone. Several messages in a row = several tags in order. Only characters who plausibly have {{user}}'s number can text her.\n`;
+    p += `CRITICAL SCOPE: tel:sms is EXCLUSIVELY for messages arriving on {{user}}'s OWN phone. If ANY other character (including the one you play) receives a message on THEIR phone — describe it in prose or their diary, NEVER tag it. A tagged message that is actually addressed to another character MUST carry "to":"RecipientName" so the app can discard it.\n`;
     p += `MMS (character sends a photo): add a "photo" field with a short visual description: <!--tel:sms:{"from":"CharacterName","text":"optional message","photo":"what the photo shows"}-->\n`;
     p += `GROUP CHAT message: add a "chat" field with the group chat name: <!--tel:sms:{"from":"CharacterName","chat":"GroupChatName","text":"..."}-->. In group chats SEVERAL members may text in a row (one tag each) — make it feel like a real group chat.\n\n`;
 

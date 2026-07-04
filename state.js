@@ -286,11 +286,6 @@ export function getRpDateTime() {
 }
 
 // Обратная совместимость: label «ДД.ММ»
-export function getRpDateLabel() {
-    const rp = getRpDateTime();
-    return rp ? rp.label : null;
-}
-
 // ═══════════════════════════════════════════
 // ГЛАВНОЕ: пересборка контактов и тредов из чата
 // ═══════════════════════════════════════════

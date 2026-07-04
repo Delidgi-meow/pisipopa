@@ -19,7 +19,7 @@
 //    саммарайзер забирает; инжект-сводка при включённом журнале — только кошелёк
 // ═══════════════════════════════════════════
 
-import { generateRaw, generateQuietPrompt, user_avatar, getThumbnailUrl } from '../../../../script.js';
+import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink } from './state.js';
 
@@ -376,6 +376,7 @@ export function delOfComment(postId, commentId) {
 export async function generateOfComments(post) {
     const s = getSocial();
     const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);
+    const wantDesc = willAttach && !post.imgDesc;
     const photoLine = willAttach
         ? `The actual photo is ATTACHED — react to what you SEE.${post.imgDesc ? ` (fallback description: ${post.imgDesc})` : ''}`
         : `Photo (description): ${post.imgDesc || '(no description)'}`;
@@ -395,9 +396,23 @@ Generate 4-7 comments from her SUBSCRIBERS: invented fan accounts (simps, regula
 Some commenters tip: add "tip": dollar amount (5-200) to 1-3 comments.
 Max 200 chars each. NO emojis. Match the explicitness of the roleplay excerpt — do not sanitize, do not escalate beyond it.
 ${JSON_RULES}
-Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`;
+${wantDesc
+        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph","comments":[{"author":"ник","text":"...","type":"random","tip":0},...]}`
+        : `Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`}`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, image: willAttach ? post.image : null }));
+    const rawOf = await socialGen(prompt, { maxTokens: wantDesc ? 2048 : 1536, image: willAttach ? post.image : null });
+    let parsed;
+    if (wantDesc) {
+        const obj = parseJsonObject(rawOf);
+        if (obj) {
+            const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+            if (desc) post.imgDesc = desc;
+            parsed = obj.comments;
+        }
+        if (!Array.isArray(parsed)) parsed = parseJsonArray(rawOf);
+    } else {
+        parsed = parseJsonArray(rawOf);
+    }
     if (!Array.isArray(parsed)) return 0;
     let added = 0, tipsTotal = 0;
     if (!Array.isArray(post.comments)) post.comments = [];
@@ -585,26 +600,21 @@ export async function describeImage(image) {
     if (!image) return '';
     const task = 'Describe this photo in detail in Russian: who/what is in the frame, pose, facial expressions, clothes, setting, lighting, mood, small details, and any text visible. Output ONLY the description as a cohesive paragraph — no quotes, no labels, no tags, no thinking blocks.';
     try {
+        // 800 токенов: 150 обрывало генерацию на полуслове («...подчерк»).
+        // quietImage-фолбэк УДАЛЁН: он гнал полный контекст с пресетом (10к+ токенов),
+        // и пресет перехватывал задачу — модель отвечала ролевым ходом вместо описания.
         let raw = '';
         if (getSettings().socialProfileId) {
-            raw = await socialGen(task, { maxTokens: 150, image });
+            raw = await socialGen(task, { maxTokens: 800, image });
         } else {
-            raw = await currentApiVision(task, image, 150) || '';
-            if (!raw) {
-                const img = await toDataUrl(image);
-                if (!img) return '';
-                console.log('[GlassPhone] vision-фолбэк: quietImage через основной API');
-                raw = cleanGenOutput(String(await generateQuietPrompt({
-                    quietPrompt: `[OOC TASK — do NOT continue the roleplay, do NOT output hidden tags.] ${task}`,
-                    quietImage: img,
-                    responseLength: 150,
-                }) || ''));
-            }
+            raw = await currentApiVision(task, image, 800) || '';
         }
+        // Полный текст: сколько описал — столько и в пост (абзацы схлопываются
+        // в одну строку, чтобы не рвать разметку сообщения)
         return raw
             .replace(/<!--[\s\S]*?-->/g, '')
             .replace(/^["'«]|["'»]$/g, '')
-            .trim().split('\n')[0].slice(0, 200);
+            .trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
     } catch (e) {
         console.warn('[GlassPhone] describeImage failed:', e);
         return '';
@@ -618,6 +628,55 @@ async function _describePostImageInner(post) {
     saveMeta();
     console.log(`[GlassPhone] Фото автоописано: "${desc}"`);
     return true;
+}
+
+// ═══ СМС с фото: описание + ответ ОДНИМ vision-запросом ═══
+// Экономия: раньше картинка уходила в API дважды (describe + ответ), а фолбэк
+// через quietImage гнал полный контекст с пресетом (10к+ токенов) и пресет
+// перехватывал задачу. Возвращает {desc, replies:[{from,text}]} или null.
+export async function generateSmsPhotoReply({ contactName, isGroup = false, members = [], userText = '', image }) {
+    if (!image) return null;
+    const target = isGroup
+        ? `the group chat «${contactName}» (members: ${members.join(', ') || '?'})`
+        : contactName;
+    const prompt = `${await taskHeader(`reply to an SMS that ${getUserName()} just sent from her phone, and describe her attached photo.`)}
+${getUserName()} texted ${target}: "${userText || '(only the photo, no text)'}"
+Her PHOTO is ATTACHED to this request — LOOK at it and react to what you actually see.
+
+Output STRICT JSON object ONLY — no markdown, no backticks, no <think>, no HTML comments:
+{"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph: who/what is in the frame, pose, facial expression, clothes, setting, lighting, mood, small details","replies":[{"from":"SenderName","text":"reply text"}]}
+Reply rules: 1-5 short messages in the character's own texting voice, in-character reaction to the photo and her text, same language as the excerpt. ${isGroup ? 'Several members may reply in a row — "from" = member name.' : `Every reply has "from":"${contactName}".`} If the character realistically would NOT reply right now, use an empty "replies" array.`;
+
+    try {
+        const raw = await socialGen(prompt, { maxTokens: 1500, image });
+        const obj = parseJsonObject(raw);
+        if (!obj) return null;
+        const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+        const replies = Array.isArray(obj.replies)
+            ? obj.replies.filter(r => r && r.text).map(r => ({
+                from: String(r.from || contactName),
+                text: String(r.text).slice(0, 500),
+            })).slice(0, 5)
+            : [];
+        console.log(`[GlassPhone] смс-фото: описание+ответ одним запросом (desc ${desc.length} симв., ответов ${replies.length})`);
+        return { desc, replies };
+    } catch (e) {
+        console.warn('[GlassPhone] generateSmsPhotoReply failed:', e);
+        return null;
+    }
+}
+
+// Толерантный парс JSON-ОБЪЕКТА из ответа модели
+function parseJsonObject(raw) {
+    let text = String(raw || '').trim()
+        .replace(/```json?/gi, '').replace(/```/g, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) {
+        const j = safeJson(m[0]);
+        if (j && typeof j === 'object' && !Array.isArray(j)) return j;
+    }
+    return null;
 }
 
 // Толерантный парс JSON-массива из ответа модели
@@ -889,10 +948,16 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
 export async function generateIgComments(post) {
     // Экономия: описание есть → фото не прикладываем (галочка visionInComments переопределяет)
     const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);
+    // Комбо-режим: фото приложено и описания нет → просим В ТОМ ЖЕ запросе
+    // и описание, и комменты (одна картинка в API вместо двух)
+    const wantDesc = willAttach && !post.imgDesc;
     const photoLine = willAttach
         ? `The actual photo is ATTACHED to this request — LOOK at it and react to what you actually see.${post.imgDesc ? ` (fallback description if you cannot see images: ${post.imgDesc})` : ''}`
         : `Photo (description): ${post.imgDesc || (post.image ? 'her photo, no text description available' : '(no description)')}`;
     const existing = (post.comments || []).map(c => `${c.author}: ${c.text}`).join('\n');
+    const formatLine = wantDesc
+        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph (who/what, pose, clothes, setting, lighting, mood, details)","comments":[{"author":"Имя","text":"...","type":"contact|random"},...]}`
+        : `Format: [{"author":"Имя","text":"...","type":"contact|random"},...]`;
     const prompt = `${await taskHeader('generate comments under an Instagram post.')}
 Post by ${post.author}. ${photoLine}
 Caption: "${post.caption || '(none)'}"
@@ -901,12 +966,24 @@ ${contactsBlock()}
 
 Generate 4-7 comments: known characters in-character (reacting to the photo/caption — especially if the post is by ${getUserName()}) + random accounts. Instagram tone: compliments, questions, jokes. NO emojis at all. Max 200 chars each.
 ${JSON_RULES}
-Format: [{"author":"Имя","text":"...","type":"contact|random"},...]`;
+${formatLine}`;
 
-    // Экономия: если описание уже есть — фото к запросу не прикладываем
-    // (если только юзер не включил «фото к комментам» явно)
-    const attachImg = post.image && (getSettings().visionInComments || !post.imgDesc) ? post.image : null;
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, image: attachImg }));
+    const raw = await socialGen(prompt, { maxTokens: wantDesc ? 2048 : 1536, image: willAttach ? post.image : null });
+    let parsed;
+    if (wantDesc) {
+        const obj = parseJsonObject(raw);
+        if (obj) {
+            const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+            if (desc) {
+                post.imgDesc = desc;
+                console.log(`[GlassPhone] Комбо: описание фото получено вместе с комментами (${desc.length} симв.)`);
+            }
+            parsed = obj.comments;
+        }
+        if (!Array.isArray(parsed)) parsed = parseJsonArray(raw); // модель могла ответить массивом
+    } else {
+        parsed = parseJsonArray(raw);
+    }
     if (!Array.isArray(parsed)) return 0;
     let added = 0;
     if (!Array.isArray(post.comments)) post.comments = [];

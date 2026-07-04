@@ -19,7 +19,7 @@ import {
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
-    handleFor, setContactHandle, describePostImage, logSocialToChat,
+    handleFor, setContactHandle, describePostImage, generateSmsPhotoReply, logSocialToChat,
 } from './social.js';
 
 // ── Локальное UI-состояние (не персистится) ──
@@ -1378,13 +1378,18 @@ function renderIgNew(screen) {
             genBusy = true;
             render();
             try {
+                // Комбо: комменты + описание фото ОДНИМ vision-запросом
+                // (generateIgComments заполнит post.imgDesc, если его нет)
+                const before = (post.comments || []).length;
+                await generateIgComments(post);
+                updatePhoneInjection();
+                render();
+                // Журнал — уже с готовым описанием
                 await logSocialToChat(
                     `${getUserName()} опубликовала фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
-                const before = (post.comments || []).length;
-                await generateIgComments(post);
                 logNewReplies('фото в Instagram', post.caption || post.imgDesc, post.comments, before);
             } catch (e) {
                 console.error('[GlassPhone] auto-comments failed:', e);
@@ -1627,14 +1632,17 @@ function renderOfNew(screen) {
             genBusy = true;
             render();
             try {
-                // Журнал: фото прикладывается, текст жёстко помечает приватность
+                // Комбо: реакции фанатов + описание фото одним vision-запросом
+                const before = (post.comments || []).length;
+                await generateOfComments(post);
+                updatePhoneInjection();
+                render();
+                // Журнал: с готовым описанием, текст жёстко помечает приватность
                 await logSocialToChat(
                     `${getUserName()} опубликовала пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
-                const before = (post.comments || []).length;
-                await generateOfComments(post);
                 logNewReplies('приватным OnlyFans-постом', post.caption || post.imgDesc, post.comments, before);
             } catch (e) {
                 console.error('[GlassPhone] of auto-comments failed:', e);
@@ -1693,6 +1701,35 @@ function deleteSmsFromChat(msg) {
 
 // ═══ Отправка смс ═══
 
+// «Призрак»: вставка ответа в чат БЕЗ генерации через основной пайплайн —
+// is_system:true на 1.5с, чтобы ExtBlocks/JS Runner не триггерились,
+// потом флаг снимается и сообщение живёт в контексте модели как обычное.
+async function insertGhostReply(name, mesText) {
+    const ctx = SillyTavern.getContext();
+    const chat = ctx?.chat;
+    if (!chat || !mesText || !mesText.trim()) return;
+    const replyMsg = {
+        name: name,
+        is_user: false,
+        is_system: true,
+        send_date: Date.now(),
+        mes: mesText.trim(),
+        extra: { isSmsSilent: true },
+    };
+    chat.push(replyMsg);
+    if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    if (typeof ctx.printMessages === 'function') ctx.printMessages();
+    setTimeout(async () => {
+        replyMsg.is_system = false;
+        const mesIdx = chat.indexOf(replyMsg);
+        if (mesIdx >= 0) {
+            const mesEl = document.querySelector(`.mes[mesid="${mesIdx}"]`);
+            if (mesEl) mesEl.setAttribute('is_system', 'false');
+        }
+        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    }, 1500);
+}
+
 async function doSend(key) {
     if (sending) return;
     const input = document.getElementById('gp-input');
@@ -1717,8 +1754,11 @@ async function doSend(key) {
     try {
         await sendMessageAsUser(mes);
 
-        // Приложенное фото → в extra.image сообщения чата (ST-нативно: рендер + вижн).
-        // Пытаемся сохранить файлом, чтобы не раздувать чат base64-ом.
+        // Приложенное фото. Порядок:
+        //  1) файл + img в маркер → рендер: МИНИАТЮРА СРАЗУ
+        //  2) ОДИН vision-запрос: описание + ответ собеседника (экономия: картинка
+        //     в API один раз; описание → в mes «*фото: ...*», ответ → призраком)
+        let photoHandled = false;
         if (draftImg) {
             try {
                 const ctx0 = SillyTavern.getContext();
@@ -1734,12 +1774,44 @@ async function doSend(key) {
                     if (!lastMsg.extra) lastMsg.extra = {};
                     lastMsg.extra.image = src;
                     lastMsg.extra.inline_image = true;
+
+                    // Надёжный путь миниатюры: img в маркере tel:out (mes переживает всё)
+                    const markerJson = JSON.stringify(isGroup ? { to: `группа:${name}`, img: src } : { to: name, img: src });
+                    lastMsg.mes = lastMsg.mes.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->/, `<!--tel:out:${markerJson}-->`);
                     await saveChatConditional();
+                    console.log(`[GlassPhone] смс-фото приложено (marker+extra): ${String(src).slice(0, 60)}`);
+
+                    // Миниатюра на экране НЕМЕДЛЕННО, до вижна
+                    applyChatHiding();
+                    typingKey = key;
+                    render();
+
+                    // Комбо: описание + ответ одним запросом
+                    const combo = await generateSmsPhotoReply({
+                        contactName: name, isGroup, members: t?.members || [],
+                        userText: text, image: draftImg,
+                    });
+                    if (combo) {
+                        if (combo.desc) {
+                            lastMsg.mes = lastMsg.mes.replace('*фото*', `*фото: ${combo.desc}*`);
+                            await saveChatConditional();
+                        }
+                        const botMes = combo.replies.length
+                            ? combo.replies.map(r => `<!--tel:sms:${JSON.stringify(isGroup
+                                ? { from: r.from, chat: name, text: r.text }
+                                : { from: name, text: r.text })}-->`).join('\n')
+                            : '<!--tel:silent-->';
+                        await insertGhostReply(name, botMes);
+                        photoHandled = true;
+                    } else {
+                        console.warn('[GlassPhone] комбо-запрос не удался — ответ пойдёт через тихий путь без описания');
+                    }
                 }
             } catch (e) {
                 console.warn('[GlassPhone] attach image failed:', e);
             }
         }
+        if (photoHandled) return; // finally всё приберёт
 
         applyChatHiding(); // спрятать свою смс из ленты сразу
         typingKey = key;
@@ -1748,47 +1820,14 @@ async function doSend(key) {
         updatePhoneInjection();
 
         // Генерируем ответ «тихо» — generateQuietPrompt не триггерит JS Runner,
-        // Extra блоки и другие скрипты. Результат вставляем в чат вручную.
+        // Extra блоки и другие скрипты. Результат вставляем призраком.
         const ctx = SillyTavern.getContext();
         const quietPrompt = isGroup
             ? `Continue the roleplay. The group chat «${name}» (members: ${(t.members || []).join(', ')}) just received this message from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply as the group members — ONLY hidden tel:sms tags with the "chat" field (RULE 3 — PHONE-ONLY MODE), one tag per message, several members may text. No visible prose.`
-            : `Continue the roleplay. ${name} just received this SMS from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached — look at it if you can see images)' : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
+            : `Continue the roleplay. ${name} just received this SMS from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
         const rawReply = await generateQuietPrompt(quietPrompt, false, false);
-
         if (rawReply && rawReply.trim()) {
-            // Трюк с призраком: вставляем is_system:true → ExtBlocks/JS Runner
-            // пропускают сообщение (их хэндлеры проверяют is_system). Через секунду
-            // снимаем призрака → сообщение остаётся в контексте модели.
-            const chat = ctx?.chat;
-            if (chat) {
-                const replyMsg = {
-                    name: name,
-                    is_user: false,
-                    is_system: true, // призрак — расширения не триггерятся
-                    send_date: Date.now(),
-                    mes: rawReply.trim(),
-                    extra: { isSmsSilent: true },
-                };
-                chat.push(replyMsg);
-                if (typeof ctx.saveChat === 'function') await ctx.saveChat();
-                // Подтолкнуть UI ST к обновлению
-                if (typeof ctx.printMessages === 'function') {
-                    ctx.printMessages();
-                }
-                // Снимаем призрака — сообщение попадёт в контекст модели при следующей генерации
-                setTimeout(async () => {
-                    replyMsg.is_system = false;
-                    // Обновляем DOM: убираем призрака с элемента сообщения
-                    const mesIdx = chat.indexOf(replyMsg);
-                    if (mesIdx >= 0) {
-                        const mesEl = document.querySelector(`.mes[mesid="${mesIdx}"]`);
-                        if (mesEl) {
-                            mesEl.setAttribute('is_system', 'false');
-                        }
-                    }
-                    if (typeof ctx.saveChat === 'function') await ctx.saveChat();
-                }, 1500);
-            }
+            await insertGhostReply(name, rawReply.trim());
         }
     } catch (e) {
         console.error('[GlassPhone] send failed:', e);

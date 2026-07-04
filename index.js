@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { getSettings } from './state.js';
+import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
@@ -81,6 +81,7 @@ function setupSettingsPanel() {
         </div>
         <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
         <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Смс живут прямо в сообщениях чата — телефон синхронизирован с ролевой всегда. Консоль: glassPhoneOpen()</small>
+        <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:2px;font-weight:700"></small>
     </div>
 </div>`;
     $('#extensions_settings2').append(html);
@@ -298,7 +299,9 @@ jQuery(async () => {
         // Первичное скрытие при загрузке
         setTimeout(applyChatHiding, 600);
 
-        console.log('[GlassPhone] Ready');
+        // Версия — в консоль и в панель настроек (сверка ПК ↔ айфон против стейл-синка)
+        try { document.getElementById('gp-version-label').textContent = `Версия: ${GP_VERSION}`; } catch (e) { /* ignore */ }
+        console.log(`[GlassPhone] Ready — v${GP_VERSION}`);
     } catch (e) {
         console.error('[GlassPhone] FATAL:', e);
     }

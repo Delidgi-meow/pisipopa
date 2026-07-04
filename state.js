@@ -24,6 +24,9 @@ import { chat_metadata } from '../../../../script.js';
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 
 export const EXT_NAME = 'glassphone';
+// Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
+// БАМПАТЬ при каждом коммите вместе с manifest.json!
+export const GP_VERSION = '1.7.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -344,7 +347,10 @@ export function scanChat() {
                 const body = vis ? vis[2].trim() : (visGroup ? visGroup[2].trim() : (j.text || ''));
                 // Групповой чат: to = "группа:Название" (или поле group)
                 const groupName = j.group || (typeof to === 'string' && to.match(/^группа:\s*(.+)$/i)?.[1]) || null;
-                const entry = { dir: 'out', text: body, idx: i, time };
+                // В пузыре телефона токен «*фото...*» не показываем — там миниатюра;
+                // полное описание остаётся в mes (для модели и саммари)
+                const displayBody = body.replace(/\*фото:[^*]*\*\s*/i, '').replace(/\*фото\*\s*/i, '').trim();
+                const entry = { dir: 'out', text: displayBody, idx: i, time };
                 // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.image (ST-нативно)
                 if (j.img) entry.img = j.img;
                 else if (msg.extra?.image) entry.img = msg.extra.image;
@@ -394,13 +400,18 @@ export function scanChat() {
             }
         }
 
-        // Fallback: номер в прозе без тега («подхватываем»)
-        const proseNum = detectProseNumber(text);
-        if (proseNum) {
-            const charName = msg.name || null;
-            if (charName && !contacts.has(keyOf(charName))) {
-                addContact(charName, proseNum, 'prose');
-                console.log(`[GlassPhone] Номер подхвачен из прозы: ${charName} → ${proseNum}`);
+        // Fallback: номер в прозе без тега («подхватываем»).
+        // ТОЛЬКО видимый текст: html-комменты вырезаются — иначе таймстамп в имени
+        // файла из маркера (sms_1783152188594.jpeg) ловился как «номер телефона»
+        // и создавал контакт с именем автора сообщения (даже самого юзера).
+        if (!msg.is_user) {
+            const proseNum = detectProseNumber(text.replace(/<!--[\s\S]*?-->/g, ''));
+            if (proseNum) {
+                const charName = msg.name || null;
+                if (charName && !contacts.has(keyOf(charName))) {
+                    addContact(charName, proseNum, 'prose');
+                    console.log(`[GlassPhone] Номер подхвачен из прозы: ${charName} → ${proseNum}`);
+                }
             }
         }
     }

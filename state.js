@@ -118,10 +118,25 @@ export function keyOf(name) {
 // в цепочке размышлений → сканер видел их и ДУБЛИРОВАЛ сообщения в телефоне.
 // Всё, что внутри think-блоков, для телефона не существует.
 export function stripThink(text) {
-    return String(text || '')
-        .replace(/<(think|thinking|reasoning|analysis|reflection)[^>]*>[\s\S]*?<\/\1>/gi, '')
-        // незакрытый think — режем до конца (видимый ответ был бы после закрывающего тега)
-        .replace(/<(think|thinking|reasoning)[^>]*>[\s\S]*$/gi, '');
+    if (!text) return '';
+    let res = String(text);
+    // Сначала удаляем закрытые блоки, чтобы избежать дублей (модель могла написать теги и в think, и в ответе)
+    res = res.replace(/<(think|thinking|reasoning|analysis|reflection)[^>]*>[\s\S]*?<\/\1>/gi, '');
+    
+    // Для незакрытого блока:
+    const unclosedMatch = res.match(/<(think|thinking|reasoning)[^>]*>([\s\S]*)$/i);
+    if (unclosedMatch) {
+        const inside = unclosedMatch[2];
+        // Если внутри незакрытого блока есть теги телефона, значит модель забыла закрыть блок
+        // и выдала итоговые теги прямо внутри. В таком случае оставляем содержимое.
+        if (/<!--\s*tel:/i.test(inside)) {
+            res = res.replace(/<(think|thinking|reasoning)[^>]*>/gi, '');
+        } else {
+            // Тегов нет, безопасно удаляем всё до конца (видимо, модель просто оборвала мысль)
+            res = res.replace(/<(think|thinking|reasoning)[^>]*>[\s\S]*$/gi, '');
+        }
+    }
+    return res;
 }
 
 // ── Толерантный JSON-парсер (модели любят одинарные кавычки и висячие запятые) ──

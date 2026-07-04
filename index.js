@@ -230,6 +230,7 @@ jQuery(async () => {
             updatePhoneInjection();
             applyChatHiding();
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST
+            if (isPhoneOpen()) render();
         };
         eventSource.on(event_types.MESSAGE_RECEIVED, onNewMessage);
         if (event_types.GENERATION_ENDED) {

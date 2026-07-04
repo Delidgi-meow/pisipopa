@@ -353,14 +353,14 @@ export function scanChat() {
                     addContact(to, '', 'implicit');
                 }
             }
-            continue;
         }
 
-        // ── Сообщения бота ──
+        // ── Сообщения бота (или юзера) ──
 
         // ГЛАВНАЯ ПРОВЕРКА: бот описывает СВОЙ телефон?
         // Если да — это НЕ смс юзеру, пропускаем всё кроме contact-тегов.
-        const botsPhone = isBotsOwnPhone(text);
+        // Для сообщений юзера эта проверка всегда false, так как мы хотим парсить их тэги.
+        const botsPhone = msg.is_user ? false : isBotsOwnPhone(text);
         if (botsPhone) {
             console.log(`[GlassPhone] Пропущено: смс на телефон бота, не юзера (${msg.name})`);
         }
@@ -375,6 +375,13 @@ export function scanChat() {
             if (kind === 'contact' && j.name) {
                 addContact(j.name, j.number || '', 'tag');
             } else if (kind === 'sms' && j.from && (j.text || j.photo)) {
+                // Если смс явно адресовано боту (j.to совпадает с именем бота), пропускаем,
+                // так как телефон принадлежит юзеру.
+                if (j.to && !msg.is_user && keyOf(j.to) === keyOf(msg.name)) {
+                    console.log(`[GlassPhone] Пропущено: смс адресовано боту (${j.to})`);
+                    continue;
+                }
+                
                 // Если сработал детектор "телефон бота", блокируем чужие смс (галлюцинации входящих),
                 // но РАЗРЕШАЕМ смс от самого бота (значит, он пишет юзеру, просто упомянул телефон в тексте).
                 if (botsPhone && keyOf(j.from) !== keyOf(msg.name)) {
@@ -406,7 +413,21 @@ export function scanChat() {
             while ((bm = BACKTICK_RE.exec(text)) !== null && caught < 4) {
                 const start = Math.max(0, bm.index - 150);
                 const end = Math.min(text.length, bm.index + bm[0].length + 150);
-                if (!BACKTICK_CTX_RE.test(text.slice(start, end))) continue;
+                const ctxText = text.slice(start, end);
+                if (!BACKTICK_CTX_RE.test(ctxText)) continue;
+                
+                // Проверяем, не адресовано ли сообщение боту в 3-м лице ("Вадиму пришло...")
+                // или прямым обращением внутри текста ("Вадим, ...")
+                const shortName = msg.name ? msg.name.split(' ')[0] : '';
+                if (shortName.length > 2) {
+                    const toBotRe = new RegExp(`(?:^|[^a-zA-Zа-яёА-ЯЁ])${shortName}[a-zа-яё]*`, 'i');
+                    const inCtx = new RegExp(`(?:смс|sms|сообщени[еяю]|написал[a-zа-яё]*)[^\\.\\?!]*${shortName}[a-zа-яё]*|${shortName}[a-zа-яё]*[^\\.\\?!]*(?:смс|sms|сообщени[ея]|получил[a-zа-яё]*)`, 'i');
+                    if (inCtx.test(ctxText) || toBotRe.test(bm[1].slice(0, 30))) {
+                        console.log(`[GlassPhone] Пропущено бэктик-смс: адресовано боту (${msg.name})`);
+                        continue;
+                    }
+                }
+
                 pushMsg(realSender, { dir: 'in', text: bm[1].trim(), idx: i, time });
                 addContact(realSender, '', 'implicit');
                 caught++;

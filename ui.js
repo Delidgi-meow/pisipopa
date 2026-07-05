@@ -319,6 +319,7 @@ export function applyWallpaper() {
         }
         const cssUrl = url.replace(/'/g, "\\'");
         layer.style.backgroundImage = `url('${cssUrl}')`;
+        layer.classList.toggle('gp-wall-blur', !!getSettings().wallpaperBlur);
         ph.classList.add('gp-has-wall');
     } else {
         if (layer) layer.remove();

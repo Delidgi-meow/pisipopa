@@ -26,7 +26,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.8.6';
+export const GP_VERSION = '1.8.9';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -64,8 +64,14 @@ const defaultSettings = () => ({
     // главперсонажей на чужих аккаунтах дописываются автоматически ПОСЛЕ него.
     imgPromptIg: 'social media post, self-taken candid framing',
     imgPromptOf: 'intimate boudoir shot, self-taken framing',
+    // Booru-теги: перед генерацией сцена конвертируется в англ. danbooru-теги
+    // (1girl/1boy, solo, hair, ...) — для NovelAI и аниме-моделей, которые не
+    // понимают короткие описания на русском. Стоит доп. текстовый запрос.
+    imgTagMode: false,
     // Обои телефона (URL файла; '' = стандартный стеклянный градиент)
     wallpaper: '',
+    // Размыть обои (blur-фильтр на слое обоев)
+    wallpaperBlur: false,
     // Скин телефона: indigo | rose | emerald | mono
     skin: 'indigo',
     // Кастомный CSS телефона

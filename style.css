@@ -171,6 +171,17 @@
     pointer-events: none;
     z-index: 0;
 }
+/* Размытие обоев (filter blur — не backdrop, iOS рендерит нормально; scale
+   прячет прозрачную кромку, которую даёт blur по краям inset:0) */
+.gp-wallpaper.gp-wall-blur {
+    filter: blur(16px);
+    transform: scale(1.12);
+}
+/* Активная кнопка-тоггл в настройках (напр. блюр обоев) */
+.menu_button.gp-btn-on {
+    background: linear-gradient(135deg, var(--gp-accent-a, #6a8dff), var(--gp-accent-b, #9a6aff)) !important;
+    color: #fff !important;
+}
 /* Скрим поверх фото для читаемости текста/статус-бара */
 .gp-wallpaper::after {
     content: "";

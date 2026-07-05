@@ -69,6 +69,7 @@ function setupSettingsPanel() {
             <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
         </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
         <div class="menu_button" id="gp-imgprompt-toggle" style="font-size:10px;text-align:center;margin-top:4px">Промпты картинок ▼</div>
         <div id="gp-imgprompt-panel" style="display:none;flex-direction:column;gap:3px">
             <span style="font-size:9px;opacity:0.5">Instagram (стиль/кадр — описание поста и запрет на главперсонажей дописываются сами):</span>
@@ -91,6 +92,7 @@ function setupSettingsPanel() {
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Обои:</span>
             <div class="menu_button" id="gp-wall-pick" style="flex:1;padding:4px 8px">${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</div>
+            <div class="menu_button ${s.wallpaperBlur ? 'gp-btn-on' : ''}" id="gp-wall-blur" title="Размыть обои" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-droplet"></i></div>
             <div class="menu_button" id="gp-wall-clear" title="Убрать обои" style="flex:0 0 auto;padding:4px 8px;${s.wallpaper ? '' : 'display:none'}"><i class="fa-solid fa-xmark"></i></div>
             <input type="file" id="gp-wall-file" accept="image/*" style="display:none">
         </div>
@@ -162,6 +164,10 @@ function setupSettingsPanel() {
     });
     $('#gp-set-square').on('change', function () {
         getSettings().imageGenSquare = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-tagmode').on('change', function () {
+        getSettings().imgTagMode = this.checked;
         saveSettingsDebounced();
     });
     $('#gp-imgprompt-toggle').on('click', function () {
@@ -295,6 +301,13 @@ function setupSettingsPanel() {
         $('#gp-wall-pick').text('Загрузить фото');
         $(this).css('display', 'none');
         toast('Обои убраны', 'fa-check');
+    });
+    $('#gp-wall-blur').on('click', function () {
+        const on = !getSettings().wallpaperBlur;
+        getSettings().wallpaperBlur = on;
+        saveSettingsDebounced();
+        applyWallpaper();
+        $(this).toggleClass('gp-btn-on', on);
     });
 }
 

@@ -1295,10 +1295,12 @@ export async function fetchImageModels() {
 // ВАЖНО: НЕ навязываем стиль рендера («realistic», «phone camera») — иначе он
 // перебивает активный стиль расширения (юзер поставила «Craig Mullins painterly»,
 // а мой хардкод «realistic» давал фотореализм). Описываем только СЦЕНУ/кадр.
-// depictUser/depictChar: чей это пост. Для ЧУЖИХ аккаунтов явно ЗАПРЕЩАЕМ рисовать
-// персону юзера и главных персонажей (иначе «я вылезла» на посте рандома — модель
-// знает персону из контекста описания и тащит её в кадр).
-function buildImagePrompt(post, { depictUser = false, depictChar = false } = {}) {
+// Запрет на персону/главперсонажей ставится ТОЛЬКО для анонимных рандом-аккаунтов
+// (anonymous) — чтобы персона юзера не «вылезала» на постах посторонних. Пост
+// самого бота или ЛЮБОГО контакта-НПС = его аккаунт → запрета НЕТ, его лицо/реф
+// рисуется. allowChar: даже на рандом-посте разрешить главперсонажа (фан-аккаунт
+// явно постит про него).
+function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     const st = getSettings();
     const parts = [];
     if (post.imgDesc) parts.push(post.imgDesc);
@@ -1307,13 +1309,51 @@ function buildImagePrompt(post, { depictUser = false, depictChar = false } = {})
     const framing = (post.kind === 'of'
         ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
         : (st.imgPromptIg || 'social media post, self-taken candid framing')).trim();
-    const neg = [];
-    if (!depictUser) neg.push('the user/protagonist');
-    if (!depictChar) neg.push('the main story characters');
-    const negLine = neg.length
-        ? ` This is a THIRD-PARTY account run by an unrelated person — do NOT depict ${neg.join(' or ')}; only strangers unrelated to the main story.`
-        : '';
+    let negLine = '';
+    if (anonymous) {
+        const neg = ['the protagonist / the main user'];
+        if (!allowChar) neg.push('the main story characters');
+        negLine = ` This photo belongs to an unrelated stranger's account — do NOT depict ${neg.join(' or ')}; only people unrelated to the main story.`;
+    }
     return `${framing}. ${parts.join('. ')}.${negLine}`;
+}
+
+// ── Booru-теги: сцена → англ. danbooru-теги (для NovelAI/аниме-моделей) ──
+// NAI не понимает короткие описания на русском — нужны теги вида 1girl, solo,
+// long hair, ... Конвертируем сцену одним текстовым запросом.
+async function sceneToBooruTags(post, { anonymous }) {
+    const scene = [post.imgDesc, post.caption].filter(Boolean).join('. ') || `photo posted by ${post.author}`;
+    const nsfw = post.kind === 'of'
+        ? 'This is adult NSFW content — include explicit danbooru tags matching the scene, do not sanitize.'
+        : '';
+    const who = anonymous
+        ? 'The subject is a random stranger — use generic appearance tags, NOT any specific named main character.'
+        : '';
+    const prompt = `Convert this scene into ONE line of English Danbooru-style image tags for an anime image model (NovelAI).
+Scene: ${scene}
+
+Rules:
+- Start with subject count (1girl / 1boy / 2girls / 1girl 1boy / etc.), add "solo" if only one person.
+- Then: appearance (hair length+color, eye color, body), clothing OR state of undress, pose, facial expression, setting/background, lighting.
+- End with quality tags (masterpiece, best quality, highly detailed).
+- Comma-separated, lowercase, ENGLISH ONLY, tags NOT sentences, no Russian, no explanations.
+${who} ${nsfw}
+Output ONLY the comma-separated tags.`;
+    try {
+        const raw = await socialGen(prompt, { maxTokens: 400 });
+        const tags = String(raw || '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/^[^:]*tags?:\s*/i, '')
+            .replace(/[\n\r]+/g, ', ')
+            .replace(/["'`]/g, '')
+            .replace(/\s*,\s*/g, ', ')
+            .replace(/(,\s*)+/g, ', ')
+            .trim().replace(/^,|,$/g, '').trim();
+        return tags;
+    } catch (e) {
+        console.warn('[GlassPhone] sceneToBooruTags failed:', e);
+        return '';
+    }
 }
 
 // Последовательная очередь (мы временно мутируем чужие настройки —
@@ -1344,13 +1384,26 @@ async function _generatePostImage(post, onStatus = null) {
 
     const st = getSettings();
     const isUserPost = post.ak === 'user';
+    const isContactPost = typeof post.ak === 'string' && post.ak.startsWith('contact:');
     const charName = mainCharName();
     const charKey = keyOf(charName);
     const isCharPost = !isUserPost && charKey && keyOf(post.author) === charKey;
     const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
     const wantChar = isCharPost || mentionsChar;
+    // Анонимный рандом-аккаунт = НЕ юзер, НЕ контакт (НПС), НЕ главный персонаж.
+    // Только для него ставим запрет на персону/главперсонажей.
+    const anonymous = !isUserPost && !isContactPost && !isCharPost;
 
-    const prompt = buildImagePrompt(post, { depictUser: isUserPost, depictChar: wantChar });
+    let prompt;
+    if (st.imgTagMode) {
+        // Booru-режим: стиль/кадр из настроек (может быть тег-строкой) + сцена в теги
+        if (onStatus) onStatus('Составляю теги...');
+        const tags = await sceneToBooruTags(post, { anonymous });
+        const framing = (post.kind === 'of' ? (st.imgPromptOf || '') : (st.imgPromptIg || '')).trim();
+        prompt = [framing, tags].filter(Boolean).join(', ') || buildImagePrompt(post, { anonymous, allowChar: wantChar });
+    } else {
+        prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
+    }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
     const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];

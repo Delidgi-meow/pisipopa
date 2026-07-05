@@ -21,7 +21,8 @@
 
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
-import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink } from './state.js';
+import { extensionNames } from '../../../extensions.js';
+import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName } from './state.js';
 
 const MAX_TWEETS = 50;
 const MAX_IG_POSTS = 30;
@@ -113,6 +114,12 @@ export function timeAgo(ts) {
     return `${Math.floor(hrs / 24)}д`;
 }
 
+// Имя главного персонажа чата (name2) — он ВСЕГДА известное лицо для соцсетей,
+// даже без явного tel:contact тега (иначе бот не мог комментить/иметь аватар/реф).
+export function mainCharName() {
+    try { return SillyTavern.getContext()?.name2 || ''; } catch (e) { return ''; }
+}
+
 // authorKey: 'user' | 'contact:<key>' | 'random'
 export function resolveAuthorKey(name) {
     const k = keyOf(name);
@@ -120,6 +127,9 @@ export function resolveAuthorKey(name) {
     try {
         const { contacts } = scanChat();
         if (contacts.has(k)) return `contact:${k}`;
+        // Главный персонаж чата = контакт по умолчанию
+        const mc = mainCharName();
+        if (mc && keyOf(mc) === k) return `contact:${k}`;
     } catch (e) { /* ignore */ }
     return 'random';
 }
@@ -400,7 +410,11 @@ ${wantDesc
         ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph","comments":[{"author":"ник","text":"...","type":"random","tip":0},...]}`
         : `Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`}`;
 
-    const rawOf = await socialGen(prompt, { maxTokens: wantDesc ? 2048 : 1536, image: willAttach ? post.image : null });
+    const rawOf = await socialGen(prompt, {
+        maxTokens: wantDesc ? 2048 : 1536,
+        image: willAttach ? post.image : null,
+        prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
+    });
     let parsed;
     if (wantDesc) {
         const obj = parseJsonObject(rawOf);
@@ -538,42 +552,143 @@ async function currentApiVision(prompt, image, maxTokens = 1024) {
     }
 }
 
-async function socialGen(prompt, { maxTokens = 1024, image = null } = {}) {
+// ── Корневая причина ошибки: ConnectionManagerRequestService заворачивает всё
+// в Error('API request failed', {cause}) — разворачиваем цепочку до сути.
+export function rootErrorMessage(e) {
+    let cur = e, msg = '', depth = 0;
+    while (cur && depth < 6) {
+        msg = String(cur?.message || cur) || msg;
+        cur = cur?.cause;
+        depth++;
+    }
+    return msg;
+}
+
+// ── Префилл (опция): начало ответа пишется «за модель» через инструкцию —
+// не зависит от API/пресета/модели. JSON стартует сразу, без преамбул и отказов.
+const PREAMBLES = [
+    'Sure.', 'Sure,', 'Okay.', 'Okay,', 'Understood.', 'Understood,',
+    'Here is the result:', "Here's the result:", 'Here is the output:',
+    "Here's the output:", 'The result is:', 'Конечно.', 'Хорошо.', 'Вот результат:',
+];
+
+function removeCommonPreamble(text) {
+    let out = String(text || '').trimStart();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const phrase of PREAMBLES) {
+            if (out.toLowerCase().startsWith(phrase.toLowerCase())) {
+                out = out.slice(phrase.length).trimStart();
+                changed = true;
+            }
+        }
+    }
+    return out;
+}
+
+function removeRepeatedPrefill(text, prefill) {
+    const normalizedText = String(text || '').trimStart();
+    const normalizedPrefill = String(prefill || '').trim();
+    if (!normalizedPrefill) return text;
+    if (normalizedText.startsWith(normalizedPrefill)) {
+        return normalizedText.slice(normalizedPrefill.length).trimStart();
+    }
+    return text;
+}
+
+function prefillSuffix(prefill) {
+    return `
+
+You must continue the text after the prefix below.
+Do not repeat the prefix.
+Do not explain.
+Do not add markdown unless the task requires it.
+Return only the continuation.
+
+Prefix:
+${prefill}`;
+}
+
+// prefill: строка-начало ответа (учитывается только при включённой опции).
+// Возвращается ВСЕГДА prefill+продолжение — JSON-парсеры получают полный текст.
+async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' } = {}) {
     const st = getSettings();
     const profileId = st.socialProfileId;
+    // Пол длины ответа (если модель рвёт JSON из-за лимита — юзер поднимает)
+    const floor = parseInt(st.socialMaxTokens) || 0;
+    if (floor > 0) maxTokens = Math.max(maxTokens, floor);
+    const usePrefill = !!(st.usePrefill && prefill);
+    const finalPrompt = usePrefill ? String(prompt).trim() + prefillSuffix(prefill) : prompt;
+
+    const finish = (raw) => {
+        let out = cleanGenOutput(raw);
+        if (!usePrefill) return out;
+        out = removeCommonPreamble(out);
+        out = removeRepeatedPrefill(out, prefill);
+        return prefill + out;
+    };
 
     // Путь 1: отдельный профиль подключения (изоляция + вижн)
     if (profileId) {
         const ctx = SillyTavern.getContext();
         const svc = ctx?.ConnectionManagerRequestService;
         if (svc && typeof svc.sendRequest === 'function') {
-            let content = prompt;
+            let content = finalPrompt;
             if (image) {
                 const dataUrl = await toDataUrl(image);
                 if (dataUrl) {
-                    content = [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
+                    content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
                     console.log(`[GlassPhone] vision: фото приложено к запросу (~${Math.round(dataUrl.length / 1366)}KB)`);
                 } else {
                     console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
                 }
             }
-            const res = await svc.sendRequest(profileId, [{ role: 'user', content }], maxTokens, {
-                stream: false, extractData: true, includePreset: false, includeInstruct: false,
-            });
-            return cleanGenOutput(res?.content ?? '');
+            try {
+                const res = await svc.sendRequest(profileId, [{ role: 'user', content }], maxTokens, {
+                    stream: false, extractData: true,
+                    includePreset: false, includeInstruct: false,
+                });
+                return finish(res?.content ?? '');
+            } catch (e) {
+                // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
+                const root = rootErrorMessage(e);
+                console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
+                throw new Error(`Профиль: ${root}`, { cause: e });
+            }
         }
         console.warn('[GlassPhone] ConnectionManagerRequestService недоступен — fallback на generateRaw');
     }
 
     // Путь 2: есть картинка, профиля нет → прямой мультимодальный запрос текущим API
     if (image) {
-        const vis = await currentApiVision(prompt, image, maxTokens);
-        if (vis !== null) return vis;
+        const vis = await currentApiVision(finalPrompt, image, maxTokens);
+        if (vis !== null) return usePrefill ? prefill + removeRepeatedPrefill(removeCommonPreamble(vis), prefill) : vis;
         console.warn('[GlassPhone] vision: прямой канал не сработал — запрос уйдёт БЕЗ фото');
     }
     // Путь 3: текущий API, «сырая» генерация — без пресета и истории чата.
-    const res = await generateRaw({ prompt, responseLength: maxTokens });
-    return cleanGenOutput(res);
+    const res = await generateRaw({ prompt: finalPrompt, responseLength: maxTokens });
+    return finish(res);
+}
+
+// ── Проверка профиля из настроек: маленький запрос, наружу — реальная причина ──
+export async function testSocialProfile() {
+    const st = getSettings();
+    if (!st.socialProfileId) throw new Error('Профиль не выбран (стоит «Текущий API»)');
+    const ctx = SillyTavern.getContext();
+    const svc = ctx?.ConnectionManagerRequestService;
+    if (!svc || typeof svc.sendRequest !== 'function') throw new Error('ConnectionManagerRequestService недоступен (старый ST?)');
+    try {
+        const res = await svc.sendRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200, {
+            stream: false, extractData: true,
+            includePreset: false, includeInstruct: false,
+        });
+        const out = String(res?.content ?? '').trim();
+        if (!out) throw new Error('Пустой ответ (модель ответила, но контент не извлёкся)');
+        return out.slice(0, 80);
+    } catch (e) {
+        throw new Error(rootErrorMessage(e), { cause: e });
+    }
 }
 
 // ── Автоописание фото поста (вижн): заполняет imgDesc, если юзер его не написала.
@@ -648,7 +763,7 @@ Output STRICT JSON object ONLY — no markdown, no backticks, no <think>, no HTM
 Reply rules: 1-5 short messages in the character's own texting voice, in-character reaction to the photo and her text, same language as the excerpt. ${isGroup ? 'Several members may reply in a row — "from" = member name.' : `Every reply has "from":"${contactName}".`} If the character realistically would NOT reply right now, use an empty "replies" array.`;
 
     try {
-        const raw = await socialGen(prompt, { maxTokens: 1500, image });
+        const raw = await socialGen(prompt, { maxTokens: 1500, image, prefill: '{"photo_description":"' });
         const obj = parseJsonObject(raw);
         if (!obj) return null;
         const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
@@ -703,12 +818,19 @@ function parseJsonArray(raw) {
 
 function contactsBlock() {
     let lines = [];
+    const seen = new Set();
     try {
         const { contacts } = scanChat();
         for (const c of contacts.values()) {
             lines.push(`- ${c.name} (${handleFor(`contact:${keyOf(c.name)}`, c.name)})`);
+            seen.add(keyOf(c.name));
         }
     } catch (e) { /* ignore */ }
+    // Главный персонаж чата — всегда среди известных лиц
+    const mc = mainCharName();
+    if (mc && !seen.has(keyOf(mc))) {
+        lines.push(`- ${mc} (${handleFor(`contact:${keyOf(mc)}`, mc)})`);
+    }
     const userLine = `${getUserName()}'s own handle: ${getUserHandle()}`;
     return (lines.length ? `Known characters (contacts in ${getUserName()}'s phone), use EXACTLY these handles for them:\n${lines.join('\n')}` : '(no known contacts yet)') + `\n${userLine}`;
 }
@@ -803,7 +925,7 @@ ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]  
 For quote-retweets: {"author":"...","handle":"...","text":"their commentary","type":"contact|random","quote":{"author":"${getUserName()}","text":"original tweet text"}}`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     let added = 0;
@@ -844,7 +966,7 @@ Generate 4-7 replies: known characters in-character when relevant + random accou
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed)) return 0;
     let added = 0;
     if (!Array.isArray(tweet.replies)) tweet.replies = [];
@@ -923,7 +1045,7 @@ Each post: "photo" = short visual description of the photo (what's in the frame,
 ${JSON_RULES}
 Format: [{"author":"Имя","photo":"описание кадра","caption":"...","type":"contact|random"},...]`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     const s = getSocial();
@@ -968,7 +1090,11 @@ Generate 4-7 comments: known characters in-character (reacting to the photo/capt
 ${JSON_RULES}
 ${formatLine}`;
 
-    const raw = await socialGen(prompt, { maxTokens: wantDesc ? 2048 : 1536, image: willAttach ? post.image : null });
+    const raw = await socialGen(prompt, {
+        maxTokens: wantDesc ? 2048 : 1536,
+        image: willAttach ? post.image : null,
+        prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
+    });
     let parsed;
     if (wantDesc) {
         const obj = parseJsonObject(raw);
@@ -1074,42 +1200,116 @@ export function avatarForAuthor(ak) {
     return '';
 }
 
-// ═══ Novarakk (Nyaa-Rakk-Imagen / IIG) — генерация картинок для инста-постов ═══
-// Опциональная интеграция: если расширение установлено, на постах без реальной
-// картинки появляется кнопка генерации. Используем его пайплайн напрямую:
-// generateImageWithRetry → dataURL, saveImageToFile → файл в ST (метаданные не пухнут).
-let _novarakk = undefined; // undefined = не проверяли, null = недоступен
+// ═══ Генерация картинок — через novarakk-ПОДОБНОЕ расширение ═══
+// АВТООПРЕДЕЛЕНИЕ: перебираем установленные third-party расширения (ST
+// extensionNames) и ищем то, у кого есть src/pipeline.js с generateImageWithRetry
+// — это структура форков Nyaa-Rakk-Imagen (novarakk / IIG / SLAYimages / …).
+// Настройка imageGenExtension пустая = авто; непустая = ручной оверрайд папки.
+// Настройки расширения мутируем ЗАЩИТНО (только существующие ключи — форки
+// «дёргают рефы по-разному» и могут не иметь sendCharAvatar/overrideAspectRatio).
+let _imgExt = { key: null, mod: undefined };
 
-async function loadNovarakk() {
-    if (_novarakk !== undefined) return _novarakk;
+// Проверить папку: есть ли там src/pipeline.js с generateImageWithRetry.
+// allowIndexFallback — пробовать index.js (только для ручного оверрайда; в авто
+// режиме НЕ импортим index.js каждого расширения ради побочек).
+async function probeImageExt(folder, allowIndexFallback) {
+    const base = `/scripts/extensions/third-party/${folder}`;
     try {
-        const pipeline = await import('/scripts/extensions/third-party/novarakk/src/pipeline.js');
-        const utils = await import('/scripts/extensions/third-party/novarakk/src/utils.js');
-        _novarakk = (typeof pipeline.generateImageWithRetry === 'function') ? { pipeline, utils } : null;
-    } catch (e) {
-        console.log('[GlassPhone] novarakk не найден — генерация картинок недоступна');
-        _novarakk = null;
+        const pipeline = await import(`${base}/src/pipeline.js`);
+        if (typeof pipeline.generateImageWithRetry === 'function') {
+            let utils = null, settings = null;
+            try { utils = await import(`${base}/src/utils.js`); } catch (e) { /* нет */ }
+            try { settings = await import(`${base}/src/settings.js`); } catch (e) { /* нет */ }
+            return { pipeline, utils, settings, folder };
+        }
+    } catch (e) { /* нет src/pipeline.js */ }
+    if (allowIndexFallback) {
+        try {
+            const idx = await import(`${base}/index.js`);
+            if (typeof idx.generateImageWithRetry === 'function') {
+                return { pipeline: idx, utils: idx, settings: idx, folder };
+            }
+        } catch (e) { /* нет */ }
     }
-    return _novarakk;
+    return null;
 }
+
+async function loadImageExt() {
+    const override = String(getSettings().imageGenExtension || '').replace(/[^a-zA-Z0-9_\-]/g, '');
+    const key = override || '(auto)';
+    if (_imgExt.key === key && _imgExt.mod !== undefined) return _imgExt.mod;
+
+    let mod = null;
+    if (override) {
+        mod = await probeImageExt(override, true);
+    } else {
+        // Кандидаты: все установленные third-party расширения; известные имена вперёд
+        const preferred = ['novarakk', 'nyaa-rakk-imagen', 'slayimages', 'megarakk', 'iig'];
+        let candidates = [];
+        try {
+            for (const n of (extensionNames || [])) {
+                if (typeof n === 'string' && n.startsWith('third-party/')) {
+                    const f = n.slice('third-party/'.length);
+                    if (f && f !== 'GlassPhone') candidates.push(f);
+                }
+            }
+        } catch (e) { /* ignore */ }
+        if (!candidates.some(c => c.toLowerCase() === 'novarakk')) candidates.push('novarakk');
+        candidates.sort((a, b) => {
+            const ia = preferred.indexOf(a.toLowerCase()); const ib = preferred.indexOf(b.toLowerCase());
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+        for (const f of candidates) {
+            mod = await probeImageExt(f, false); // авто — только src/pipeline.js
+            if (mod) break;
+        }
+    }
+    if (mod) console.log(`[GlassPhone] картинко-расширение: ${mod.folder}${override ? '' : ' (авто)'}`);
+    else console.log('[GlassPhone] картинко-расширение не найдено (нет novarakk-подобного с src/pipeline.js)');
+    _imgExt = { key, mod };
+    return mod;
+}
+
+// Сбросить кэш автоопределения (напр. после установки расширения / смены оверрайда)
+export function resetImageExtCache() { _imgExt = { key: null, mod: undefined }; }
 
 export async function isImageGenAvailable() {
-    return !!(await loadNovarakk());
+    return !!(await loadImageExt());
 }
 
-// Последовательная очередь генераций (мы временно мутируем настройки novarakk —
-// параллельные генерации могли бы увидеть чужие флаги)
+// Список моделей активного провайдера картинко-расширения (для кнопки ↻)
+export async function fetchImageModels() {
+    const mod = await loadImageExt();
+    if (!mod) throw new Error('картинко-расширение не найдено');
+    const base = `/scripts/extensions/third-party/${mod.folder}`;
+    const provMod = await import(`${base}/src/providers.js`);
+    const setMod = (typeof mod.settings?.getSettings === 'function') ? mod.settings : await import(`${base}/src/settings.js`);
+    const provider = provMod.resolveActiveProvider(setMod.getSettings());
+    if (!provider) throw new Error('провайдер расширения не настроен');
+    const models = await provider.fetchModels();
+    if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
+    return models;
+}
+
+// Текст промпта для картинки из данных поста.
+// ВАЖНО: НЕ навязываем стиль рендера («realistic», «phone camera») — иначе он
+// перебивает активный стиль расширения (юзер поставила «Craig Mullins painterly»,
+// а мой хардкод «realistic» давал фотореализм). Описываем только СЦЕНУ/кадр.
+function buildImagePrompt(post) {
+    const parts = [];
+    if (post.imgDesc) parts.push(post.imgDesc);
+    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
+    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
+    const framing = post.kind === 'of'
+        ? 'intimate boudoir shot, self-taken framing'
+        : 'social media post, self-taken candid framing';
+    return `${framing}. ${parts.join('. ')}`;
+}
+
+// Последовательная очередь (мы временно мутируем чужие настройки —
+// параллельные генерации увидели бы чужие флаги)
 let _imgGenChain = Promise.resolve();
 
-// Сгенерировать картинку для инста-поста (из описания кадра + подписи).
-// ВАЖНО ПРО РЕФЕРЕНСЫ: novarakk по своим настройкам подмешивает аватары
-// персонажа/персоны КАК РЕФЕРЕНСЫ в каждую генерацию → лица юзерки и бота
-// появлялись на постах рандомных аккаунтов. Поэтому на время генерации:
-//  • пост юзера → оставляем только реф аватара персоны (если он включён в novarakk)
-//  • пост главного персонажа чата → только реф аватара персонажа
-//  • любой другой автор → БЕЗ автоматических рефов вообще
-// (лорбук-рефы novarakk по триггер-словам в описании кадра продолжают работать —
-// это желаемое поведение: упомянула НПС → подтянется его реф.)
 export function generatePostImage(post, onStatus = null) {
     const run = () => _generatePostImage(post, onStatus);
     const p = _imgGenChain.then(run, run);
@@ -1117,72 +1317,69 @@ export function generatePostImage(post, onStatus = null) {
     return p;
 }
 
+// РЕФЕРЕНСЫ: расширение подмешивает аватары персонажа/персоны в КАЖДУЮ генерацию →
+// лица бота/юзерки лезли на посты рандомов. Логика:
+//  • пост юзера → реф персоны
+//  • пост главного персонажа ИЛИ пост, где в кадре/подписи упомянут главный
+//    персонаж по имени → реф его аватара (Cyrillic-safe textMentionsName — \b
+//    не ловил кириллицу, поэтому «Вадим Огнев» не находился и реф не слался)
+//  • прочее → без авто-рефов (лорбук-рефы по ключевым словам работают)
+// АСПЕКТ: novarakk по overrideAspectRatio/overrideImageSize ИГНОРИРУЕТ наш аспект
+// (у юзера стоял 16:9). Снимаем оверрайды на время генерации → побеждает наш 1:1.
 async function _generatePostImage(post, onStatus = null) {
-    const nv = await loadNovarakk();
-    if (!nv) throw new Error('Расширение novarakk не установлено');
+    const mod = await loadImageExt();
+    if (!mod) throw new Error('Картинко-расширение не найдено (нужно novarakk-подобное — с src/pipeline.js). Установи его или укажи имя папки в настройках.');
 
-    // Настройки novarakk для временного глушения авто-рефов
-    let nvSettings = null;
-    try {
-        const mod = await import('/scripts/extensions/third-party/novarakk/src/settings.js');
-        if (typeof mod.getSettings === 'function') nvSettings = mod.getSettings();
-    } catch (e) { /* без настроек — генерим как есть */ }
-
-    const ctx = (typeof SillyTavern?.getContext === 'function') ? SillyTavern.getContext() : {};
-    const isUserPost = post.ak === 'user';
-    const isCharPost = !isUserPost && keyOf(post.author) && keyOf(post.author) === keyOf(ctx?.name2 || '');
+    const nvSettings = (typeof mod.settings?.getSettings === 'function') ? mod.settings.getSettings() : null;
 
     const st = getSettings();
-    const parts = [];
-    if (post.imgDesc) parts.push(post.imgDesc);
-    if (post.caption) parts.push(`vibe of the caption: "${post.caption}"`);
-    if (parts.length === 0) parts.push(`casual instagram photo posted by ${post.author}`);
-    // Для «чужих» постов явно говорим модели, что это посторонний аккаунт
-    if (!isUserPost && !isCharPost) {
-        parts.push('random social media account content — do NOT depict the main story characters');
-    }
-    // OnlyFans-пост — другая эстетика кадра
-    const flavor = post.kind === 'of'
-        ? 'OnlyFans content photo, boudoir aesthetic, alluring, amateur phone camera, realistic'
-        : 'Instagram photo, phone camera aesthetic, realistic';
-    const prompt = `${flavor}. ${parts.join('. ')}`;
+    const isUserPost = post.ak === 'user';
+    const charName = mainCharName();
+    const charKey = keyOf(charName);
+    const isCharPost = !isUserPost && charKey && keyOf(post.author) === charKey;
+    const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
+    const wantChar = isCharPost || mentionsChar;
 
-    const saved = nvSettings ? {
-        sendCharAvatar: nvSettings.sendCharAvatar,
-        sendUserAvatar: nvSettings.sendUserAvatar,
-        imageContextEnabled: nvSettings.imageContextEnabled,
-        model: nvSettings.model,
-    } : null;
+    const prompt = buildImagePrompt(post);
+
+    // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
+    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
+    const saved = {};
     if (nvSettings) {
-        nvSettings.sendCharAvatar = !!(isCharPost && saved.sendCharAvatar);
-        nvSettings.sendUserAvatar = !!(isUserPost && saved.sendUserAvatar);
-        nvSettings.imageContextEnabled = false; // контекст последних сообщений тут ни к чему
-        // Отдельная модель для телефона (чтобы не трогать модель, настроенную под RP-иллюстрации)
-        if (st.imageGenModel) nvSettings.model = st.imageGenModel;
+        for (const k of keys) if (k in nvSettings) saved[k] = nvSettings[k];
+        if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!(wantChar && saved.sendCharAvatar);
+        if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!(isUserPost && saved.sendUserAvatar);
+        if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
+        if (st.imageGenSquare !== false) {
+            if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
+            if ('overrideImageSize' in nvSettings) nvSettings.overrideImageSize = false;
+        }
+        if (st.imageGenModel && 'model' in nvSettings) nvSettings.model = st.imageGenModel;
     }
 
-    // Аспект: квадрат для инсты/OF (если включено в настройках)
     const genOptions = {};
     if (st.imageGenSquare !== false) genOptions.aspectRatio = '1:1';
 
     try {
-        // style = null → возьмётся дефолтный стиль из настроек novarakk
-        const dataUrl = await nv.pipeline.generateImageWithRetry(prompt, null, onStatus, genOptions);
+        // style = null → расширение подставит СВОЙ активный стиль (resolveEffectiveStyle)
+        const dataUrl = await mod.pipeline.generateImageWithRetry(prompt, null, onStatus, genOptions);
         if (!dataUrl || typeof dataUrl !== 'string') throw new Error('Пустой результат генерации');
-
-        // Сохраняем в файлы ST — в метаданных остаётся короткий URL, не base64
         let src = dataUrl;
-        try {
-            src = await nv.utils.saveImageToFile(dataUrl, { mode: 'glassphone-ig' });
-        } catch (e) {
-            console.warn('[GlassPhone] saveImageToFile failed, keeping dataURL:', e);
+        if (typeof mod.utils?.saveImageToFile === 'function') {
+            try { src = await mod.utils.saveImageToFile(dataUrl, { mode: 'glassphone-ig' }); }
+            catch (e) { console.warn('[GlassPhone] saveImageToFile failed, keeping dataURL:', e); }
+        } else if (dataUrl.startsWith('data:')) {
+            // Расширение без saveImageToFile → сохраняем средствами ST
+            try {
+                const b64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
+                src = await saveBase64AsFile(b64, 'glassphone', `iggen_${Date.now()}`, 'jpeg');
+            } catch (e) { /* оставляем dataURL */ }
         }
         post.image = src;
         saveMeta();
         return src;
     } finally {
-        // Возвращаем настройки novarakk как были
-        if (nvSettings && saved) Object.assign(nvSettings, saved);
+        if (nvSettings) for (const k of keys) if (k in saved) nvSettings[k] = saved[k];
     }
 }
 
@@ -1218,7 +1415,7 @@ export async function logSocialToChat(text, image = null) {
             is_user: true,
             is_system: false,
             send_date: new Date().toLocaleString('en-US'),
-            mes: `<!--tel:log-->\n[Соцсети] ${String(text).slice(0, 500)}`,
+            mes: `<!--tel:log-->\n[Соцсети] ${String(text).slice(0, 1500)}`,
             extra: imgSrc ? { image: imgSrc, inline_image: true } : {},
         });
         if (typeof ctx.saveChat === 'function') await ctx.saveChat();

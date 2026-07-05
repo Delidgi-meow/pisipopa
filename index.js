@@ -5,9 +5,10 @@
 // ═══════════════════════════════════════════
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
+import { saveBase64AsFile } from '../../../utils.js';
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
 
 // ── CSS ──
@@ -37,7 +38,9 @@ function setupSettingsPanel() {
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Профиль для соцсетей:</span>
             <select id="gp-set-profile" class="text_pole" style="flex:1"></select>
+            <div class="menu_button" id="gp-profile-test" title="Проверить профиль (маленький запрос)" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-plug-circle-check"></i></div>
         </div>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Контекст соцсетей:</span>
             <select id="gp-set-ctxmode" class="text_pole" style="flex:1">
@@ -45,7 +48,11 @@ function setupSettingsPanel() {
                 <option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option>
             </select>
         </div>
-        <small style="opacity:0.4;font-size:9px;display:block">Генерация лент/комментов всегда идёт БЕЗ RP-пресета. Вижн работает в обоих режимах; отдельный профиль полезен, чтобы поставить дешёвую не-reasoning модель.</small>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Макс. длина ответа:</span>
+            <input type="number" id="gp-set-maxtokens" class="text_pole" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}" style="width:70px;flex:0 0 auto">
+            <span style="font-size:8px;opacity:0.4">0 = авто</span>
+        </div>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Глубина инжекта:</span>
             <input type="number" id="gp-set-depth" class="text_pole" min="0" max="99" step="1" value="${s.injectDepth || 0}" style="width:55px;flex:0 0 auto">
@@ -57,12 +64,11 @@ function setupSettingsPanel() {
         </div>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Модель картинок:</span>
-            <input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" value="${s.imageGenModel || ''}" placeholder="пусто = из novarakk" style="flex:1">
+            <input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" value="${s.imageGenModel || ''}" placeholder="авто" style="flex:1">
             <datalist id="gp-imgmodels"></datalist>
-            <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей из novarakk" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
+            <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
         </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-visioncomments" ${s.visionInComments ? 'checked' : ''}><span>Прикладывать фото к комментам (дороже; иначе — по описанию)</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат (память для саммарайза)</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте (экономия токенов)</span></label>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
@@ -74,14 +80,19 @@ function setupSettingsPanel() {
                 <option value="mono" ${s.skin === 'mono' ? 'selected' : ''}>Монохром</option>
             </select>
         </div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Обои:</span>
+            <div class="menu_button" id="gp-wall-pick" style="flex:1;padding:4px 8px">${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</div>
+            <div class="menu_button" id="gp-wall-clear" title="Убрать обои" style="flex:0 0 auto;padding:4px 8px;${s.wallpaper ? '' : 'display:none'}"><i class="fa-solid fa-xmark"></i></div>
+            <input type="file" id="gp-wall-file" accept="image/*" style="display:none">
+        </div>
         <div class="menu_button" id="gp-css-toggle" style="font-size:10px;text-align:center;margin-top:4px">CSS телефона ▼</div>
         <div id="gp-css-panel" style="display:none;flex-direction:column;gap:4px">
             <textarea id="gp-set-css" class="text_pole" rows="8" style="font-family:monospace;font-size:10px;resize:vertical" placeholder="/* Свой CSS: #gp-phone, .gp-bubble, .gp-tw-card, .gp-ig-card, ... */">${s.customCss || ''}</textarea>
             <button id="gp-css-apply" class="menu_button">Применить</button>
         </div>
         <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
-        <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Смс живут прямо в сообщениях чата — телефон синхронизирован с ролевой всегда. Консоль: glassPhoneOpen()</small>
-        <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:2px;font-weight:700"></small>
+        <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:4px;font-weight:700"></small>
     </div>
 </div>`;
     $('#extensions_settings2').append(html);
@@ -117,21 +128,21 @@ function setupSettingsPanel() {
         setUserHandle(this.value);
         updatePhoneInjection();
     });
+    $('#gp-set-maxtokens').on('change', function () {
+        getSettings().socialMaxTokens = Math.max(0, Math.min(32000, parseInt(this.value) || 0));
+        saveSettingsDebounced();
+    });
     $('#gp-set-imgmodel').on('change', function () {
         getSettings().imageGenModel = this.value.trim();
         saveSettingsDebounced();
     });
-    // Список доступных моделей — из активного провайдера novarakk
+    // Список моделей — из автоопределённого картинко-расширения
     $('#gp-imgmodel-refresh').on('click', async function () {
         const btn = $(this);
         btn.find('i').addClass('fa-spin');
         try {
-            const provMod = await import('/scripts/extensions/third-party/novarakk/src/providers.js');
-            const setMod = await import('/scripts/extensions/third-party/novarakk/src/settings.js');
-            const provider = provMod.resolveActiveProvider(setMod.getSettings());
-            if (!provider) throw new Error('провайдер novarakk не настроен');
-            const models = await provider.fetchModels();
-            if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
+            const mod = await import('./social.js');
+            const models = await mod.fetchImageModels();
             $('#gp-imgmodels').html(models.map(m => `<option value="${$('<i>').text(m).html()}">`).join(''));
             toast(`Моделей: ${models.length} — открой поле, появится список`, 'fa-check');
         } catch (e) {
@@ -143,10 +154,6 @@ function setupSettingsPanel() {
     });
     $('#gp-set-square').on('change', function () {
         getSettings().imageGenSquare = this.checked;
-        saveSettingsDebounced();
-    });
-    $('#gp-set-visioncomments').on('change', function () {
-        getSettings().visionInComments = this.checked;
         saveSettingsDebounced();
     });
     $('#gp-set-sociallog').on('change', function () {
@@ -179,7 +186,14 @@ function setupSettingsPanel() {
         getSettings().fabPos = null;
         saveSettingsDebounced();
         const fab = document.getElementById('gp-fab');
-        if (fab) { fab.style.right = ''; fab.style.bottom = ''; }
+        if (fab) {
+            const vw = window.innerWidth, vh = window.innerHeight;
+            fab.style.left = `${vw - 48 - 16}px`;
+            fab.style.top = `${Math.round(vh * 0.55)}px`;
+            fab.style.right = 'auto';
+            fab.style.bottom = 'auto';
+        }
+        toast('Кнопка возвращена на место', 'fa-mobile-screen-button');
     });
 
     // Профиль подключения для соцсетей (из Connection Manager)
@@ -205,6 +219,62 @@ function setupSettingsPanel() {
     $('#gp-set-ctxmode').on('change', function () {
         getSettings().socialContextMode = this.value;
         saveSettingsDebounced();
+    });
+    $('#gp-set-prefill').on('change', function () {
+        getSettings().usePrefill = this.checked;
+        saveSettingsDebounced();
+    });
+    // Проверка профиля подключения — показывает РЕАЛЬНУЮ ошибку (а не «API request failed»)
+    $('#gp-profile-test').on('click', async function () {
+        const btn = $(this);
+        btn.find('i').removeClass('fa-plug-circle-check').addClass('fa-spinner fa-spin');
+        try {
+            const mod = await import('./social.js');
+            const out = await mod.testSocialProfile();
+            toast(`Профиль ОК: «${out}»`, 'fa-check');
+        } catch (e) {
+            const msg = String(e?.message || e).slice(0, 140);
+            console.error('[GlassPhone] проверка профиля:', e);
+            toast(`Профиль не отвечает: ${msg}`, 'fa-circle-exclamation');
+        } finally {
+            btn.find('i').removeClass('fa-spinner fa-spin').addClass('fa-plug-circle-check');
+        }
+    });
+
+    // ── Обои телефона ──
+    $('#gp-wall-pick').on('click', () => $('#gp-wall-file').trigger('click'));
+    $('#gp-wall-file').on('change', async function () {
+        const f = this.files?.[0];
+        if (!f) return;
+        try {
+            const mod = await import('./social.js');
+            // Обои могут быть большими — сжимаем до 1080px (телефон вертикальный)
+            const dataUrl = await mod.compressImage(f, 1080, 0.85);
+            let src = dataUrl;
+            try {
+                const base64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
+                src = await saveBase64AsFile(base64, 'glassphone', `wallpaper_${Date.now()}`, 'jpeg');
+            } catch (e) { /* dataURL фолбэк */ }
+            getSettings().wallpaper = src;
+            saveSettingsDebounced();
+            applyWallpaper();
+            $('#gp-wall-pick').text('Сменить фото');
+            $('#gp-wall-clear').css('display', 'inline-flex');
+            toast('Обои установлены', 'fa-image');
+        } catch (e) {
+            console.warn('[GlassPhone] wallpaper failed:', e);
+            toast('Не удалось загрузить обои', 'fa-circle-exclamation');
+        } finally {
+            this.value = '';
+        }
+    });
+    $('#gp-wall-clear').on('click', function () {
+        getSettings().wallpaper = '';
+        saveSettingsDebounced();
+        applyWallpaper();
+        $('#gp-wall-pick').text('Загрузить фото');
+        $(this).css('display', 'none');
+        toast('Обои убраны', 'fa-check');
     });
 }
 

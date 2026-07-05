@@ -26,7 +26,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.7.0';
+export const GP_VERSION = '1.8.3';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -42,14 +42,26 @@ const defaultSettings = () => ({
     // Профиль подключения для генерации соцсетей ('' = текущий API через generateRaw,
     // изолированно от пресета). Отдельный профиль дополнительно включает вижн.
     socialProfileId: '',
+    // Префилл ответа: начало ответа пишется за модель (JSON стартует сразу,
+    // без болтовни/отказов). Эмуляция через инструкцию — работает с любым API.
+    usePrefill: false,
     // Контекст для генерации соцсетей:
     // 'rich' — карточка бота + персона + триггернутый лорбук + история чата (дефолт)
     // 'lite' — только короткий срез чата (максимальная изоляция)
     socialContextMode: 'rich',
-    // Генерация картинок (novarakk): модель-оверрайд ('' = модель из настроек novarakk)
+    // Картинко-расширение: '' = АВТООПРЕДЕЛЕНИЕ (ищем среди установленных
+    // third-party расширений novarakk-подобное — src/pipeline.js с
+    // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
+    imageGenExtension: '',
+    // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
+    // Макс. длина ответа для генерации соцсетей (0 = авто по задаче). Если модель
+    // рвёт JSON из-за лимита токенов — поднять (действует как ПОЛ: не ниже задачи).
+    socialMaxTokens: 0,
     // Квадрат 1:1 для инста-постов
     imageGenSquare: true,
+    // Обои телефона (URL файла; '' = стандартный стеклянный градиент)
+    wallpaper: '',
     // Скин телефона: indigo | rose | emerald | mono
     skin: 'indigo',
     // Кастомный CSS телефона
@@ -114,6 +126,65 @@ export function saveMeta() {
 // ── Ключ треда/контакта: нормализованное имя ──
 export function keyOf(name) {
     return String(name || '').trim().toLowerCase();
+}
+
+// ── Упоминается ли имя (или любое его слово ≥3 симв.) в тексте ──
+// КРИТИЧНО: обычный \b НЕ работает с кириллицей (JS \w = только ASCII) — из-за
+// этого имена вроде «Вадим Огнев» не находились. Здесь границы проверяем вручную
+// по классу буква/цифра (латиница+кириллица).
+export function textMentionsName(text, name) {
+    const t = String(text || '').toLowerCase();
+    if (!t || !name) return false;
+    const isWordChar = (c) => !!c && /[a-zа-яё0-9ё]/i.test(c);
+    const words = String(name).toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+    for (const w of words) {
+        let from = 0, i;
+        while ((i = t.indexOf(w, from)) !== -1) {
+            const before = t[i - 1];
+            const after = t[i + w.length];
+            if (!isWordChar(before) && !isWordChar(after)) return true;
+            from = i + 1;
+        }
+    }
+    return false;
+}
+
+// ── Картинка сообщения: extra.media (ST 1.18+) с фолбэком на extra.image ──
+// В ST 1.18 extra.image превращён в deprecated-геттер (console.trace при каждом
+// чтении) поверх массива extra.media. Читаем массив напрямую; старый плоский
+// image берём только если это обычное СВОЁ свойство (без геттера — без трейсов).
+export function extraImageOf(msg) {
+    const ex = msg?.extra;
+    if (!ex || typeof ex !== 'object') return '';
+    if (Array.isArray(ex.media)) {
+        const m = ex.media.find(x => x && x.type === 'image' && typeof x.url === 'string' && x.url);
+        if (m) return m.url;
+    }
+    const desc = Object.getOwnPropertyDescriptor(ex, 'image');
+    if (desc && 'value' in desc && typeof desc.value === 'string') return desc.value;
+    return '';
+}
+
+// Прикрепить картинку к сообщению. На свежем extra пишем старый плоский формат
+// (ST сам мигрирует в media при рендере — совместимо и со старыми версиями);
+// если ST уже поставил геттер-обёртку (сеттер молча ГЛОТАЕТ запись!) — пишем
+// прямо в массив extra.media.
+export function attachImageToMessage(msg, src) {
+    if (!msg || !src) return;
+    if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
+    const ex = msg.extra;
+    const desc = Object.getOwnPropertyDescriptor(ex, 'image');
+    const hasGetter = desc && (typeof desc.get === 'function' || typeof desc.set === 'function');
+    if (!hasGetter && !Array.isArray(ex.media)) {
+        ex.image = String(src);
+        ex.inline_image = true;
+        return;
+    }
+    if (!Array.isArray(ex.media)) ex.media = [];
+    if (!ex.media.some(m => m && m.url === src)) {
+        ex.media.push({ type: 'image', url: String(src) });
+    }
+    ex.inline_image = true;
 }
 
 // ── Вырезать CoT-блоки (<think> и подобные) ──
@@ -351,9 +422,12 @@ export function scanChat() {
                 // полное описание остаётся в mes (для модели и саммари)
                 const displayBody = body.replace(/\*фото:[^*]*\*\s*/i, '').replace(/\*фото\*\s*/i, '').trim();
                 const entry = { dir: 'out', text: displayBody, idx: i, time };
-                // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.image (ST-нативно)
+                // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.media (ST-нативно)
                 if (j.img) entry.img = j.img;
-                else if (msg.extra?.image) entry.img = msg.extra.image;
+                else {
+                    const ei = extraImageOf(msg);
+                    if (ei) entry.img = ei;
+                }
                 if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
                 if (groupName) {
                     if (body || entry.img) pushMsg(`group:${keyOf(groupName)}`, entry, groupName);

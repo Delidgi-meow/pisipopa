@@ -8,7 +8,7 @@ import { saveBase64AsFile } from '../../../utils.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
-    addGroup, delGroup,
+    addGroup, delGroup, attachImageToMessage,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
@@ -73,6 +73,11 @@ function brand(name) { return `<i class="fa-brands ${name}"></i>`; }
 
 // ═══ FAB ═══
 
+// FAB. Позиционирование через left/top (fabPos={left,top}) — как в Asta,
+// которая надёжно показывается на айфоне. Драг реализован раздельными
+// touch- и mouse-обработчиками (pointer events на мобильном ST капризничают).
+// Ключевой фикс невидимости на iOS: на тачскринах у кнопки СПЛОШНАЯ заливка
+// без backdrop-filter (blur-поверхность Safari часто рендерит прозрачной).
 function createFab() {
     if (document.getElementById('gp-fab')) return;
     const fab = document.createElement('div');
@@ -80,16 +85,30 @@ function createFab() {
     fab.innerHTML = `${ic('fa-mobile-screen-button')}<span id="gp-fab-badge" class="gp-hidden"></span>`;
     document.body.appendChild(fab);
 
-    // Позиция: сохранённая (после перетаскивания) ВСЕГДА зажимается в границы
-    // ТЕКУЩЕГО вьюпорта. Иначе позиция, сохранённая на широком мониторе
-    // (например right: 800px), на телефоне уносит кнопку за экран — «иконки нет».
+    // Позиция: сохранённая ВСЕГДА зажимается в текущий вьюпорт (позиция с широкого
+    // монитора не должна уносить кнопку за экран телефона). Дефолт — правый край.
+    const FAB_SZ = 48;
     const applyFabPos = () => {
         const st = getSettings();
-        if (!st.fabPos || typeof st.fabPos.right !== 'number') return; // CSS-дефолт
-        const maxR = Math.max(4, window.innerWidth - 44);
-        const maxB = Math.max(4, window.innerHeight - 44);
-        fab.style.right = `${Math.min(Math.max(4, st.fabPos.right), maxR)}px`;
-        fab.style.bottom = `${Math.min(Math.max(4, st.fabPos.bottom), maxB)}px`;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        let left, top;
+        const p = st.fabPos;
+        if (p && typeof p.left === 'number' && typeof p.top === 'number') {
+            left = p.left; top = p.top;
+        } else if (p && typeof p.right === 'number') {
+            // Миграция старого формата {right,bottom} → {left,top}
+            left = vw - FAB_SZ - p.right;
+            top = vh - FAB_SZ - (p.bottom ?? 190);
+        } else {
+            left = vw - FAB_SZ - 16;
+            top = Math.round(vh * 0.55);
+        }
+        left = Math.max(2, Math.min(left, vw - FAB_SZ - 2));
+        top = Math.max(2, Math.min(top, vh - FAB_SZ - 2));
+        fab.style.left = `${left}px`;
+        fab.style.top = `${top}px`;
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
     };
     applyFabPos();
     window.addEventListener('resize', applyFabPos);
@@ -98,41 +117,71 @@ function createFab() {
     const s = getSettings();
     if (!s.showFab || !s.isEnabled) fab.classList.add('gp-hidden');
 
-    // Drag + click
-    let startX = 0, startY = 0, startRight = 0, startBottom = 0, dragged = false, down = false;
-    const onMove = (e) => {
-        if (!down) return;
-        const x = e.touches ? e.touches[0].clientX : e.clientX;
-        const y = e.touches ? e.touches[0].clientY : e.clientY;
-        if (Math.abs(x - startX) + Math.abs(y - startY) > 6) dragged = true;
-        if (!dragged) return;
-        const r = Math.max(4, Math.min(window.innerWidth - 60, startRight - (x - startX)));
-        const b = Math.max(4, Math.min(window.innerHeight - 60, startBottom - (y - startY)));
-        fab.style.right = `${r}px`;
-        fab.style.bottom = `${b}px`;
+    // ── Драг (по образцу Asta) ──
+    const THR = 8;
+    let down = false, moved = false, sx = 0, sy = 0, sl = 0, st = 0, rafId = null;
+    const clientXY = (e) => {
+        if (e.touches?.[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        if (e.changedTouches?.[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+        return { x: e.clientX, y: e.clientY };
     };
-    const onUp = () => {
+    const beginDrag = (x, y) => {
+        down = true; moved = false; sx = x; sy = y;
+        const r = fab.getBoundingClientRect();
+        sl = r.left; st = r.top;
+        fab.style.left = `${sl}px`; fab.style.top = `${st}px`;
+        fab.style.right = 'auto'; fab.style.bottom = 'auto';
+    };
+    const applyMove = (nx, ny) => {
+        const cx = Math.max(2, Math.min(nx, window.innerWidth - fab.offsetWidth - 2));
+        const cy = Math.max(2, Math.min(ny, window.innerHeight - fab.offsetHeight - 2));
+        fab.style.left = `${cx}px`; fab.style.top = `${cy}px`;
+    };
+    const persist = () => {
+        const r = fab.getBoundingClientRect();
+        getSettings().fabPos = { left: Math.round(r.left), top: Math.round(r.top) };
+        saveSettingsDebounced();
+    };
+
+    fab.addEventListener('touchstart', (e) => {
+        const c = clientXY(e); beginDrag(c.x, c.y);
+    }, { passive: true });
+    fab.addEventListener('touchmove', (e) => {
+        if (!down) return;
+        const c = clientXY(e), dx = c.x - sx, dy = c.y - sy;
+        if (Math.abs(dx) > THR || Math.abs(dy) > THR) moved = true;
+        if (!moved) return;
+        e.preventDefault();
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => applyMove(sl + dx, st + dy));
+    }, { passive: false });
+    fab.addEventListener('touchend', (e) => {
         if (!down) return;
         down = false;
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        if (dragged) {
-            const st = getSettings();
-            st.fabPos = { right: parseInt(fab.style.right) || 20, bottom: parseInt(fab.style.bottom) || 180 };
-            saveSettingsDebounced();
-        } else {
-            togglePhone();
-        }
-    };
-    fab.addEventListener('pointerdown', (e) => {
+        if (!moved) { e.preventDefault(); togglePhone(); }
+        else persist();
+        rafId = null;
+    }, { passive: false });
+
+    fab.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
         e.preventDefault();
-        down = true; dragged = false;
-        startX = e.clientX; startY = e.clientY;
-        const rect = fab.getBoundingClientRect();
-        startRight = window.innerWidth - rect.right;
-        startBottom = window.innerHeight - rect.bottom;
-        document.addEventListener('pointermove', onMove);
-        document.addEventListener('pointerup', onUp);
+        beginDrag(e.clientX, e.clientY);
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!down) return;
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        if (Math.abs(dx) > THR || Math.abs(dy) > THR) moved = true;
+        if (!moved) return;
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => applyMove(sl + dx, st + dy));
+    });
+    document.addEventListener('mouseup', () => {
+        if (!down) return;
+        down = false;
+        if (moved) persist();
+        else togglePhone();
+        rafId = null;
     });
 }
 
@@ -250,6 +299,31 @@ export function applySkin() {
         document.head.appendChild(styleEl);
     }
     styleEl.textContent = getSettings().customCss || '';
+    applyWallpaper();
+}
+
+// ═══ Обои телефона ═══
+// Картинка-обои кладётся отдельным слоем ПОД экраном (не через background
+// самого #gp-phone, чтобы не конфликтовать со скинами). Класс gp-has-wall
+// приглушает стеклянные градиенты, чтобы фото было видно.
+export function applyWallpaper() {
+    const ph = document.getElementById('gp-phone');
+    if (!ph) return;
+    const url = getSettings().wallpaper || '';
+    let layer = ph.querySelector('.gp-wallpaper');
+    if (url) {
+        if (!layer) {
+            layer = document.createElement('div');
+            layer.className = 'gp-wallpaper';
+            ph.insertBefore(layer, ph.firstChild);
+        }
+        const cssUrl = url.replace(/'/g, "\\'");
+        layer.style.backgroundImage = `url('${cssUrl}')`;
+        ph.classList.add('gp-has-wall');
+    } else {
+        if (layer) layer.remove();
+        ph.classList.remove('gp-has-wall');
+    }
 }
 
 export function isPhoneOpen() {
@@ -684,8 +758,12 @@ function renderAdd(screen) {
                 <span>Номер</span>
                 <input type="text" id="gp-add-number" maxlength="24" placeholder="Пусто = случайный">
             </label>
+            <label class="gp-field">
+                <span>Ник (@) для соцсетей</span>
+                <input type="text" id="gp-add-handle" maxlength="20" placeholder="Пусто = авто из имени">
+            </label>
             <button class="gp-primary" id="gp-add-save">${ic('fa-check')} Сохранить</button>
-            <div class="gp-add-hint">Имя должно совпадать с именем персонажа в чате — тогда его смс попадут в этот тред.</div>
+            <div class="gp-add-hint">Имя должно совпадать с именем персонажа в чате — тогда его смс попадут в этот тред. Ник и аватар подтянутся в Твиттер/Инсту.</div>
             <div class="gp-field" style="margin-top:10px">
                 <span>Групповой чат</span>
             </div>
@@ -708,9 +786,12 @@ function renderAdd(screen) {
     screen.querySelector('#gp-add-save')?.addEventListener('click', () => {
         const name = screen.querySelector('#gp-add-name')?.value.trim();
         let number = screen.querySelector('#gp-add-number')?.value.trim();
+        const handle = screen.querySelector('#gp-add-handle')?.value.trim();
         if (!name) { toast('Укажи имя контакта', 'fa-circle-exclamation'); return; }
         if (!number) number = randomNumber();
         addManualContact(name, number);
+        // Ник (@) для соцсетей — по ключу контакта
+        if (handle) setContactHandle(keyOf(name), handle);
         updatePhoneInjection();
         currentScreen = 'thread';
         currentThreadKey = keyOf(name);
@@ -1044,8 +1125,10 @@ function logNewReplies(kindLabel, postText, arr, beforeLen) {
     if (!added.length) return;
     const contacts = added.filter(r => typeof r.ak === 'string' && r.ak.startsWith('contact:'));
     const randomCount = added.length - contacts.length;
-    let line = `под её ${kindLabel}${postText ? ` («${String(postText).slice(0, 50)}»)` : ''}`;
-    const parts = contacts.map(c => `${c.author}: «${String(c.text).slice(0, 90)}»`);
+    let line = `под её ${kindLabel}${postText ? ` («${String(postText).slice(0, 80)}»)` : ''}`;
+    // Комменты знакомых персонажей — ПОЛНЫМ текстом (сюжетно значимы, модель
+    // должна видеть их целиком; сам коммент уже ограничен 300 симв. при создании).
+    const parts = contacts.map(c => `${c.author}: «${String(c.text).trim()}»`);
     if (parts.length) line += ` прокомментировали: ${parts.join('; ')}`;
     if (randomCount > 0) line += `${parts.length ? ', и' : ''} +${randomCount} реакций от других аккаунтов`;
     logSocialToChat(line);
@@ -1393,6 +1476,7 @@ function renderIgNew(screen) {
                 logNewReplies('фото в Instagram', post.caption || post.imgDesc, post.comments, before);
             } catch (e) {
                 console.error('[GlassPhone] auto-comments failed:', e);
+                toast(`Реакции не сгенерились: ${String(e?.message || e).slice(0, 80)}`, 'fa-circle-exclamation');
             } finally {
                 genBusy = false;
                 if (currentScreen === 'igview') render();
@@ -1646,6 +1730,7 @@ function renderOfNew(screen) {
                 logNewReplies('приватным OnlyFans-постом', post.caption || post.imgDesc, post.comments, before);
             } catch (e) {
                 console.error('[GlassPhone] of auto-comments failed:', e);
+                toast(`Реакции не сгенерились: ${String(e?.message || e).slice(0, 80)}`, 'fa-circle-exclamation');
             } finally {
                 genBusy = false;
                 if (currentScreen === 'ofview') render();
@@ -1771,9 +1856,9 @@ async function doSend(key) {
                     } catch (e) {
                         console.warn('[GlassPhone] saveBase64AsFile failed, keeping dataURL:', e);
                     }
-                    if (!lastMsg.extra) lastMsg.extra = {};
-                    lastMsg.extra.image = src;
-                    lastMsg.extra.inline_image = true;
+                    // extra.image в ST 1.18 — deprecated-сеттер, молча ГЛОТАЕТ запись;
+                    // пишем через attachImageToMessage (в extra.media, если обёртка стоит)
+                    attachImageToMessage(lastMsg, src);
 
                     // Надёжный путь миниатюры: img в маркере tel:out (mes переживает всё)
                     const markerJson = JSON.stringify(isGroup ? { to: `группа:${name}`, img: src } : { to: name, img: src });

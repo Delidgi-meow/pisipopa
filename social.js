@@ -1039,7 +1039,7 @@ ${contactsBlock()}
 
 Generate 5-8 Instagram posts:
 1. Posts from known characters — in character (their aesthetic, their life).
-2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes).
+2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes). These are STRANGERS unrelated to ${getUserName()} — their photos must NOT feature ${getUserName()} or the main story characters.
 
 Each post: "photo" = short visual description of the photo (what's in the frame, 5-15 words), "caption" = post caption (may include hashtags), max 200 chars. NO emojis.
 ${JSON_RULES}
@@ -1295,15 +1295,25 @@ export async function fetchImageModels() {
 // ВАЖНО: НЕ навязываем стиль рендера («realistic», «phone camera») — иначе он
 // перебивает активный стиль расширения (юзер поставила «Craig Mullins painterly»,
 // а мой хардкод «realistic» давал фотореализм). Описываем только СЦЕНУ/кадр.
-function buildImagePrompt(post) {
+// depictUser/depictChar: чей это пост. Для ЧУЖИХ аккаунтов явно ЗАПРЕЩАЕМ рисовать
+// персону юзера и главных персонажей (иначе «я вылезла» на посте рандома — модель
+// знает персону из контекста описания и тащит её в кадр).
+function buildImagePrompt(post, { depictUser = false, depictChar = false } = {}) {
+    const st = getSettings();
     const parts = [];
     if (post.imgDesc) parts.push(post.imgDesc);
     if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
     if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
-    const framing = post.kind === 'of'
-        ? 'intimate boudoir shot, self-taken framing'
-        : 'social media post, self-taken candid framing';
-    return `${framing}. ${parts.join('. ')}`;
+    const framing = (post.kind === 'of'
+        ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
+        : (st.imgPromptIg || 'social media post, self-taken candid framing')).trim();
+    const neg = [];
+    if (!depictUser) neg.push('the user/protagonist');
+    if (!depictChar) neg.push('the main story characters');
+    const negLine = neg.length
+        ? ` This is a THIRD-PARTY account run by an unrelated person — do NOT depict ${neg.join(' or ')}; only strangers unrelated to the main story.`
+        : '';
+    return `${framing}. ${parts.join('. ')}.${negLine}`;
 }
 
 // Последовательная очередь (мы временно мутируем чужие настройки —
@@ -1340,7 +1350,7 @@ async function _generatePostImage(post, onStatus = null) {
     const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
     const wantChar = isCharPost || mentionsChar;
 
-    const prompt = buildImagePrompt(post);
+    const prompt = buildImagePrompt(post, { depictUser: isUserPost, depictChar: wantChar });
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
     const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];

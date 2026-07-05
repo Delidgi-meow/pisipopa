@@ -69,6 +69,14 @@ function setupSettingsPanel() {
             <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
         </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
+        <div class="menu_button" id="gp-imgprompt-toggle" style="font-size:10px;text-align:center;margin-top:4px">Промпты картинок ▼</div>
+        <div id="gp-imgprompt-panel" style="display:none;flex-direction:column;gap:3px">
+            <span style="font-size:9px;opacity:0.5">Instagram (стиль/кадр — описание поста и запрет на главперсонажей дописываются сами):</span>
+            <textarea id="gp-set-imgprompt-ig" class="text_pole" rows="2" style="font-size:11px;resize:vertical">${(s.imgPromptIg || '').replace(/</g, '&lt;')}</textarea>
+            <span style="font-size:9px;opacity:0.5">OnlyFans:</span>
+            <textarea id="gp-set-imgprompt-of" class="text_pole" rows="2" style="font-size:11px;resize:vertical">${(s.imgPromptOf || '').replace(/</g, '&lt;')}</textarea>
+            <button id="gp-imgprompt-apply" class="menu_button">Применить</button>
+        </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат (память для саммарайза)</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте (экономия токенов)</span></label>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
@@ -155,6 +163,18 @@ function setupSettingsPanel() {
     $('#gp-set-square').on('change', function () {
         getSettings().imageGenSquare = this.checked;
         saveSettingsDebounced();
+    });
+    $('#gp-imgprompt-toggle').on('click', function () {
+        const panel = $('#gp-imgprompt-panel');
+        const visible = panel.is(':visible');
+        panel.css('display', visible ? 'none' : 'flex');
+        $(this).text(visible ? 'Промпты картинок ▼' : 'Промпты картинок ▲');
+    });
+    $('#gp-imgprompt-apply').on('click', function () {
+        getSettings().imgPromptIg = $('#gp-set-imgprompt-ig').val() || '';
+        getSettings().imgPromptOf = $('#gp-set-imgprompt-of').val() || '';
+        saveSettingsDebounced();
+        toast('Промпты картинок сохранены', 'fa-check');
     });
     $('#gp-set-sociallog').on('change', function () {
         getSettings().socialLogToChat = this.checked;

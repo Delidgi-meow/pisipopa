@@ -26,7 +26,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.8.4';
+export const GP_VERSION = '1.8.6';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -60,6 +60,10 @@ const defaultSettings = () => ({
     socialMaxTokens: 0,
     // Квадрат 1:1 для инста-постов
     imageGenSquare: true,
+    // Промпт-префикс картинок (стиль/кадр). Описание поста и запрет рисовать
+    // главперсонажей на чужих аккаунтах дописываются автоматически ПОСЛЕ него.
+    imgPromptIg: 'social media post, self-taken candid framing',
+    imgPromptOf: 'intimate boudoir shot, self-taken framing',
     // Обои телефона (URL файла; '' = стандартный стеклянный градиент)
     wallpaper: '',
     // Скин телефона: indigo | rose | emerald | mono

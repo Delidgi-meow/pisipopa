@@ -49,6 +49,8 @@
     user-select: none;
     overflow: visible;
 }
+/* Скрытие настройкой «Плавающая кнопка»: id+class перебивает #gp-fab{display:flex!important} */
+#gp-fab.gp-hidden { display: none !important; }
 
 /* Полупрозрачный силуэт без уведомлений (только на устройствах с курсором) */
 @media (hover: hover) {
@@ -58,33 +60,19 @@
     #gp-fab.gp-fab-alert:hover { opacity: 1; }
 }
 
-/* Тачскрины: hover нет, полупрозрачный силуэт на пёстром фоне теряется.
-   На мобильных FAB — сплошной стеклянный кружок БЕЗ backdrop-filter
-   (blur-поверхности iOS Safari часто рендерит невидимыми — кнопка «пропадала»). */
+/* Тачскрины: hover нет — тот же минималистичный силуэт, что на ПК (без кружка/
+   backdrop-filter — blur iOS Safari рендерит невидимым). Видимость даёт drop-shadow. */
 @media (hover: none) {
     #gp-fab,
     #gp-fab.gp-fab-idle,
     #gp-fab.gp-fab-alert {
         opacity: 1;
-        width: 50px;
-        height: 50px;
-        border-radius: 50%;
-        background:
-            radial-gradient(120% 120% at 30% 20%, rgba(122,108,255,0.95), rgba(70,60,150,0.92) 70%);
-        border: 1px solid rgba(255, 255, 255, 0.30);
-        box-shadow:
-            0 10px 26px rgba(0, 0, 0, 0.5),
-            inset 0 1px 0 rgba(255, 255, 255, 0.35);
-        color: #fff;
+        background: none;
+        border: none;
+        box-shadow: none;
+        color: var(--gp-text);
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75));
     }
-}
-
-/* При уведомлениях — чуть ярче */
-#gp-fab.gp-fab-alert {
-    opacity: 0.7;
-}
-#gp-fab.gp-fab-alert:hover {
-    opacity: 1;
 }
 
 #gp-fab:active { transform: scale(0.92); }

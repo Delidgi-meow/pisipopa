@@ -1080,6 +1080,20 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
     return added;
 }
 
+// ── Каталог магазина (для приложения «Магазин») ──
+// Генерируется по требованию, изолированно от RP-пресета, но С контекстом
+// (taskHeader → модель знает город/страну/сеттинг ролевой). Возвращает массив
+// [{store, items:[{name, price, desc}]}] или null.
+export async function generateShopContent(catLabel, catHint, currency) {
+    const prompt = `${await taskHeader(`generate an online shopping catalog for the "${catLabel}" category on ${getUserName()}'s phone.`)}
+Match the CITY / COUNTRY / SETTING of the roleplay — local brands, style, realistic price level in ${currency}. If the setting is fantasy/other-world, invent fitting shops.
+${catHint}
+Generate 2-4 realistic stores/vendors, each with 4-7 items. "price" is a plain integer number in ${currency} (no sign, no text). Short vivid item descriptions (5-12 words). NO emojis.
+${JSON_RULES}
+Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc":"краткое описание"}]}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"store":"' }));
+}
+
 export async function generateIgComments(post) {
     // Экономия: описание есть → фото не прикладываем (галочка visionInComments переопределяет)
     const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);

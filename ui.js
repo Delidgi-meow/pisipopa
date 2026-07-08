@@ -16,6 +16,7 @@ import {
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency,
 } from './bank.js';
+import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder } from './shop.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
@@ -218,11 +219,11 @@ export function notifyBankReminders() {
     if (!getSettings().isEnabled) return;
     try {
         const ym = (getRpDateTime() ? `${getRpDateTime().year}-${getRpDateTime().month}` : new Date().toISOString().slice(0, 7));
-        for (const { rec, overdue } of getBankReminders()) {
-            const key = rec.id + ':' + ym;
+        for (const r of getBankReminders()) {
+            const key = r.kind + r.id + ':' + ym;
             if (_bankReminded.has(key)) continue;
             _bankReminded.add(key);
-            toast(`${overdue ? 'Просрочен платёж' : 'Пора оплатить'}: ${rec.name} — ${fmtMoney(rec.amount)}`, 'fa-file-invoice-dollar');
+            toast(`${r.overdue ? 'Просрочен платёж' : 'Пора оплатить'}: ${r.name} — ${fmtMoney(r.amount)}`, r.kind === 'loan' ? 'fa-landmark' : 'fa-file-invoice-dollar');
         }
     } catch (e) { /* ignore */ }
 }
@@ -434,6 +435,9 @@ export function render() {
     else if (currentScreen === 'banktx') renderBankTx(screen);
     else if (currentScreen === 'bankloan') renderBankLoan(screen);
     else if (currentScreen === 'bankrec') renderBankRec(screen);
+    else if (currentScreen === 'shop') renderShop(screen);
+    else if (currentScreen === 'shopcat') renderShopCat(screen);
+    else if (currentScreen === 'shoporders') renderShopOrders(screen);
     else renderHome(screen);
 }
 
@@ -498,6 +502,10 @@ function renderHome(screen) {
                 <div class="gp-app" data-app="bank">
                     <div class="gp-app-icon gp-app-bank">${ic('fa-building-columns')}${bankBadgeCount() > 0 ? `<span class="gp-app-badge">${bankBadgeCount()}</span>` : ''}</div>
                     <div class="gp-app-name">Банк</div>
+                </div>
+                <div class="gp-app" data-app="shop">
+                    <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}</div>
+                    <div class="gp-app-name">Магазин</div>
                 </div>
             </div>
         </div>`;
@@ -1838,7 +1846,7 @@ function renderBank(screen) {
     const remBanner = reminders.length ? `
         <div class="gp-bank-remind">
             ${ic('fa-bell')} <b>Пора платить:</b>
-            ${reminders.map(r => `<span class="gp-bank-remind-item${r.overdue ? ' gp-overdue' : ''}">${esc(r.rec.name)} — ${esc(fmtMoney(r.rec.amount))}</span>`).join('')}
+            ${reminders.map(r => `<span class="gp-bank-remind-item${r.overdue ? ' gp-overdue' : ''}">${esc(r.name)} — ${esc(fmtMoney(r.amount))}</span>`).join('')}
         </div>` : '';
 
     setHtmlKeepScroll(screen, '.gp-bank-scroll', `
@@ -1959,6 +1967,7 @@ function renderBankLoan(screen) {
                     <div style="display:flex;gap:8px">
                         <label class="gp-field" style="flex:1"><span>Срок (мес.)</span><input type="number" id="gp-loan-months" inputmode="numeric" min="1" max="360" value="12"></label>
                         <label class="gp-field" style="flex:1"><span>Ставка, % год.</span><input type="number" id="gp-loan-rate" inputmode="numeric" min="0" max="200" value="18"></label>
+                        <label class="gp-field" style="flex:1"><span>Число платежа</span><input type="number" id="gp-loan-day" inputmode="numeric" min="1" max="31" value="10"></label>
                     </div>
                     <div class="gp-add-hint" id="gp-loan-preview"></div>
                     <button class="gp-primary" id="gp-loan-take">${ic('fa-money-bill-wave')} Оформить</button>
@@ -1975,7 +1984,7 @@ function renderBankLoan(screen) {
                                 <button class="gp-bank-tx-del" data-del-loan="${esc(l.id)}" title="Удалить">${ic('fa-xmark')}</button>
                             </div>
                             <div class="gp-bank-loan-info">
-                                ${l.paidOff ? `<span class="gp-pos">Погашен</span>` : `Осталось <b>${esc(fmtMoney(l.remaining))}</b> · платёж ${esc(fmtMoney(l.monthly))}/мес`}
+                                ${l.paidOff ? `<span class="gp-pos">Погашен</span>` : `Осталось <b>${esc(fmtMoney(l.remaining))}</b> · ${esc(fmtMoney(l.monthly))}/мес${l.day ? `, ${l.day}-го числа` : ''}`}
                             </div>
                             ${l.paidOff ? '' : `<button class="gp-bank-pay" data-pay-loan="${esc(l.id)}">${ic('fa-check')} Внести ${esc(fmtMoney(Math.min(l.remaining, l.monthly)))}</button>`}
                         </div>`).join('')}
@@ -2003,6 +2012,7 @@ function renderBankLoan(screen) {
             amount,
             months: parseInt(screen.querySelector('#gp-loan-months').value) || 12,
             rate: (parseFloat(screen.querySelector('#gp-loan-rate').value) || 0) / 100,
+            day: parseInt(screen.querySelector('#gp-loan-day').value) || 10,
         });
         updatePhoneInjection();
         goto('bank');
@@ -2020,7 +2030,7 @@ function renderBankLoan(screen) {
 function renderBankRec(screen) {
     currentScreen = 'bankrec';
     const b = getBank();
-    const rem = getBankReminders().map(r => r.rec.id);
+    const rem = getBankReminders().filter(r => r.kind === 'bill').map(r => r.id);
     setHtmlKeepScroll(screen, '.gp-bank-scroll', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
@@ -2079,6 +2089,140 @@ function renderBankRec(screen) {
         delRecurring(btn.getAttribute('data-del-rec')); render();
     }));
     updateFabBadge();
+}
+
+// ═══════════════════════════════════════════
+// МАГАЗИН
+// ═══════════════════════════════════════════
+
+let currentShopCat = null;
+const _shopBusy = new Set(); // категории в процессе генерации
+
+function renderShop(screen) {
+    currentScreen = 'shop';
+    const b = getBank();
+    const orders = getOrders();
+    screen.innerHTML = `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app gp-shop-title">${ic('fa-bag-shopping')} Магазин</div>
+            <button class="gp-iconbtn" id="gp-shop-orders" title="Мои заказы">${ic('fa-receipt')}${orders.length ? `<span class="gp-app-badge">${orders.length > 9 ? '9+' : orders.length}</span>` : ''}</button>
+        </div>
+        <div class="gp-shop-balance">Баланс: <b>${esc(fmtMoney(b.balance))}</b></div>
+        <div class="gp-shop-grid">
+            ${SHOP_CATS.map(c => `
+                <div class="gp-shop-cat" data-cat="${c.id}">
+                    <div class="gp-shop-cat-icon">${ic(c.icon)}</div>
+                    <div class="gp-shop-cat-name">${esc(c.name)}</div>
+                    ${getCategory(c.id) ? `<div class="gp-shop-cat-dot" title="Каталог загружен"></div>` : ''}
+                </div>`).join('')}
+        </div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelector('#gp-shop-orders')?.addEventListener('click', () => goto('shoporders'));
+    screen.querySelectorAll('.gp-shop-cat').forEach(el => el.addEventListener('click', () => {
+        currentShopCat = el.getAttribute('data-cat');
+        goto('shopcat');
+    }));
+}
+
+async function doShopGen(catId) {
+    if (_shopBusy.has(catId)) return;
+    _shopBusy.add(catId);
+    render();
+    try {
+        await generateCategory(catId, (s) => {
+            const el = document.querySelector('[data-shop-status]');
+            if (el) el.textContent = s;
+        });
+    } catch (e) {
+        toast(`Не получилось: ${String(e?.message || e).slice(0, 70)}`, 'fa-circle-exclamation');
+    } finally {
+        _shopBusy.delete(catId);
+        render();
+    }
+}
+
+function renderShopCat(screen) {
+    currentScreen = 'shopcat';
+    const cat = catById(currentShopCat);
+    if (!cat) { goto('shop'); return; }
+    const data = getCategory(cat.id);
+    const busy = _shopBusy.has(cat.id);
+    const b = getBank();
+
+    let body;
+    if (busy) {
+        body = `<div class="gp-empty"><div class="gp-empty-icon">${ic('fa-spinner fa-spin')}</div><div class="gp-empty-title" data-shop-status>Загружаю каталог...</div><div class="gp-empty-text">Магазины и товары подбираются под твою ролевую</div></div>`;
+    } else if (!data || !data.stores?.length) {
+        body = `<div class="gp-empty"><div class="gp-empty-icon">${ic(cat.icon)}</div><div class="gp-empty-title">${esc(cat.name)}</div><div class="gp-empty-text">Каталог пуст.<br>Нажми ${ic('fa-wand-magic-sparkles')} — магазины и цены сгенерируются<br>под город/страну твоей ролевой.</div><button class="gp-primary" id="gp-shop-gen" style="margin-top:12px">${ic('fa-wand-magic-sparkles')} Загрузить каталог</button></div>`;
+    } else {
+        body = data.stores.map(st => `
+            <div class="gp-shop-store">
+                <div class="gp-shop-store-name">${ic('fa-store')} ${esc(st.name)}</div>
+                ${st.items.map(it => `
+                    <div class="gp-shop-item">
+                        <div class="gp-shop-item-body">
+                            <div class="gp-shop-item-name">${esc(it.name)}</div>
+                            ${it.desc ? `<div class="gp-shop-item-desc">${esc(it.desc)}</div>` : ''}
+                        </div>
+                        <div class="gp-shop-item-buy">
+                            <span class="gp-shop-item-price">${esc(fmtMoney(it.price))}</span>
+                            <button class="gp-shop-buy" data-buy="${esc(st.id)}|${esc(it.id)}">${ic('fa-cart-plus')}</button>
+                        </div>
+                    </div>`).join('')}
+            </div>`).join('');
+    }
+
+    setHtmlKeepScroll(screen, '.gp-shop-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app gp-shop-title">${ic(cat.icon)} ${esc(cat.name)}</div>
+            ${data && data.stores?.length ? `<button class="gp-iconbtn" id="gp-shop-refresh" title="Обновить каталог" ${busy ? 'disabled' : ''}>${busy ? ic('fa-spinner fa-spin') : ic('fa-rotate')}</button>` : '<span style="width:32px"></span>'}
+        </div>
+        <div class="gp-shop-balance">Баланс: <b>${esc(fmtMoney(b.balance))}</b></div>
+        <div class="gp-shop-scroll">${body}</div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shop'));
+    screen.querySelector('#gp-shop-gen')?.addEventListener('click', () => doShopGen(cat.id));
+    screen.querySelector('#gp-shop-refresh')?.addEventListener('click', () => doShopGen(cat.id));
+    screen.querySelectorAll('[data-buy]').forEach(btn => btn.addEventListener('click', () => {
+        const [storeId, itemId] = btn.getAttribute('data-buy').split('|');
+        const order = buyItem(cat.id, storeId, itemId);
+        if (order) {
+            updatePhoneInjection();
+            render();
+            toast(`Куплено: ${order.item} — ${fmtMoney(order.price)}`, 'fa-bag-shopping');
+        }
+    }));
+}
+
+function renderShopOrders(screen) {
+    currentScreen = 'shoporders';
+    const orders = getOrders();
+    setHtmlKeepScroll(screen, '.gp-shop-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app gp-shop-title">${ic('fa-receipt')} Мои заказы</div>
+            <span style="width:32px"></span>
+        </div>
+        <div class="gp-shop-scroll">
+            ${orders.length === 0
+                ? `<div class="gp-empty-text" style="padding:16px 8px">Заказов пока нет</div>`
+                : orders.map(o => `
+                    <div class="gp-shop-order">
+                        <span class="gp-bank-tx-i">${ic((catById(o.cat) || {}).icon || 'fa-bag-shopping')}</span>
+                        <span class="gp-bank-tx-body">
+                            <span class="gp-bank-tx-label">${esc(o.item)}</span>
+                            <span class="gp-bank-tx-cat">${esc(o.store)} · ${esc(timeAgo(o.time))}</span>
+                        </span>
+                        <span class="gp-bank-tx-amt gp-neg">${esc(fmtMoney(o.price))}</span>
+                        <button class="gp-bank-tx-del" data-del-order="${esc(o.id)}" title="Убрать из истории">${ic('fa-xmark')}</button>
+                    </div>`).join('')}
+        </div>`);
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shop'));
+    screen.querySelectorAll('[data-del-order]').forEach(btn => btn.addEventListener('click', () => {
+        deleteOrder(btn.getAttribute('data-del-order')); render();
+    }));
 }
 
 // ═══ Удаление отдельного SMS из чата ═══

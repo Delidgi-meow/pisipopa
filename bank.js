@@ -86,7 +86,7 @@ export function deleteTransaction(id) {
 }
 
 // ── Кредиты (аннуитет) ──
-export function takeLoan({ name, amount, months, rate = 0.18 }) {
+export function takeLoan({ name, amount, months, rate = 0.18, day = 1 }) {
     const b = getBank();
     const principal = Math.round(Number(amount) || 0);
     if (principal <= 0) return null;
@@ -99,7 +99,8 @@ export function takeLoan({ name, amount, months, rate = 0.18 }) {
     const loan = {
         id: genId(), name: String(name || 'Кредит').slice(0, 40),
         principal, remaining: monthly * m, monthly, months: m, rate: r,
-        opened: Date.now(), paidOff: false,
+        day: Math.max(1, Math.min(31, parseInt(day) || 1)),
+        opened: Date.now(), paidOff: false, lastPaidMonth: null,
     };
     b.loans.unshift(loan);
     // деньги приходят на баланс отдельной транзакцией
@@ -116,6 +117,7 @@ export function payLoanInstallment(id, customAmount = null) {
     if (pay <= 0) return;
     addTransaction({ amount: -pay, label: `Платёж по кредиту «${loan.name}»`, category: 'кредит', silent: true });
     loan.remaining -= pay;
+    loan.lastPaidMonth = currentYearMonth();
     if (loan.remaining <= 0) { loan.remaining = 0; loan.paidOff = true; }
     saveMeta();
 }
@@ -177,8 +179,9 @@ export function monthlyObligations() {
     return getBank().recurring.reduce((s, r) => s + r.amount, 0);
 }
 
-// Напоминания: обязательные платежи, срок которых в этом RP-месяце наступил и
-// ещё не оплачены. { rec, overdue } — overdue = день уже прошёл.
+// Напоминания: обязательные платежи И кредиты, срок которых в этом RP-месяце
+// наступил и ещё не оплачены. Нормализованный вид:
+// { kind:'bill'|'loan', id, name, amount, day, overdue }
 export function getBankReminders() {
     const b = getBank();
     const day = currentDay();
@@ -186,7 +189,12 @@ export function getBankReminders() {
     const due = [];
     for (const r of b.recurring) {
         if (r.lastPaidMonth === ym) continue;
-        if (day >= r.day) due.push({ rec: r, overdue: day > r.day });
+        if (day >= r.day) due.push({ kind: 'bill', id: r.id, name: r.name, amount: r.amount, day: r.day, overdue: day > r.day });
+    }
+    for (const l of b.loans) {
+        if (l.paidOff || !l.day) continue;
+        if (l.lastPaidMonth === ym) continue;
+        if (day >= l.day) due.push({ kind: 'loan', id: l.id, name: l.name, amount: Math.min(l.remaining, l.monthly), day: l.day, overdue: day > l.day });
     }
     return due;
 }

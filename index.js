@@ -8,8 +8,9 @@ import { eventSource, event_types, saveSettingsDebounced } from '../../../../scr
 import { saveBase64AsFile } from '../../../utils.js';
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper, notifyBankReminders } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
+import { harvestBankTags } from './bank.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -313,7 +314,6 @@ function setupSettingsPanel() {
 
 jQuery(async () => {
     try {
-        console.log('[GlassPhone] Loading...');
         getSettings();
         setupSettingsPanel();
         initUI();
@@ -330,7 +330,13 @@ jQuery(async () => {
                 const { tweets, posts } = harvestSocialTags();
                 if (tweets > 0) toast(`Новый твит в ленте`, 'fa-x-twitter');
                 if (posts > 0) toast(`Новый пост в Instagram`, 'fa-instagram');
-            } catch (e) { console.warn('[GlassPhone] harvest failed:', e); }
+            } catch (e) { /* ignore */ }
+            // Транзакции из ролевой (tel:bank) → баланс + тост
+            try {
+                const n = harvestBankTags();
+                if (n > 0) toast(`Банк: ${n} ${n === 1 ? 'операция' : 'операции'} из ролевой`, 'fa-building-columns');
+            } catch (e) { /* ignore */ }
+            notifyBankReminders();
             updatePhoneInjection();
             applyChatHiding();
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST
@@ -370,6 +376,8 @@ jQuery(async () => {
                 setTimeout(() => {
                     resetIncomingCounters();
                     try { harvestSocialTags(); } catch (e) { /* ignore */ }
+                    try { harvestBankTags(); } catch (e) { /* ignore */ }
+                    updateFabBadge();
                     updatePhoneInjection();
                     applyChatHiding();
                     // Ник юзера per-chat — обновляем поле в настройках
@@ -404,7 +412,6 @@ jQuery(async () => {
 
         // Версия — в консоль и в панель настроек (сверка ПК ↔ айфон против стейл-синка)
         try { document.getElementById('gp-version-label').textContent = `Версия: ${GP_VERSION}`; } catch (e) { /* ignore */ }
-        console.log(`[GlassPhone] Ready — v${GP_VERSION}`);
     } catch (e) {
         console.error('[GlassPhone] FATAL:', e);
     }

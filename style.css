@@ -865,6 +865,11 @@
     padding: 9px 12px;
 }
 .gp-ig-name { font-weight: 700; font-size: 12.5px; }
+.gp-ig-nameblock { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.gp-ig-handle { font-size: 10px; opacity: 0.5; }
+.gp-ban-btn i { color: #ff8a9a; }
+.gp-rename-pen { font-size: 9px; opacity: 0.4; margin-left: 3px; }
+.gp-row-name:hover .gp-rename-pen { opacity: 0.8; }
 .gp-ig-img {
     width: 100%;
     aspect-ratio: 1 / 1;
@@ -1195,6 +1200,102 @@
     background:
         linear-gradient(160deg, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.05));
 }
+
+/* ═══ Банк ═══ */
+.gp-app-bank { background: linear-gradient(140deg, rgba(46, 196, 132, 0.6), rgba(20, 130, 90, 0.5)); }
+.gp-bank-title i { color: #35d69a; }
+.gp-bank-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 2px 12px; display: flex; flex-direction: column; gap: 10px; }
+
+.gp-bank-card {
+    border-radius: 18px;
+    padding: 16px 18px;
+    background: linear-gradient(140deg, rgba(46, 196, 132, 0.4), rgba(20, 110, 80, 0.32));
+    border: 1px solid rgba(120, 240, 190, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 6px 18px rgba(0,0,0,0.25);
+}
+.gp-bank-card.gp-bank-neg {
+    background: linear-gradient(140deg, rgba(220, 80, 90, 0.4), rgba(150, 40, 55, 0.32));
+    border-color: rgba(255, 150, 160, 0.3);
+}
+.gp-bank-card-label { font-size: 11px; opacity: 0.7; letter-spacing: 0.4px; }
+.gp-bank-balance { font-size: 30px; font-weight: 800; margin: 3px 0 8px; letter-spacing: -0.5px; }
+.gp-bank-io { display: flex; gap: 14px; font-size: 12px; font-weight: 600; }
+.gp-bank-in { color: #7cf0bb; }
+.gp-bank-out { color: #ff9aa6; }
+
+.gp-bank-remind {
+    border-radius: 14px;
+    padding: 9px 12px;
+    background: rgba(255, 180, 60, 0.12);
+    border: 1px solid rgba(255, 180, 60, 0.35);
+    font-size: 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.gp-bank-remind i { color: #ffbf4d; }
+.gp-bank-remind-item {
+    padding: 1px 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.08); font-size: 11px; font-weight: 600;
+}
+.gp-bank-remind-item.gp-overdue { background: rgba(255, 90, 100, 0.2); color: #ff9aa6; }
+
+.gp-bank-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gp-bank-act {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 11px 8px; border-radius: 13px; cursor: pointer;
+    background: var(--gp-glass-strong); border: 1px solid var(--gp-border-soft);
+    color: var(--gp-text); font-size: 12.5px; font-weight: 600;
+    transition: transform .12s, background .2s;
+}
+.gp-bank-act:hover { background: rgba(255,255,255,0.16); }
+.gp-bank-act:active { transform: scale(0.97); }
+.gp-bank-act-out { border-color: rgba(255, 140, 150, 0.3); }
+.gp-bank-act-in { border-color: rgba(120, 240, 190, 0.3); }
+.gp-bank-chip { font-size: 10px; opacity: 0.75; font-weight: 700; }
+
+.gp-bank-section { display: flex; flex-direction: column; gap: 4px; }
+.gp-bank-section-h { font-size: 11px; font-weight: 700; opacity: 0.55; letter-spacing: 0.4px; padding: 2px 4px; text-transform: uppercase; }
+
+.gp-bank-cat { display: flex; align-items: center; gap: 8px; padding: 4px 4px; font-size: 12px; }
+.gp-bank-cat-i { width: 18px; text-align: center; opacity: 0.7; }
+.gp-bank-cat-n { flex: 0 0 84px; opacity: 0.85; text-transform: capitalize; }
+.gp-bank-cat-bar { flex: 1 1 auto; height: 6px; border-radius: 4px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.gp-bank-cat-bar > span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--gp-accent-a), var(--gp-accent-b)); }
+.gp-bank-cat-s { flex: 0 0 auto; font-size: 11px; font-weight: 600; opacity: 0.8; }
+
+.gp-bank-tx { display: flex; align-items: center; gap: 9px; padding: 8px 6px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-bank-tx:last-child { border-bottom: none; }
+.gp-bank-tx-i { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.08); font-size: 11px; opacity: 0.85; }
+.gp-bank-tx-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.gp-bank-tx-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-bank-tx-cat { font-size: 10px; opacity: 0.5; text-transform: capitalize; }
+.gp-bank-tx-amt { flex: 0 0 auto; font-size: 13px; font-weight: 700; }
+.gp-bank-tx-amt.gp-neg { color: #ff9aa6; }
+.gp-bank-tx-amt.gp-pos { color: #7cf0bb; }
+.gp-pos { color: #7cf0bb; }
+.gp-bank-tx-del { flex: 0 0 auto; background: none; border: none; color: var(--gp-text-dim); cursor: pointer; font-size: 12px; opacity: 0; transition: opacity .2s; padding: 2px; }
+.gp-bank-tx:hover .gp-bank-tx-del, .gp-bank-rec:hover .gp-bank-tx-del { opacity: 0.7; }
+@media (hover: none) { .gp-bank-tx-del { opacity: 0.5; } }
+
+.gp-bank-loan { border-radius: 13px; padding: 10px 12px; background: var(--gp-glass); border: 1px solid var(--gp-border-soft); display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.gp-bank-loan.gp-paid { opacity: 0.55; }
+.gp-bank-loan-top { display: flex; align-items: center; }
+.gp-bank-loan-name { flex: 1 1 auto; font-weight: 700; font-size: 13px; }
+.gp-bank-loan-info { font-size: 11.5px; opacity: 0.8; }
+.gp-bank-pay {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 7px 10px; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(135deg, rgba(46,196,132,0.85), rgba(30,150,110,0.8));
+    border: 1px solid rgba(120,240,190,0.35); color: #fff; font-size: 11.5px; font-weight: 700;
+}
+.gp-bank-pay-sm { padding: 6px 9px; flex: 0 0 auto; }
+.gp-bank-pay:active { transform: scale(0.96); }
+
+.gp-bank-rec { display: flex; align-items: center; gap: 9px; padding: 8px 6px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-bank-rec:last-child { border-bottom: none; }
+.gp-bank-rec-due { background: rgba(255, 180, 60, 0.08); border-radius: 10px; }
+.gp-bank-rec-due .gp-bank-tx-cat { color: #ffbf4d; opacity: 0.9; }
+
+.gp-primary-out { background: linear-gradient(135deg, #ff6a7e, #ff8a5f) !important; }
 
 /* ═══ v1.5: OnlyFans ═══ */
 .gp-app-of { background: linear-gradient(140deg, rgba(0,150,240,0.55), rgba(0,90,200,0.45)); }

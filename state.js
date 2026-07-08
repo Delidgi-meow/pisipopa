@@ -26,7 +26,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.8.9';
+export const GP_VERSION = '1.11.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -112,8 +112,55 @@ export function getMeta() {
     if (typeof m.userHandle !== 'string') m.userHandle = '';
     // Групповые смс-чаты: [{id, name, members: [имена]}]
     if (!Array.isArray(m.groups)) m.groups = [];
+    // Переименования контактов (отображаемое имя поверх имени из чата), по ключу
+    if (!m.names || typeof m.names !== 'object') m.names = {};
+    // Забаненные аккаунты соцсетей (нормализованные ключи имени/ника)
+    if (!Array.isArray(m.banned)) m.banned = [];
     return m;
 }
+
+// ── Убрать @ из ника/имени ──
+export function stripHandle(s) {
+    return String(s || '').replace(/^@+/, '').trim();
+}
+
+// ── Отображаемое имя контакта (учитывает переименование) ──
+export function displayName(key, fallback) {
+    const m = getMeta();
+    return (m.names && m.names[key]) || fallback || key;
+}
+export function renameContact(key, newName) {
+    const m = getMeta();
+    const n = String(newName || '').trim();
+    if (n) m.names[key] = n.slice(0, 60);
+    else delete m.names[key];
+    saveMeta();
+}
+
+// ── Бан аккаунтов соцсетей ──
+export function banKey(nameOrHandle) {
+    return keyOf(stripHandle(nameOrHandle));
+}
+export function banAccount(nameOrHandle) {
+    const m = getMeta();
+    const k = banKey(nameOrHandle);
+    if (k && !m.banned.includes(k)) m.banned.push(k);
+    saveMeta();
+}
+export function unbanAccount(nameOrHandle) {
+    const m = getMeta();
+    const k = banKey(nameOrHandle);
+    m.banned = m.banned.filter(x => x !== k);
+    saveMeta();
+}
+export function isBanned(nameOrHandle, handle) {
+    const m = getMeta();
+    if (!m.banned.length) return false;
+    const k1 = banKey(nameOrHandle);
+    const k2 = handle ? banKey(handle) : null;
+    return (k1 && m.banned.includes(k1)) || (k2 && m.banned.includes(k2));
+}
+export function getBanned() { return getMeta().banned; }
 
 // ── Группы ──
 export function addGroup(name, members) {
@@ -329,44 +376,139 @@ export function fmtTime(date) {
     return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// ── Последняя RP-дата/время из чата (синергия с Pregnancy — она хранит RP_DATE в сообщениях) ──
-// Расширенный regex: ловит дату DD.MM.YYYY и опционально время HH:MM (если модель дописывает)
-const RP_DATE_RE = /<!--[\s\S]*?\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?\s*\][\s\S]*?-->/i;
+// ── RP-дата/время: из ЛЮБОГО источника ──
+// Приоритет: (1) инжект календаря (rp-calendar и т.п. — читаем extension_prompts,
+// парсим дату+время из текста), (2) тег Pregnancy [RP_DATE:DD.MM.YYYY],
+// (3) дата/время в прозе последних сообщений. Иначе null → телефон берёт реальное.
+const RP_DATE_RE = /\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?\s*\]/i;
 
-// Полный парсинг RP-даты → {day, month, year, hours?, minutes?, label}
-// Возвращает null если RP_DATE нет в чате
+// Русские месяцы (стемы, от специфичного к общему — «мар» до «ма»)
+const RU_MONTHS = [
+    ['декабр', 12], ['ноябр', 11], ['октябр', 10], ['сентябр', 9], ['август', 8],
+    ['июл', 7], ['июн', 6], ['апрел', 4], ['март', 3], ['феврал', 2], ['январ', 1], ['мая', 5], ['май', 5],
+];
+const EN_MONTHS = [
+    ['jan', 1], ['feb', 2], ['mar', 3], ['apr', 4], ['may', 5], ['jun', 6],
+    ['jul', 7], ['aug', 8], ['sep', 9], ['oct', 10], ['nov', 11], ['dec', 12],
+];
+
+// Толерантный парс даты+времени из произвольного текста. Возвращает
+// {day,month,year,hours?,minutes?} или null.
+function parseAnyDateTime(text) {
+    if (!text) return null;
+    const t = String(text);
+    let day = null, month = null, year = null, hours, minutes;
+
+    // Время HH:MM (24ч) — первое вхождение
+    const tm = t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+    if (tm) { hours = parseInt(tm[1]); minutes = parseInt(tm[2]); }
+
+    // 1) [RP_DATE:DD.MM.YYYY]
+    let m = t.match(RP_DATE_RE);
+    if (m) {
+        day = parseInt(m[1]); month = parseInt(m[2]); year = parseInt(m[3]);
+        if (m[4] !== undefined) { hours = parseInt(m[4]); minutes = parseInt(m[5]); }
+    }
+    // 2) Именованный месяц: «15 января 2025» / «January 15, 2025» / «15 January 2025»
+    if (day === null) {
+        const low = t.toLowerCase();
+        const findMonth = () => {
+            for (const [stem, num] of [...RU_MONTHS, ...EN_MONTHS]) {
+                const idx = low.indexOf(stem);
+                if (idx !== -1) return { stem, num, idx };
+            }
+            return null;
+        };
+        const mo = findMonth();
+        if (mo) {
+            month = mo.num;
+            // день рядом с месяцем (до или после, в пределах ~12 симв.)
+            const around = low.slice(Math.max(0, mo.idx - 12), mo.idx + mo.stem.length + 12);
+            const dMatch = around.match(/\b(\d{1,2})\b/);
+            if (dMatch) day = parseInt(dMatch[1]);
+            // год — 4 цифры где-то в тексте
+            const yMatch = low.match(/\b(19|20)\d{2}\b/);
+            if (yMatch) year = parseInt(yMatch[0]);
+        }
+    }
+    // 3) Числовая дата DD.MM.YYYY / DD/MM/YYYY / YYYY-MM-DD
+    if (day === null) {
+        let dm = t.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/); // ISO
+        if (dm) { year = parseInt(dm[1]); month = parseInt(dm[2]); day = parseInt(dm[3]); }
+        else {
+            dm = t.match(/\b(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})\b/);
+            if (dm) { day = parseInt(dm[1]); month = parseInt(dm[2]); year = parseInt(dm[3]); }
+        }
+    }
+
+    if (day === null && hours === undefined) return null; // ничего не нашли
+    if (year !== null && year !== undefined && year < 100) year += 2000;
+    // Валидация
+    if (day !== null && (day < 1 || day > 31)) day = null;
+    if (month !== null && (month < 1 || month > 12)) month = null;
+    if (day === null || month === null || year === null) {
+        // Есть только время — вернём его (день недели/дата с реального времени)
+        if (hours === undefined) return null;
+        const now = new Date();
+        day = now.getDate(); month = now.getMonth() + 1; year = now.getFullYear();
+        const res = { day, month, year, hours, minutes, label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`, timeOnly: true };
+        return res;
+    }
+    const res = {
+        day, month, year,
+        label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`,
+    };
+    if (hours !== undefined) { res.hours = hours; res.minutes = minutes; }
+    return res;
+}
+
+// Собрать текст инжектов календаря (rp-calendar и подобные) из реестра
+// extension_prompts. Ключей календаря мы не знаем — берём ВСЕ инжекты, где
+// есть слова про дату/время/календарь, чтобы не тащить лишнее.
+function calendarInjectText() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const eps = ctx?.extensionPrompts || {};
+        const chunks = [];
+        for (const key of Object.keys(eps)) {
+            const val = eps[key]?.value;
+            if (typeof val !== 'string' || !val) continue;
+            const k = key.toLowerCase();
+            const looksCalendar = /calendar|date|time|день|дата|время|clock/i.test(k)
+                || /\b\d{1,2}:\d{2}\b/.test(val) && /(date|дата|day|день|month|месяц|year|год)/i.test(val);
+            if (looksCalendar) chunks.push(val);
+        }
+        return chunks.join('\n');
+    } catch (e) { return ''; }
+}
+
+// Полный парсинг RP-даты/времени. Лёгкий кэш по сигнатуре (длина чата + первые
+// символы календарь-инжекта), чтобы не парсить на каждый tick.
 let _rpDateCache = null;
-let _rpDateCacheLen = -1;
+let _rpDateSig = null;
 export function getRpDateTime() {
     try {
         const chat = SillyTavern.getContext()?.chat || [];
-        // Простой кэш: пересчитываем только если длина чата изменилась
-        if (chat.length === _rpDateCacheLen && _rpDateCache !== undefined) return _rpDateCache;
-        _rpDateCacheLen = chat.length;
-        for (let i = chat.length - 1; i >= 0; i--) {
-            const mes = chat[i]?.mes;
-            if (!mes || chat[i].is_system) continue;
-            const m = mes.match(RP_DATE_RE);
-            if (m) {
-                const day = parseInt(m[1]);
-                const month = parseInt(m[2]);
-                let year = parseInt(m[3]);
-                if (year < 100) year += 2000;
-                const result = {
-                    day, month, year,
-                    label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`,
-                };
-                if (m[4] !== undefined && m[5] !== undefined) {
-                    result.hours = parseInt(m[4]);
-                    result.minutes = parseInt(m[5]);
-                }
-                _rpDateCache = result;
-                return result;
+        const calText = calendarInjectText();
+        const sig = `${chat.length}|${calText.slice(0, 200)}|${chat.length ? (chat[chat.length - 1]?.mes || '').slice(-80) : ''}`;
+        if (sig === _rpDateSig) return _rpDateCache;
+        _rpDateSig = sig;
+
+        // 1) Инжект календаря
+        let res = parseAnyDateTime(calText);
+        // 2) Тег/проза в последних сообщениях (Pregnancy RP_DATE или дата в тексте)
+        if (!res) {
+            for (let i = chat.length - 1; i >= 0 && i >= chat.length - 8; i--) {
+                const mes = chat[i]?.mes;
+                if (!mes || chat[i].is_system) continue;
+                const r = parseAnyDateTime(mes);
+                if (r && !r.timeOnly) { res = r; break; }
+                if (r && !res) res = r; // time-only — запомним, но ищем дальше полную дату
             }
         }
-        _rpDateCache = null;
-    } catch (e) { _rpDateCache = null; }
-    return null;
+        _rpDateCache = res || null;
+        return _rpDateCache;
+    } catch (e) { _rpDateCache = null; return null; }
 }
 
 // Обратная совместимость: label «ДД.ММ»
@@ -467,7 +609,6 @@ export function scanChat() {
                 // Явные теги = наш протокол, модель ставит их осознанно — доверяем.
                 // Единственное исключение: тег явно адресован боту (j.to = имя бота).
                 if (j.to && !msg.is_user && keyOf(j.to) === keyOf(msg.name)) {
-                    console.log(`[GlassPhone] Пропущено: смс адресовано боту (${j.to})`);
                     continue;
                 }
                 const entry = { dir: 'in', from: String(j.from), text: String(j.text || ''), idx: i, time };
@@ -494,7 +635,6 @@ export function scanChat() {
                 const charName = msg.name || null;
                 if (charName && !contacts.has(keyOf(charName))) {
                     addContact(charName, proseNum, 'prose');
-                    console.log(`[GlassPhone] Номер подхвачен из прозы: ${charName} → ${proseNum}`);
                 }
             }
         }
@@ -551,7 +691,7 @@ export function getThreadList() {
         const isGroup = k.startsWith('group:');
         list.push({
             key: k,
-            name: (g && g.name) || (c && c.name) || (t && t.name) || k,
+            name: displayName(k, (g && g.name) || (c && c.name) || (t && t.name) || k),
             number: (c && c.number) || '',
             isGroup,
             members: g ? g.members : (isGroup ? [...new Set(msgs.filter(m => m.from).map(m => m.from))] : []),

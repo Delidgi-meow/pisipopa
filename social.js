@@ -22,7 +22,7 @@
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames } from '../../../extensions.js';
-import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName } from './state.js';
+import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName } from './state.js';
 
 const MAX_TWEETS = 50;
 const MAX_IG_POSTS = 30;
@@ -121,8 +121,11 @@ export function mainCharName() {
 }
 
 // authorKey: 'user' | 'contact:<key>' | 'random'
+// Толерантно к @: автор может прийти как «Вадим» ИЛИ «@vadim» — матчим по имени
+// И по нику контакта (иначе пост от @ника не тянул реф персонажа).
 export function resolveAuthorKey(name) {
-    const k = keyOf(name);
+    const raw = stripHandle(name);          // «@vadim» → «vadim»
+    const k = keyOf(raw);
     if (!k) return 'random';
     try {
         const { contacts } = scanChat();
@@ -130,6 +133,15 @@ export function resolveAuthorKey(name) {
         // Главный персонаж чата = контакт по умолчанию
         const mc = mainCharName();
         if (mc && keyOf(mc) === k) return `contact:${k}`;
+        // Матч по нику контакта: перебираем известные хэндлы
+        const m = getMeta();
+        for (const ckey of Object.keys(m.handles || {})) {
+            if (keyOf(stripHandle(m.handles[ckey])) === k) return `contact:${ckey}`;
+        }
+        // Ник главного персонажа / контактов по авто-нику
+        for (const c of contacts.values()) {
+            if (keyOf(stripHandle(makeHandle(c.name))) === k) return `contact:${keyOf(c.name)}`;
+        }
     } catch (e) { /* ignore */ }
     return 'random';
 }
@@ -432,6 +444,7 @@ ${wantDesc
     if (!Array.isArray(post.comments)) post.comments = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         if (post.comments.length >= MAX_COMMENTS) break;
         const tip = Math.max(0, Math.min(500, parseInt(it.tip) || 0));
         post.comments.push({
@@ -544,7 +557,6 @@ async function currentApiVision(prompt, image, maxTokens = 1024) {
         }, {}, true);
 
         const out = cleanGenOutput(res?.content ?? '');
-        if (out) console.log(`[GlassPhone] vision: прямой запрос текущим API ок (модель ${model}, фото ~${Math.round(dataUrl.length / 1366)}KB)`);
         return out || null;
     } catch (e) {
         console.warn('[GlassPhone] currentApiVision failed:', e);
@@ -639,7 +651,6 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
                 const dataUrl = await toDataUrl(image);
                 if (dataUrl) {
                     content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
-                    console.log(`[GlassPhone] vision: фото приложено к запросу (~${Math.round(dataUrl.length / 1366)}KB)`);
                 } else {
                     console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
                 }
@@ -741,7 +752,6 @@ async function _describePostImageInner(post) {
     if (!desc) return false;
     post.imgDesc = desc;
     saveMeta();
-    console.log(`[GlassPhone] Фото автоописано: "${desc}"`);
     return true;
 }
 
@@ -773,7 +783,6 @@ Reply rules: 1-5 short messages in the character's own texting voice, in-charact
                 text: String(r.text).slice(0, 500),
             })).slice(0, 5)
             : [];
-        console.log(`[GlassPhone] смс-фото: описание+ответ одним запросом (desc ${desc.length} симв., ответов ${replies.length})`);
         return { desc, replies };
     } catch (e) {
         console.warn('[GlassPhone] generateSmsPhotoReply failed:', e);
@@ -902,7 +911,8 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     return block;
 }
 
-const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.`;
+const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.
+CRITICAL — "author" is ALWAYS the person's real DISPLAY NAME (e.g. «Вадим Огнев», «Алиса»), NEVER an @handle/nickname. The @handle belongs ONLY in the separate "handle" field. For known characters use their EXACT name as listed above so the app links them correctly.`;
 
 export async function generateTweetFeed() {
     // Последние твиты юзера — боты могут их цитировать (quote tweet)
@@ -931,6 +941,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
@@ -972,6 +983,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
     if (!Array.isArray(tweet.replies)) tweet.replies = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         if (tweet.replies.length >= MAX_COMMENTS) break;
         tweet.replies.push({
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
@@ -1052,6 +1064,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || (!it.photo && !it.caption)) continue;
+        if (isBanned(it.author, it.handle)) continue;
         s.igPosts.unshift({
             id: genId(), author: String(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
@@ -1102,7 +1115,6 @@ ${formatLine}`;
             const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
             if (desc) {
                 post.imgDesc = desc;
-                console.log(`[GlassPhone] Комбо: описание фото получено вместе с комментами (${desc.length} симв.)`);
             }
             parsed = obj.comments;
         }
@@ -1115,6 +1127,7 @@ ${formatLine}`;
     if (!Array.isArray(post.comments)) post.comments = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         if (post.comments.length >= MAX_COMMENTS) break;
         post.comments.push({
             id: genId(), author: String(it.author),
@@ -1264,8 +1277,6 @@ async function loadImageExt() {
             if (mod) break;
         }
     }
-    if (mod) console.log(`[GlassPhone] картинко-расширение: ${mod.folder}${override ? '' : ' (авто)'}`);
-    else console.log('[GlassPhone] картинко-расширение не найдено (нет novarakk-подобного с src/pipeline.js)');
     _imgExt = { key, mod };
     return mod;
 }
@@ -1482,7 +1493,6 @@ export async function logSocialToChat(text, image = null) {
             extra: imgSrc ? { image: imgSrc, inline_image: true } : {},
         });
         if (typeof ctx.saveChat === 'function') await ctx.saveChat();
-        console.log(`[GlassPhone] Журнал → чат${imgSrc ? ' (с фото)' : ''}: ${String(text).slice(0, 80)}`);
     } catch (e) {
         console.warn('[GlassPhone] logSocialToChat failed:', e);
     }

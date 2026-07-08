@@ -10,6 +10,7 @@
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 import { getSettings, getMeta, scanChat, EXT_NAME } from './state.js';
 import { getSocialActivitySummary } from './social.js';
+import { getBankSummaryLine, bankInjectRule } from './bank.js';
 
 const CHAT_KEY = EXT_NAME;
 const SYS_KEY = EXT_NAME + '_sys';
@@ -44,6 +45,12 @@ function buildPrompt() {
         let socialC = '';
         try { socialC = getSocialActivitySummary(); } catch (e) { /* ignore */ }
         if (socialC) c += `\n[{{user}}'S RECENT SOCIAL ACTIVITY — characters who follow her may react:]\n${socialC}\n`;
+        try {
+            const bankRule = bankInjectRule();
+            if (bankRule) c += `\n${bankRule}\n`;
+            const bankSum = getBankSummaryLine();
+            if (bankSum) c += `${bankSum}\n`;
+        } catch (e) { /* ignore */ }
         c += `</phone_directive>`;
         return c;
     }
@@ -79,6 +86,16 @@ function buildPrompt() {
     if (social) {
         p += `\n[{{user}}'S RECENT SOCIAL MEDIA ACTIVITY] Characters who follow her (friends, contacts) may have seen these and can react naturally in the story or in comments:\n${social}\n`;
     }
+
+    // Банк — правило + сводка ТОЛЬКО если приложение реально используется (иначе 0 токенов)
+    try {
+        const bankRule = bankInjectRule();
+        if (bankRule) {
+            p += `\n${bankRule}\n`;
+            const bankSum = getBankSummaryLine();
+            if (bankSum) p += `[{{user}}'S FINANCES] ${bankSum}\n`;
+        }
+    } catch (e) { /* ignore */ }
     p += `\n`;
 
     p += `[FORMAT RULES — critical]\n`;
@@ -102,11 +119,11 @@ export function updatePhoneInjection() {
 
         if (!s.isEnabled || !s.injectPrompt) return;
 
+        // ОДНА инжекция: IN_CHAT depth-0 роль USER (Клод надёжно выполняет инструкции
+        // из последнего user-хода). Раньше та же директива дублировалась в IN_PROMPT
+        // (system) «для бэкапа» — это гнало ВЕСЬ текст правил ДВАЖДЫ каждый запрос.
         const prompt = buildPrompt();
         const depth = s.injectDepth || 0;
         setExtensionPrompt(CHAT_KEY, prompt, extension_prompt_types.IN_CHAT, depth, false, extension_prompt_roles.USER);
-        setExtensionPrompt(SYS_KEY, prompt, extension_prompt_types.IN_PROMPT, depth);
-    } catch (e) {
-        console.error('[GlassPhone] updatePhoneInjection error:', e);
-    }
+    } catch (e) { /* тихо: инжект не критичен */ }
 }

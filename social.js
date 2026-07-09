@@ -1,25 +1,33 @@
 // ═══════════════════════════════════════════
-// GLASSPHONE SOCIAL — Twitter и Instagram
+// SOCIAL — Twitter, Instagram, OnlyFans
 //
-// В отличие от смс (чат = источник правды), лента соцсетей — генерируемый контент.
-// Хранится per-chat в chat_metadata.glassphone.social (переживает перезагрузку,
-// не утекает между чатами).
+// Ленты хранятся per-chat в chat_metadata.glassphone.social.
 //
-// Генерация — через generateQuietPrompt ОСНОВНОГО API (модель уже видит весь чат
-// и нашу инжекцию, отдельный Connection Profile не нужен — главный фейл MellowPhone).
+// Генерация изолирована от RP-пресета, три пути (socialGen):
+//  1) профиль подключения (socialProfileId) → ConnectionManagerRequestService,
+//     includePreset:false — сюда можно поставить дешёвую модель
+//  2) есть фото, профиля нет → currentApiVision: прямой мультимодальный запрос
+//     текущим подключением через ChatCompletionService (мимо пресета и инлайнинг-
+//     проверок ST)
+//  3) generateRaw — текущий API без пресета и истории (текст)
+// RP-контекст подмешивается вручную: taskHeader (карточка+персона+лорбук+срез чата).
 //
 // Синхронизация с РП:
-//  • из чата: теги <!--tel:tweet:{...}--> / <!--tel:insta:{...}--> — персонаж
-//    «постит» из ролевой, пост появляется в ленте (harvestSocialTags, дедуп по хэшу)
-//  • в чат: последние посты юзера идут в инжекцию — персонажи могут реагировать
+//  • из чата: теги tel:tweet / tel:insta — персонаж постит из ролевой
+//  • в чат: журнал (logSocialToChat) — посты и ветки юзера пишутся скрытыми
+//    строками в историю (с фото в extra.image), модель видит их по месту,
+//    саммарайзер забирает; инжект-сводка при включённом журнале — только кошелёк
 // ═══════════════════════════════════════════
 
-import { generateRaw } from '../../../../script.js';
-import { getMeta, saveMeta, keyOf, scanChat, getSettings } from './state.js';
+import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
+import { saveBase64AsFile } from '../../../utils.js';
+import { extensionNames, extension_settings } from '../../../extensions.js';
+import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName } from './state.js';
 
 const MAX_TWEETS = 50;
 const MAX_IG_POSTS = 30;
 const MAX_COMMENTS = 14;
+const MAX_OF_POSTS = 30;
 
 // ── Хранилище ──
 export function getSocial() {
@@ -28,11 +36,16 @@ export function getSocial() {
     const s = m.social;
     if (!Array.isArray(s.tweets)) s.tweets = [];
     if (!Array.isArray(s.igPosts)) s.igPosts = [];
+    if (!Array.isArray(s.ofPosts)) s.ofPosts = [];
+    if (typeof s.ofSubs !== 'number') s.ofSubs = 12 + Math.floor(Math.random() * 40);
+    if (typeof s.ofEarned !== 'number') s.ofEarned = 0;
+    if (typeof s.ofWallet !== 'number') s.ofWallet = 0; // выведено на карту (доступно в РП)
     if (!Array.isArray(s.seenTags)) s.seenTags = [];
     return s;
 }
 export function getTweets() { return getSocial().tweets; }
 export function getIgPosts() { return getSocial().igPosts; }
+export function getOfPosts() { return getSocial().ofPosts; }
 
 export function genId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -62,6 +75,35 @@ export function makeHandle(name) {
     return '@' + String(name || '').toLowerCase().replace(/\s+/g, '_').replace(/[^a-zа-яё0-9_]/gi, '').slice(0, 15) || '@user';
 }
 
+// ── Ники (@handle) с per-chat оверрайдами: юзер задаёт свои, чтобы модель не путалась ──
+export function handleFor(ak, name) {
+    const m = getMeta();
+    if (ak === 'user') {
+        return m.userHandle || makeHandle(getUserName());
+    }
+    if (typeof ak === 'string' && ak.startsWith('contact:')) {
+        const custom = m.handles[ak.slice(8)];
+        if (custom) return custom.startsWith('@') ? custom : '@' + custom;
+    }
+    return makeHandle(name);
+}
+export function setContactHandle(key, handle) {
+    const m = getMeta();
+    const h = String(handle || '').trim().replace(/^@+/, '');
+    if (h) m.handles[key] = '@' + h.slice(0, 20);
+    else delete m.handles[key];
+    saveMeta();
+}
+export function setUserHandle(handle) {
+    const m = getMeta();
+    const h = String(handle || '').trim().replace(/^@+/, '');
+    m.userHandle = h ? '@' + h.slice(0, 20) : '';
+    saveMeta();
+}
+export function getUserHandle() {
+    return getMeta().userHandle || makeHandle(getUserName());
+}
+
 export function timeAgo(ts) {
     if (!ts) return '';
     const mins = Math.floor((Date.now() - ts) / 60000);
@@ -72,13 +114,34 @@ export function timeAgo(ts) {
     return `${Math.floor(hrs / 24)}д`;
 }
 
+// Имя главного персонажа чата (name2) — он ВСЕГДА известное лицо для соцсетей,
+// даже без явного tel:contact тега (иначе бот не мог комментить/иметь аватар/реф).
+export function mainCharName() {
+    try { return SillyTavern.getContext()?.name2 || ''; } catch (e) { return ''; }
+}
+
 // authorKey: 'user' | 'contact:<key>' | 'random'
+// Толерантно к @: автор может прийти как «Вадим» ИЛИ «@vadim» — матчим по имени
+// И по нику контакта (иначе пост от @ника не тянул реф персонажа).
 export function resolveAuthorKey(name) {
-    const k = keyOf(name);
+    const raw = stripHandle(name);          // «@vadim» → «vadim»
+    const k = keyOf(raw);
     if (!k) return 'random';
     try {
         const { contacts } = scanChat();
         if (contacts.has(k)) return `contact:${k}`;
+        // Главный персонаж чата = контакт по умолчанию
+        const mc = mainCharName();
+        if (mc && keyOf(mc) === k) return `contact:${k}`;
+        // Матч по нику контакта: перебираем известные хэндлы
+        const m = getMeta();
+        for (const ckey of Object.keys(m.handles || {})) {
+            if (keyOf(stripHandle(m.handles[ckey])) === k) return `contact:${ckey}`;
+        }
+        // Ник главного персонажа / контактов по авто-нику
+        for (const c of contacts.values()) {
+            if (keyOf(stripHandle(makeHandle(c.name))) === k) return `contact:${keyOf(c.name)}`;
+        }
     } catch (e) { /* ignore */ }
     return 'random';
 }
@@ -98,7 +161,8 @@ export function harvestSocialTags() {
 
     for (const msg of chat) {
         if (!msg || !msg.mes || msg.is_system || msg.is_user) continue;
-        const text = msg.mes;
+        // Теги в CoT-блоках не считаются (иначе дубли постов)
+        const text = stripThink(msg.mes);
 
         TW_TAG_RE.lastIndex = 0;
         let m;
@@ -161,7 +225,7 @@ function trimFeeds(s) {
 export function postTweet(text) {
     const s = getSocial();
     s.tweets.unshift({
-        id: genId(), author: getUserName(), handle: makeHandle(getUserName()), ak: 'user',
+        id: genId(), author: getUserName(), handle: getUserHandle(), ak: 'user',
         text: String(text).slice(0, 280), time: Date.now(),
         likes: 0, liked: false, rts: 0, replies: [],
     });
@@ -196,7 +260,7 @@ export function addTweetReply(tweetId, text, author = null, ak = 'user', replyTo
     if (!Array.isArray(t.replies)) t.replies = [];
     const r = {
         id: genId(), author: author || getUserName(),
-        handle: makeHandle(author || getUserName()), ak,
+        handle: handleFor(ak, author || getUserName()), ak,
         text: String(text).slice(0, 280), time: Date.now(),
     };
     if (replyTo) r.replyTo = { id: replyTo.id, author: replyTo.author };
@@ -261,25 +325,154 @@ export function delIgComment(postId, commentId) {
     saveMeta();
 }
 
-// ═══ Генерация через основной API ═══
+// ═══ OnlyFans: контент юзера, фанаты, чаевые ═══
 
-// ВАЖНО: генерация соцсетей ИЗОЛИРОВАНА от RP-пресета. Раньше шла через
-// generateQuietPrompt (полный контекст чата + пресет) — тяжёлые CoT-пресеты
-// с префиллом <think> «съедали» задачу и модель отвечала ходом ролевой
-// (смс-теги вместо твита). Теперь два пути:
-//  1) Выбран профиль подключения → ConnectionManagerRequestService с
-//     includePreset:false (плюс поддержка вижна через multimodal content).
-//  2) Иначе → generateRaw: ТЕКУЩИЙ API, но без пресета и без истории чата.
-// RP-контекст в обоих случаях подмешиваем сами, компактным блоком.
+export function postOf({ image = null, imgDesc = '', caption = '', price = 0 }) {
+    const s = getSocial();
+    const post = {
+        id: genId(), author: getUserName(), ak: 'user', kind: 'of',
+        image, imgDesc: String(imgDesc).slice(0, 200), caption: String(caption).slice(0, 400),
+        price: Math.max(0, parseInt(price) || 0),
+        time: Date.now(), likes: 0, liked: false, tips: 0, comments: [],
+    };
+    s.ofPosts.unshift(post);
+    if (s.ofPosts.length > MAX_OF_POSTS) s.ofPosts = s.ofPosts.slice(0, MAX_OF_POSTS);
+    saveMeta();
+    return post;
+}
+
+export function likeOf(id) {
+    const p = getOfPosts().find(x => x.id === id);
+    if (!p) return;
+    p.liked = !p.liked;
+    p.likes = Math.max(0, (p.likes || 0) + (p.liked ? 1 : -1));
+    saveMeta();
+}
+
+export function delOf(id) {
+    const s = getSocial();
+    s.ofPosts = s.ofPosts.filter(x => x.id !== id);
+    saveMeta();
+}
+
+export function addOfComment(postId, text, author = null, ak = 'user', tip = 0) {
+    const p = getOfPosts().find(x => x.id === postId);
+    if (!p) return null;
+    if (!Array.isArray(p.comments)) p.comments = [];
+    const c = {
+        id: genId(), author: author || getUserName(), ak,
+        text: String(text).slice(0, 300), time: Date.now(),
+    };
+    if (tip > 0) c.tip = tip;
+    p.comments.push(c);
+    if (p.comments.length > MAX_COMMENTS) p.comments = p.comments.slice(-MAX_COMMENTS);
+    saveMeta();
+    return c;
+}
+
+// Вывод заработка на карту: баланс становится «живыми деньгами» юзера в РП
+// (уходит в инжекцию — модель знает, что деньги у неё есть, но не знает источник)
+export function withdrawOf() {
+    const s = getSocial();
+    const amount = s.ofEarned;
+    if (amount <= 0) return 0;
+    s.ofWallet += amount;
+    s.ofEarned = 0;
+    saveMeta();
+    return amount;
+}
+export function setOfWallet(v) {
+    const s = getSocial();
+    s.ofWallet = Math.max(0, parseInt(v) || 0);
+    saveMeta();
+}
+
+export function delOfComment(postId, commentId) {
+    const p = getOfPosts().find(x => x.id === postId);
+    if (!p || !Array.isArray(p.comments)) return;
+    p.comments = p.comments.filter(c => c.id !== commentId);
+    saveMeta();
+}
+
+// Реакции фанатов: комменты + чаевые + прирост подписчиков
+export async function generateOfComments(post) {
+    const s = getSocial();
+    const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);
+    const wantDesc = willAttach && !post.imgDesc;
+    const photoLine = willAttach
+        ? `The actual photo is ATTACHED — react to what you SEE.${post.imgDesc ? ` (fallback description: ${post.imgDesc})` : ''}`
+        : `Photo (description): ${post.imgDesc || '(no description)'}`;
+    const existing = (post.comments || []).map(c => `${c.author}: ${c.text}`).join('\n');
+
+    // Имена известных персонажей — ТОЛЬКО как запрет (страница приватная!)
+    let knownNames = [];
+    try { knownNames = [...scanChat().contacts.values()].map(c => c.name); } catch (e) { /* ignore */ }
+
+    const prompt = `${await taskHeader(`generate fan reactions under a post on ${getUserName()}'s OnlyFans-like page.`)}
+${getUserName()} posted on her PRIVATE paid subscription page (${s.ofSubs} subscribers). ${photoLine}
+Caption: "${post.caption || '(none)'}"${post.price > 0 ? `\nPay-per-view price: $${post.price}` : ''}
+${existing ? `Existing comments (do not repeat):\n${existing}\n` : ''}
+PRIVACY — CRITICAL: this page is anonymous and subscribers are STRANGERS. ${knownNames.length ? `The following roleplay characters must NOT appear in comments and their names must NOT be used for fan accounts: ${knownNames.join(', ')}. ` : ''}A known character may appear ONLY IF the roleplay excerpt above EXPLICITLY shows that this character knows about / subscribes to her page. No guesses, no "plausible" — when in doubt: random fans ONLY.
+
+Generate 4-7 comments from her SUBSCRIBERS: invented fan accounts (simps, regulars, big tippers, shy lurkers who finally commented). Thirsty but human; vary tone.
+Some commenters tip: add "tip": dollar amount (5-200) to 1-3 comments.
+Max 200 chars each. NO emojis. Match the explicitness of the roleplay excerpt — do not sanitize, do not escalate beyond it.
+${JSON_RULES}
+${wantDesc
+        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph","comments":[{"author":"ник","text":"...","type":"random","tip":0},...]}`
+        : `Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`}`;
+
+    const rawOf = await socialGen(prompt, {
+        maxTokens: wantDesc ? 2048 : 1536,
+        image: willAttach ? post.image : null,
+        prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
+    });
+    let parsed;
+    if (wantDesc) {
+        const obj = parseJsonObject(rawOf);
+        if (obj) {
+            const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+            if (desc) post.imgDesc = desc;
+            parsed = obj.comments;
+        }
+        if (!Array.isArray(parsed)) parsed = parseJsonArray(rawOf);
+    } else {
+        parsed = parseJsonArray(rawOf);
+    }
+    if (!Array.isArray(parsed)) return 0;
+    let added = 0, tipsTotal = 0;
+    if (!Array.isArray(post.comments)) post.comments = [];
+    for (const it of parsed) {
+        if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
+        if (post.comments.length >= MAX_COMMENTS) break;
+        const tip = Math.max(0, Math.min(500, parseInt(it.tip) || 0));
+        post.comments.push({
+            id: genId(), author: String(it.author),
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            text: String(it.text).slice(0, 300), time: Date.now() - Math.floor(Math.random() * 600000),
+            ...(tip > 0 ? { tip } : {}),
+        });
+        tipsTotal += tip;
+        added++;
+    }
+    post.likes = Math.max(post.likes || 0, Math.floor(Math.random() * 30) + post.comments.length * 2 + Math.floor(s.ofSubs / 4));
+    post.tips = (post.tips || 0) + tipsTotal;
+    s.ofEarned += tipsTotal + (post.price > 0 ? post.price * (2 + Math.floor(Math.random() * 6)) : 0);
+    s.ofSubs += Math.floor(Math.random() * 5);
+    saveMeta();
+    return added;
+}
+
+// ═══ Генерация через основной API ═══
 
 function cleanGenOutput(raw) {
     let t = String(raw || '');
+    // Закрытые think-блоки — вырезаем целиком
     t = t.replace(/<(think|thinking|reasoning|analysis)[^>]*>[\s\S]*?<\/\1>/gi, '');
-    t = t.replace(/<(think|thinking|reasoning)[^>]*>[\s\S]*/gi, (m) => {
-        // незакрытый think без ответа после — выкидываем целиком
-        const close = m.match(/<\/(think|thinking|reasoning)>/i);
-        return close ? m.slice(m.indexOf(close[0]) + close[0].length) : '';
-    });
+    // Незакрытый <think> — обычно префилл пресета (актуально для quiet-пути):
+    // убираем маркер, содержимое ОСТАВЛЯЕМ — там и есть ответ
+    t = t.replace(/<\/?(think|thinking|reasoning|analysis)[^>]*>/gi, '');
     return t.trim();
 }
 
@@ -303,30 +496,311 @@ export function rpContextBlock(count = 12) {
     } catch (e) { return ''; }
 }
 
-async function socialGen(prompt, { maxTokens = 1024, image = null } = {}) {
+// Любой источник картинки → dataURL (бэкенды вижна не умеют относительные пути
+// вроде /user/images/... — картинки, сгенерированные novarakk, хранятся файлами)
+async function toDataUrl(src) {
+    const s = String(src || '');
+    if (!s) return null;
+    if (s.startsWith('data:')) return s;
+    try {
+        const resp = await fetch(s);
+        if (!resp.ok) return null;
+        const blob = await resp.blob();
+        return await new Promise((resolve) => {
+            const r = new FileReader();
+            r.onloadend = () => resolve(String(r.result));
+            r.onerror = () => resolve(null);
+            r.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.warn('[GlassPhone] toDataUrl failed:', e);
+        return null;
+    }
+}
+
+// ── Прямой мультимодальный запрос ТЕКУЩИМ подключением (без профиля, без пресета) ──
+// Зачем: generateQuietPrompt с quietImage зависит от ST-настройки «Send inline images»
+// и allowlist моделей — картинка молча выбрасывалась. Здесь мы бьём в бэкенд напрямую
+// через ChatCompletionService с настройками текущего подключения — прокси сам решает,
+// умеет ли модель вижн.
+async function currentApiVision(prompt, image, maxTokens = 1024) {
+    try {
+        const ctx = SillyTavern.getContext();
+        if (ctx?.mainApi !== 'openai') return null; // только chat completion
+        const svc = ctx.ChatCompletionService;
+        if (!svc || typeof svc.processRequest !== 'function') return null;
+        const oai = ctx.chatCompletionSettings || {};
+        let model = '';
+        try {
+            const oaiMod = await import('../../../openai.js');
+            if (typeof oaiMod.getChatCompletionModel === 'function') model = oaiMod.getChatCompletionModel();
+        } catch (e) { /* ignore */ }
+        if (!model) model = oai.custom_model || oai.openai_model || '';
+        const dataUrl = await toDataUrl(image);
+        if (!dataUrl) return null;
+
+        const res = await svc.processRequest({
+            stream: false,
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: prompt },
+                    { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } },
+                ],
+            }],
+            max_tokens: maxTokens,
+            model,
+            chat_completion_source: oai.chat_completion_source,
+            custom_url: oai.custom_url,
+            reverse_proxy: oai.reverse_proxy,
+            proxy_password: oai.proxy_password,
+        }, {}, true);
+
+        const out = cleanGenOutput(res?.content ?? '');
+        return out || null;
+    } catch (e) {
+        console.warn('[GlassPhone] currentApiVision failed:', e);
+        return null;
+    }
+}
+
+// ── Корневая причина ошибки: ConnectionManagerRequestService заворачивает всё
+// в Error('API request failed', {cause}) — разворачиваем цепочку до сути.
+export function rootErrorMessage(e) {
+    let cur = e, msg = '', depth = 0;
+    while (cur && depth < 6) {
+        msg = String(cur?.message || cur) || msg;
+        cur = cur?.cause;
+        depth++;
+    }
+    return msg;
+}
+
+// ── Префилл (опция): начало ответа пишется «за модель» через инструкцию —
+// не зависит от API/пресета/модели. JSON стартует сразу, без преамбул и отказов.
+const PREAMBLES = [
+    'Sure.', 'Sure,', 'Okay.', 'Okay,', 'Understood.', 'Understood,',
+    'Here is the result:', "Here's the result:", 'Here is the output:',
+    "Here's the output:", 'The result is:', 'Конечно.', 'Хорошо.', 'Вот результат:',
+];
+
+function removeCommonPreamble(text) {
+    let out = String(text || '').trimStart();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const phrase of PREAMBLES) {
+            if (out.toLowerCase().startsWith(phrase.toLowerCase())) {
+                out = out.slice(phrase.length).trimStart();
+                changed = true;
+            }
+        }
+    }
+    return out;
+}
+
+function removeRepeatedPrefill(text, prefill) {
+    const normalizedText = String(text || '').trimStart();
+    const normalizedPrefill = String(prefill || '').trim();
+    if (!normalizedPrefill) return text;
+    if (normalizedText.startsWith(normalizedPrefill)) {
+        return normalizedText.slice(normalizedPrefill.length).trimStart();
+    }
+    return text;
+}
+
+function prefillSuffix(prefill) {
+    return `
+
+You must continue the text after the prefix below.
+Do not repeat the prefix.
+Do not explain.
+Do not add markdown unless the task requires it.
+Return only the continuation.
+
+Prefix:
+${prefill}`;
+}
+
+// prefill: строка-начало ответа (учитывается только при включённой опции).
+// Возвращается ВСЕГДА prefill+продолжение — JSON-парсеры получают полный текст.
+async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' } = {}) {
     const st = getSettings();
     const profileId = st.socialProfileId;
+    // Пол длины ответа (если модель рвёт JSON из-за лимита — юзер поднимает)
+    const floor = parseInt(st.socialMaxTokens) || 0;
+    if (floor > 0) maxTokens = Math.max(maxTokens, floor);
+    const usePrefill = !!(st.usePrefill && prefill);
+    const finalPrompt = usePrefill ? String(prompt).trim() + prefillSuffix(prefill) : prompt;
+
+    const finish = (raw) => {
+        let out = cleanGenOutput(raw);
+        if (!usePrefill) return out;
+        out = removeCommonPreamble(out);
+        out = removeRepeatedPrefill(out, prefill);
+        return prefill + out;
+    };
 
     // Путь 1: отдельный профиль подключения (изоляция + вижн)
     if (profileId) {
         const ctx = SillyTavern.getContext();
         const svc = ctx?.ConnectionManagerRequestService;
         if (svc && typeof svc.sendRequest === 'function') {
-            const content = image
-                ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
-                : prompt;
-            const res = await svc.sendRequest(profileId, [{ role: 'user', content }], maxTokens, {
-                stream: false, extractData: true, includePreset: false, includeInstruct: false,
-            });
-            return cleanGenOutput(res?.content ?? '');
+            let content = finalPrompt;
+            if (image) {
+                const dataUrl = await toDataUrl(image);
+                if (dataUrl) {
+                    content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
+                } else {
+                    console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
+                }
+            }
+            try {
+                const res = await svc.sendRequest(profileId, [{ role: 'user', content }], maxTokens, {
+                    stream: false, extractData: true,
+                    includePreset: false, includeInstruct: false,
+                });
+                return finish(res?.content ?? '');
+            } catch (e) {
+                // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
+                const root = rootErrorMessage(e);
+                console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
+                throw new Error(`Профиль: ${root}`, { cause: e });
+            }
         }
         console.warn('[GlassPhone] ConnectionManagerRequestService недоступен — fallback на generateRaw');
     }
 
-    // Путь 2: текущий API, «сырая» генерация — без пресета и истории чата.
-    // (generateRaw не умеет картинки — для вижна выбери профиль в настройках.)
-    const res = await generateRaw({ prompt, responseLength: maxTokens });
-    return cleanGenOutput(res);
+    // Путь 2: есть картинка, профиля нет → прямой мультимодальный запрос текущим API
+    if (image) {
+        const vis = await currentApiVision(finalPrompt, image, maxTokens);
+        if (vis !== null) return usePrefill ? prefill + removeRepeatedPrefill(removeCommonPreamble(vis), prefill) : vis;
+        console.warn('[GlassPhone] vision: прямой канал не сработал — запрос уйдёт БЕЗ фото');
+    }
+    // Путь 3: текущий API, «сырая» генерация — без пресета и истории чата.
+    const res = await generateRaw({ prompt: finalPrompt, responseLength: maxTokens });
+    return finish(res);
+}
+
+// ── Проверка профиля из настроек: маленький запрос, наружу — реальная причина ──
+export async function testSocialProfile() {
+    const st = getSettings();
+    if (!st.socialProfileId) throw new Error('Профиль не выбран (стоит «Текущий API»)');
+    const ctx = SillyTavern.getContext();
+    const svc = ctx?.ConnectionManagerRequestService;
+    if (!svc || typeof svc.sendRequest !== 'function') throw new Error('ConnectionManagerRequestService недоступен (старый ST?)');
+    try {
+        const res = await svc.sendRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200, {
+            stream: false, extractData: true,
+            includePreset: false, includeInstruct: false,
+        });
+        const out = String(res?.content ?? '').trim();
+        if (!out) throw new Error('Пустой ответ (модель ответила, но контент не извлёкся)');
+        return out.slice(0, 80);
+    } catch (e) {
+        throw new Error(rootErrorMessage(e), { cause: e });
+    }
+}
+
+// ── Автоописание фото поста (вижн): заполняет imgDesc, если юзер его не написала.
+// Без описания персонажи в ОСНОВНОЙ ролевой не знают, что на фото (в инжекцию
+// картинку не приложишь) — поэтому описываем фото сами, один раз при публикации.
+// Пути: профиль соцсетей (чисто) ИЛИ фолбэк через generateQuietPrompt+quietImage
+// на основном API (может обрасти CoT-шумом — чистим). Так вижн работает ВСЕГДА.
+// In-flight дедуп: публикация и открытие поста могли запустить описание ПАРАЛЛЕЛЬНО
+// (двойной запрос к API). Один пост — один запрос, остальные ждут его же промис.
+const _describeInFlight = new Map();
+
+export async function describePostImage(post) {
+    if (!post?.image || post.imgDesc) return false;
+    if (_describeInFlight.has(post.id)) return _describeInFlight.get(post.id);
+    const p = _describePostImageInner(post).finally(() => _describeInFlight.delete(post.id));
+    _describeInFlight.set(post.id, p);
+    return p;
+}
+
+// Описать ЛЮБУЮ картинку вижном (цепочка только vision-каналов: профиль →
+// прямой запрос текущим API → quietImage; текстовый фолбэк запрещён —
+// описание «вслепую» = галлюцинация). Возвращает строку или ''.
+export async function describeImage(image) {
+    if (!image) return '';
+    const task = 'Describe this photo in detail in Russian: who/what is in the frame, pose, facial expressions, clothes, setting, lighting, mood, small details, and any text visible. Output ONLY the description as a cohesive paragraph — no quotes, no labels, no tags, no thinking blocks.';
+    try {
+        // 800 токенов: 150 обрывало генерацию на полуслове («...подчерк»).
+        // quietImage-фолбэк УДАЛЁН: он гнал полный контекст с пресетом (10к+ токенов),
+        // и пресет перехватывал задачу — модель отвечала ролевым ходом вместо описания.
+        let raw = '';
+        if (getSettings().socialProfileId) {
+            raw = await socialGen(task, { maxTokens: 800, image });
+        } else {
+            raw = await currentApiVision(task, image, 800) || '';
+        }
+        // Полный текст: сколько описал — столько и в пост (абзацы схлопываются
+        // в одну строку, чтобы не рвать разметку сообщения)
+        return raw
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/^["'«]|["'»]$/g, '')
+            .trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+    } catch (e) {
+        console.warn('[GlassPhone] describeImage failed:', e);
+        return '';
+    }
+}
+
+async function _describePostImageInner(post) {
+    const desc = await describeImage(post.image);
+    if (!desc) return false;
+    post.imgDesc = desc;
+    saveMeta();
+    return true;
+}
+
+// ═══ СМС с фото: описание + ответ ОДНИМ vision-запросом ═══
+// Экономия: раньше картинка уходила в API дважды (describe + ответ), а фолбэк
+// через quietImage гнал полный контекст с пресетом (10к+ токенов) и пресет
+// перехватывал задачу. Возвращает {desc, replies:[{from,text}]} или null.
+export async function generateSmsPhotoReply({ contactName, isGroup = false, members = [], userText = '', image }) {
+    if (!image) return null;
+    const target = isGroup
+        ? `the group chat «${contactName}» (members: ${members.join(', ') || '?'})`
+        : contactName;
+    const prompt = `${await taskHeader(`reply to an SMS that ${getUserName()} just sent from her phone, and describe her attached photo.`)}
+${getUserName()} texted ${target}: "${userText || '(only the photo, no text)'}"
+Her PHOTO is ATTACHED to this request — LOOK at it and react to what you actually see.
+
+Output STRICT JSON object ONLY — no markdown, no backticks, no <think>, no HTML comments:
+{"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph: who/what is in the frame, pose, facial expression, clothes, setting, lighting, mood, small details","replies":[{"from":"SenderName","text":"reply text"}]}
+Reply rules: 1-5 short messages in the character's own texting voice, in-character reaction to the photo and her text, same language as the excerpt. ${isGroup ? 'Several members may reply in a row — "from" = member name.' : `Every reply has "from":"${contactName}".`} If the character realistically would NOT reply right now, use an empty "replies" array.`;
+
+    try {
+        const raw = await socialGen(prompt, { maxTokens: 1500, image, prefill: '{"photo_description":"' });
+        const obj = parseJsonObject(raw);
+        if (!obj) return null;
+        const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+        const replies = Array.isArray(obj.replies)
+            ? obj.replies.filter(r => r && r.text).map(r => ({
+                from: String(r.from || contactName),
+                text: String(r.text).slice(0, 500),
+            })).slice(0, 5)
+            : [];
+        return { desc, replies };
+    } catch (e) {
+        console.warn('[GlassPhone] generateSmsPhotoReply failed:', e);
+        return null;
+    }
+}
+
+// Толерантный парс JSON-ОБЪЕКТА из ответа модели
+function parseJsonObject(raw) {
+    let text = String(raw || '').trim()
+        .replace(/```json?/gi, '').replace(/```/g, '')
+        .replace(/<!--[\s\S]*?-->/g, '');
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) {
+        const j = safeJson(m[0]);
+        if (j && typeof j === 'object' && !Array.isArray(j)) return j;
+    }
+    return null;
 }
 
 // Толерантный парс JSON-массива из ответа модели
@@ -353,11 +827,21 @@ function parseJsonArray(raw) {
 
 function contactsBlock() {
     let lines = [];
+    const seen = new Set();
     try {
         const { contacts } = scanChat();
-        for (const c of contacts.values()) lines.push(`- ${c.name}`);
+        for (const c of contacts.values()) {
+            lines.push(`- ${c.name} (${handleFor(`contact:${keyOf(c.name)}`, c.name)})`);
+            seen.add(keyOf(c.name));
+        }
     } catch (e) { /* ignore */ }
-    return lines.length ? `Known characters (contacts in ${getUserName()}'s phone):\n${lines.join('\n')}` : '(no known contacts yet)';
+    // Главный персонаж чата — всегда среди известных лиц
+    const mc = mainCharName();
+    if (mc && !seen.has(keyOf(mc))) {
+        lines.push(`- ${mc} (${handleFor(`contact:${keyOf(mc)}`, mc)})`);
+    }
+    const userLine = `${getUserName()}'s own handle: ${getUserHandle()}`;
+    return (lines.length ? `Known characters (contacts in ${getUserName()}'s phone), use EXACTLY these handles for them:\n${lines.join('\n')}` : '(no known contacts yet)') + `\n${userLine}`;
 }
 
 // ── Богатый контекст: карточка персонажа + персона + триггернутый лорбук ──
@@ -427,7 +911,8 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     return block;
 }
 
-const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.`;
+const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.
+CRITICAL — "author" is ALWAYS the person's real DISPLAY NAME (e.g. «Вадим Огнев», «Алиса»), NEVER an @handle/nickname. The @handle belongs ONLY in the separate "handle" field. For known characters use their EXACT name as listed above so the app links them correctly.`;
 
 export async function generateTweetFeed() {
     // Последние твиты юзера — боты могут их цитировать (quote tweet)
@@ -450,12 +935,13 @@ ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]  
 For quote-retweets: {"author":"...","handle":"...","text":"their commentary","type":"contact|random","quote":{"author":"${getUserName()}","text":"original tweet text"}}`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
@@ -491,12 +977,13 @@ Generate 4-7 replies: known characters in-character when relevant + random accou
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed)) return 0;
     let added = 0;
     if (!Array.isArray(tweet.replies)) tweet.replies = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         if (tweet.replies.length >= MAX_COMMENTS) break;
         tweet.replies.push({
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
@@ -519,7 +1006,7 @@ ${getUserName()} replied to it: "${userText}"
 Write ${item.author}'s reply to ${getUserName()}: max 280 chars, in-character (use the roleplay excerpt to match their voice), natural social media tone, same language as the excerpt. NO emojis.
 Output ONLY the reply text — no quotes, no labels, no JSON, no HTML comments, no <think>.`;
 
-    const raw = (await socialGen(prompt, { maxTokens: 256, image: (kind === 'ig' && item.image) ? item.image : null })).trim()
+    const raw = (await socialGen(prompt, { maxTokens: 256, image: (kind === 'ig' && item.image && (getSettings().visionInComments || !item.imgDesc)) ? item.image : null })).trim()
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/^["'«]|["'»]$/g, '').trim();
     if (!raw) return null;
@@ -564,19 +1051,20 @@ ${contactsBlock()}
 
 Generate 5-8 Instagram posts:
 1. Posts from known characters — in character (their aesthetic, their life).
-2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes).
+2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes). These are STRANGERS unrelated to ${getUserName()} — their photos must NOT feature ${getUserName()} or the main story characters.
 
 Each post: "photo" = short visual description of the photo (what's in the frame, 5-15 words), "caption" = post caption (may include hashtags), max 200 chars. NO emojis.
 ${JSON_RULES}
 Format: [{"author":"Имя","photo":"описание кадра","caption":"...","type":"contact|random"},...]`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048 }));
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     const s = getSocial();
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || (!it.photo && !it.caption)) continue;
+        if (isBanned(it.author, it.handle)) continue;
         s.igPosts.unshift({
             id: genId(), author: String(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
@@ -592,14 +1080,33 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
     return added;
 }
 
+// ── Каталог магазина (для приложения «Магазин») ──
+// Генерируется по требованию, изолированно от RP-пресета, но С контекстом
+// (taskHeader → модель знает город/страну/сеттинг ролевой). Возвращает массив
+// [{store, items:[{name, price, desc}]}] или null.
+export async function generateShopContent(catLabel, catHint, currency) {
+    const prompt = `${await taskHeader(`generate an online shopping catalog for the "${catLabel}" category on ${getUserName()}'s phone.`)}
+Match the CITY / COUNTRY / SETTING of the roleplay — local brands, style, realistic price level in ${currency}. If the setting is fantasy/other-world, invent fitting shops.
+${catHint}
+Generate 2-4 realistic stores/vendors, each with 4-7 items. "price" is a plain integer number in ${currency} (no sign, no text). Short vivid item descriptions (5-12 words). NO emojis.
+${JSON_RULES}
+Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc":"краткое описание"}]}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"store":"' }));
+}
+
 export async function generateIgComments(post) {
-    // Вижн: картинка прикладывается к запросу ТОЛЬКО в пути через профиль подключения
-    // (multimodal content). В raw-пути описание — единственный источник.
-    const visionActive = !!post.image && !!getSettings().socialProfileId;
-    const photoLine = visionActive
+    // Экономия: описание есть → фото не прикладываем (галочка visionInComments переопределяет)
+    const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);
+    // Комбо-режим: фото приложено и описания нет → просим В ТОМ ЖЕ запросе
+    // и описание, и комменты (одна картинка в API вместо двух)
+    const wantDesc = willAttach && !post.imgDesc;
+    const photoLine = willAttach
         ? `The actual photo is ATTACHED to this request — LOOK at it and react to what you actually see.${post.imgDesc ? ` (fallback description if you cannot see images: ${post.imgDesc})` : ''}`
         : `Photo (description): ${post.imgDesc || (post.image ? 'her photo, no text description available' : '(no description)')}`;
     const existing = (post.comments || []).map(c => `${c.author}: ${c.text}`).join('\n');
+    const formatLine = wantDesc
+        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph (who/what, pose, clothes, setting, lighting, mood, details)","comments":[{"author":"Имя","text":"...","type":"contact|random"},...]}`
+        : `Format: [{"author":"Имя","text":"...","type":"contact|random"},...]`;
     const prompt = `${await taskHeader('generate comments under an Instagram post.')}
 Post by ${post.author}. ${photoLine}
 Caption: "${post.caption || '(none)'}"
@@ -608,14 +1115,33 @@ ${contactsBlock()}
 
 Generate 4-7 comments: known characters in-character (reacting to the photo/caption — especially if the post is by ${getUserName()}) + random accounts. Instagram tone: compliments, questions, jokes. NO emojis at all. Max 200 chars each.
 ${JSON_RULES}
-Format: [{"author":"Имя","text":"...","type":"contact|random"},...]`;
+${formatLine}`;
 
-    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, image: post.image || null }));
+    const raw = await socialGen(prompt, {
+        maxTokens: wantDesc ? 2048 : 1536,
+        image: willAttach ? post.image : null,
+        prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
+    });
+    let parsed;
+    if (wantDesc) {
+        const obj = parseJsonObject(raw);
+        if (obj) {
+            const desc = String(obj.photo_description || '').trim().replace(/\s*\n+\s*/g, ' ').slice(0, 3000);
+            if (desc) {
+                post.imgDesc = desc;
+            }
+            parsed = obj.comments;
+        }
+        if (!Array.isArray(parsed)) parsed = parseJsonArray(raw); // модель могла ответить массивом
+    } else {
+        parsed = parseJsonArray(raw);
+    }
     if (!Array.isArray(parsed)) return 0;
     let added = 0;
     if (!Array.isArray(post.comments)) post.comments = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isBanned(it.author, it.handle)) continue;
         if (post.comments.length >= MAX_COMMENTS) break;
         post.comments.push({
             id: genId(), author: String(it.author),
@@ -663,54 +1189,224 @@ export function setContactAvatar(key, dataUrl) {
     else delete m.avatars[key];
     saveMeta();
 }
+// Авто-аватар из карточки персонажа ST (по имени) — чтобы не было пустых кружков
+function charCardAvatar(key) {
+    if (!getSettings().autoAvatars) return '';
+    try {
+        const ctx = SillyTavern.getContext();
+        const ch = (ctx?.characters || []).find(c => keyOf(c?.name) === key);
+        if (ch?.avatar && ch.avatar !== 'none') {
+            return getThumbnailUrl('avatar', ch.avatar);
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
+// Аватар персоны юзера
+export function userAvatarUrl() {
+    if (!getSettings().autoAvatars) return '';
+    try {
+        if (typeof user_avatar === 'string' && user_avatar) {
+            return getThumbnailUrl('persona', user_avatar);
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
 export function getContactAvatar(key) {
     const m = getMeta();
-    return (m.avatars && m.avatars[key]) || '';
+    // Приоритет: загруженная вручную → карточка персонажа ST
+    return (m.avatars && m.avatars[key]) || charCardAvatar(key);
 }
 // Аватар по имени автора (для лент)
 export function avatarForAuthor(ak) {
+    if (ak === 'user') return userAvatarUrl();
     if (typeof ak === 'string' && ak.startsWith('contact:')) {
         return getContactAvatar(ak.slice(8));
     }
     return '';
 }
 
-// ═══ Novarakk (Nyaa-Rakk-Imagen / IIG) — генерация картинок для инста-постов ═══
-// Опциональная интеграция: если расширение установлено, на постах без реальной
-// картинки появляется кнопка генерации. Используем его пайплайн напрямую:
-// generateImageWithRetry → dataURL, saveImageToFile → файл в ST (метаданные не пухнут).
-let _novarakk = undefined; // undefined = не проверяли, null = недоступен
+// ═══ Генерация картинок — через novarakk-ПОДОБНОЕ расширение ═══
+// АВТООПРЕДЕЛЕНИЕ: перебираем установленные third-party расширения (ST
+// extensionNames) и ищем то, у кого есть src/pipeline.js с generateImageWithRetry
+// — это структура форков Nyaa-Rakk-Imagen (novarakk / IIG / SLAYimages / …).
+// Настройка imageGenExtension пустая = авто; непустая = ручной оверрайд папки.
+// Настройки расширения мутируем ЗАЩИТНО (только существующие ключи — форки
+// «дёргают рефы по-разному» и могут не иметь sendCharAvatar/overrideAspectRatio).
+let _imgExt = { key: null, mod: undefined };
 
-async function loadNovarakk() {
-    if (_novarakk !== undefined) return _novarakk;
+// Проверить папку: есть ли там src/pipeline.js с generateImageWithRetry.
+// allowIndexFallback — пробовать index.js (только для ручного оверрайда; в авто
+// режиме НЕ импортим index.js каждого расширения ради побочек).
+async function probeImageExt(folder, allowIndexFallback) {
+    const base = `/scripts/extensions/third-party/${folder}`;
     try {
-        const pipeline = await import('/scripts/extensions/third-party/novarakk/src/pipeline.js');
-        const utils = await import('/scripts/extensions/third-party/novarakk/src/utils.js');
-        _novarakk = (typeof pipeline.generateImageWithRetry === 'function') ? { pipeline, utils } : null;
-    } catch (e) {
-        console.log('[GlassPhone] novarakk не найден — генерация картинок недоступна');
-        _novarakk = null;
+        const pipeline = await import(`${base}/src/pipeline.js`);
+        if (typeof pipeline.generateImageWithRetry === 'function') {
+            let utils = null, settings = null;
+            try { utils = await import(`${base}/src/utils.js`); } catch (e) { /* нет */ }
+            try { settings = await import(`${base}/src/settings.js`); } catch (e) { /* нет */ }
+            return { pipeline, utils, settings, folder };
+        }
+    } catch (e) { /* нет src/pipeline.js */ }
+    if (allowIndexFallback) {
+        try {
+            const idx = await import(`${base}/index.js`);
+            if (typeof idx.generateImageWithRetry === 'function') {
+                return { pipeline: idx, utils: idx, settings: idx, folder };
+            }
+        } catch (e) { /* нет */ }
     }
-    return _novarakk;
+    return null;
 }
+
+async function loadImageExt() {
+    const override = String(getSettings().imageGenExtension || '').replace(/[^a-zA-Z0-9_\-]/g, '');
+    const key = override || '(auto)';
+    if (_imgExt.key === key && _imgExt.mod !== undefined) return _imgExt.mod;
+
+    let mod = null;
+    if (override) {
+        mod = await probeImageExt(override, true);
+    } else {
+        // Кандидаты: все установленные third-party расширения; известные имена вперёд
+        const preferred = ['novarakk', 'nyaa-rakk-imagen', 'slayimages', 'megarakk', 'iig'];
+        let candidates = [];
+        try {
+            for (const n of (extensionNames || [])) {
+                if (typeof n === 'string' && n.startsWith('third-party/')) {
+                    const f = n.slice('third-party/'.length);
+                    if (f && f !== 'GlassPhone') candidates.push(f);
+                }
+            }
+        } catch (e) { /* ignore */ }
+        if (!candidates.some(c => c.toLowerCase() === 'novarakk')) candidates.push('novarakk');
+        candidates.sort((a, b) => {
+            const ia = preferred.indexOf(a.toLowerCase()); const ib = preferred.indexOf(b.toLowerCase());
+            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+        });
+        for (const f of candidates) {
+            mod = await probeImageExt(f, false); // авто — только src/pipeline.js
+            if (mod) break;
+        }
+    }
+    // Фолбэк: ВСТРОЕННЫЙ драйвер. Однофайловые форки (vish, sillyimages и т.п.)
+    // НЕ экспортируют generateImageWithRetry — импортировать нельзя (второй
+    // инстанс задублировал бы их UI). Но ВСЕ форки семейства делят один ключ
+    // настроек inline_image_gen (endpoint/apiKey/apiType/model/styles/refs) —
+    // генерим сами их настройками (мини-клиент openai/gemini ниже).
+    if (!mod) {
+        const iig = extension_settings?.inline_image_gen;
+        if (iig && iig.endpoint && iig.apiKey && iig.model) {
+            mod = { builtin: true, folder: '(встроенный: настройки inline_image_gen)' };
+        }
+    }
+    _imgExt = { key, mod };
+    return mod;
+}
+
+// Сбросить кэш автоопределения (напр. после установки расширения / смены оверрайда)
+export function resetImageExtCache() { _imgExt = { key: null, mod: undefined }; }
 
 export async function isImageGenAvailable() {
-    return !!(await loadNovarakk());
+    return !!(await loadImageExt());
 }
 
-// Последовательная очередь генераций (мы временно мутируем настройки novarakk —
-// параллельные генерации могли бы увидеть чужие флаги)
+// Список моделей активного провайдера картинко-расширения (для кнопки ↻)
+export async function fetchImageModels() {
+    const mod = await loadImageExt();
+    if (!mod) throw new Error('картинко-расширение не найдено');
+    if (mod.builtin) {
+        const iig = extension_settings.inline_image_gen;
+        const resp = await fetch(`${String(iig.endpoint).replace(/\/$/, '')}/v1/models`, {
+            headers: { 'Authorization': `Bearer ${iig.apiKey}` },
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const j = await resp.json();
+        const models = (j.data || j.models || []).map(m => m.id || m.name || m).filter(Boolean);
+        if (!models.length) throw new Error('список пуст');
+        return models;
+    }
+    const base = `/scripts/extensions/third-party/${mod.folder}`;
+    const provMod = await import(`${base}/src/providers.js`);
+    const setMod = (typeof mod.settings?.getSettings === 'function') ? mod.settings : await import(`${base}/src/settings.js`);
+    const provider = provMod.resolveActiveProvider(setMod.getSettings());
+    if (!provider) throw new Error('провайдер расширения не настроен');
+    const models = await provider.fetchModels();
+    if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
+    return models;
+}
+
+// Текст промпта для картинки из данных поста.
+// ВАЖНО: НЕ навязываем стиль рендера («realistic», «phone camera») — иначе он
+// перебивает активный стиль расширения (юзер поставила «Craig Mullins painterly»,
+// а мой хардкод «realistic» давал фотореализм). Описываем только СЦЕНУ/кадр.
+// Запрет на персону/главперсонажей ставится ТОЛЬКО для анонимных рандом-аккаунтов
+// (anonymous) — чтобы персона юзера не «вылезала» на постах посторонних. Пост
+// самого бота или ЛЮБОГО контакта-НПС = его аккаунт → запрета НЕТ, его лицо/реф
+// рисуется. allowChar: даже на рандом-посте разрешить главперсонажа (фан-аккаунт
+// явно постит про него).
+function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
+    const st = getSettings();
+    const parts = [];
+    if (post.imgDesc) parts.push(post.imgDesc);
+    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
+    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
+    const framing = (post.kind === 'of'
+        ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
+        : (st.imgPromptIg || 'social media post, self-taken candid framing')).trim();
+    let negLine = '';
+    if (anonymous) {
+        const neg = ['the protagonist / the main user'];
+        if (!allowChar) neg.push('the main story characters');
+        negLine = ` This photo belongs to an unrelated stranger's account — do NOT depict ${neg.join(' or ')}; only people unrelated to the main story.`;
+    }
+    return `${framing}. ${parts.join('. ')}.${negLine}`;
+}
+
+// ── Booru-теги: сцена → англ. danbooru-теги (для NovelAI/аниме-моделей) ──
+// NAI не понимает короткие описания на русском — нужны теги вида 1girl, solo,
+// long hair, ... Конвертируем сцену одним текстовым запросом.
+async function sceneToBooruTags(post, { anonymous }) {
+    const scene = [post.imgDesc, post.caption].filter(Boolean).join('. ') || `photo posted by ${post.author}`;
+    const nsfw = post.kind === 'of'
+        ? 'This is adult NSFW content — include explicit danbooru tags matching the scene, do not sanitize.'
+        : '';
+    const who = anonymous
+        ? 'The subject is a random stranger — use generic appearance tags, NOT any specific named main character.'
+        : '';
+    const prompt = `Convert this scene into ONE line of English Danbooru-style image tags for an anime image model (NovelAI).
+Scene: ${scene}
+
+Rules:
+- Start with subject count (1girl / 1boy / 2girls / 1girl 1boy / etc.), add "solo" if only one person.
+- Then: appearance (hair length+color, eye color, body), clothing OR state of undress, pose, facial expression, setting/background, lighting.
+- End with quality tags (masterpiece, best quality, highly detailed).
+- Comma-separated, lowercase, ENGLISH ONLY, tags NOT sentences, no Russian, no explanations.
+${who} ${nsfw}
+Output ONLY the comma-separated tags.`;
+    try {
+        const raw = await socialGen(prompt, { maxTokens: 400 });
+        const tags = String(raw || '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/^[^:]*tags?:\s*/i, '')
+            .replace(/[\n\r]+/g, ', ')
+            .replace(/["'`]/g, '')
+            .replace(/\s*,\s*/g, ', ')
+            .replace(/(,\s*)+/g, ', ')
+            .trim().replace(/^,|,$/g, '').trim();
+        return tags;
+    } catch (e) {
+        console.warn('[GlassPhone] sceneToBooruTags failed:', e);
+        return '';
+    }
+}
+
+// Последовательная очередь (мы временно мутируем чужие настройки —
+// параллельные генерации увидели бы чужие флаги)
 let _imgGenChain = Promise.resolve();
 
-// Сгенерировать картинку для инста-поста (из описания кадра + подписи).
-// ВАЖНО ПРО РЕФЕРЕНСЫ: novarakk по своим настройкам подмешивает аватары
-// персонажа/персоны КАК РЕФЕРЕНСЫ в каждую генерацию → лица юзерки и бота
-// появлялись на постах рандомных аккаунтов. Поэтому на время генерации:
-//  • пост юзера → оставляем только реф аватара персоны (если он включён в novarakk)
-//  • пост главного персонажа чата → только реф аватара персонажа
-//  • любой другой автор → БЕЗ автоматических рефов вообще
-// (лорбук-рефы novarakk по триггер-словам в описании кадра продолжают работать —
-// это желаемое поведение: упомянула НПС → подтянется его реф.)
 export function generatePostImage(post, onStatus = null) {
     const run = () => _generatePostImage(post, onStatus);
     const p = _imgGenChain.then(run, run);
@@ -718,66 +1414,272 @@ export function generatePostImage(post, onStatus = null) {
     return p;
 }
 
+// РЕФЕРЕНСЫ: расширение подмешивает аватары персонажа/персоны в КАЖДУЮ генерацию →
+// лица бота/юзерки лезли на посты рандомов. Логика:
+//  • пост юзера → реф персоны
+//  • пост главного персонажа ИЛИ пост, где в кадре/подписи упомянут главный
+//    персонаж по имени → реф его аватара (Cyrillic-safe textMentionsName — \b
+//    не ловил кириллицу, поэтому «Вадим Огнев» не находился и реф не слался)
+//  • прочее → без авто-рефов (лорбук-рефы по ключевым словам работают)
+// АСПЕКТ: novarakk по overrideAspectRatio/overrideImageSize ИГНОРИРУЕТ наш аспект
+// (у юзера стоял 16:9). Снимаем оверрайды на время генерации → побеждает наш 1:1.
 async function _generatePostImage(post, onStatus = null) {
-    const nv = await loadNovarakk();
-    if (!nv) throw new Error('Расширение novarakk не установлено');
+    const mod = await loadImageExt();
+    if (!mod) throw new Error('Картинко-расширение не найдено и картинко-API не настроен. Установи novarakk-подобное расширение или настрой endpoint/key/model в любом форке inline_image_gen.');
 
-    // Настройки novarakk для временного глушения авто-рефов
-    let nvSettings = null;
-    try {
-        const mod = await import('/scripts/extensions/third-party/novarakk/src/settings.js');
-        if (typeof mod.getSettings === 'function') nvSettings = mod.getSettings();
-    } catch (e) { /* без настроек — генерим как есть */ }
+    const nvSettings = (typeof mod.settings?.getSettings === 'function') ? mod.settings.getSettings() : null;
 
-    const ctx = (typeof SillyTavern?.getContext === 'function') ? SillyTavern.getContext() : {};
+    const st = getSettings();
     const isUserPost = post.ak === 'user';
-    const isCharPost = !isUserPost && keyOf(post.author) && keyOf(post.author) === keyOf(ctx?.name2 || '');
+    const isContactPost = typeof post.ak === 'string' && post.ak.startsWith('contact:');
+    const charName = mainCharName();
+    const charKey = keyOf(charName);
+    const isCharPost = !isUserPost && charKey && keyOf(post.author) === charKey;
+    const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
+    const wantChar = isCharPost || mentionsChar;
+    // Анонимный рандом-аккаунт = НЕ юзер, НЕ контакт (НПС), НЕ главный персонаж.
+    // Только для него ставим запрет на персону/главперсонажей.
+    const anonymous = !isUserPost && !isContactPost && !isCharPost;
 
-    const parts = [];
-    if (post.imgDesc) parts.push(post.imgDesc);
-    if (post.caption) parts.push(`vibe of the caption: "${post.caption}"`);
-    if (parts.length === 0) parts.push(`casual instagram photo posted by ${post.author}`);
-    // Для «чужих» постов явно говорим модели, что это посторонний аккаунт
-    if (!isUserPost && !isCharPost) {
-        parts.push('random social media account content — do NOT depict the main story characters');
+    let prompt;
+    if (st.imgTagMode) {
+        // Booru-режим: стиль/кадр из настроек (может быть тег-строкой) + сцена в теги
+        if (onStatus) onStatus('Составляю теги...');
+        const tags = await sceneToBooruTags(post, { anonymous });
+        const framing = (post.kind === 'of' ? (st.imgPromptOf || '') : (st.imgPromptIg || '')).trim();
+        prompt = [framing, tags].filter(Boolean).join(', ') || buildImagePrompt(post, { anonymous, allowChar: wantChar });
+    } else {
+        prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
     }
-    const prompt = `Instagram photo, phone camera aesthetic, realistic. ${parts.join('. ')}`;
 
-    const saved = nvSettings ? {
-        sendCharAvatar: nvSettings.sendCharAvatar,
-        sendUserAvatar: nvSettings.sendUserAvatar,
-        imageContextEnabled: nvSettings.imageContextEnabled,
-    } : null;
+    // Встроенный драйвер (форки без экспортов — vish/sillyimages и т.п.)
+    if (mod.builtin) {
+        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus });
+    }
+
+    // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
+    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
+    const saved = {};
     if (nvSettings) {
-        nvSettings.sendCharAvatar = !!(isCharPost && saved.sendCharAvatar);
-        nvSettings.sendUserAvatar = !!(isUserPost && saved.sendUserAvatar);
-        nvSettings.imageContextEnabled = false; // контекст последних сообщений тут ни к чему
+        for (const k of keys) if (k in nvSettings) saved[k] = nvSettings[k];
+        if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!(wantChar && saved.sendCharAvatar);
+        if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!(isUserPost && saved.sendUserAvatar);
+        if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
+        if (st.imageGenSquare !== false) {
+            if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
+            if ('overrideImageSize' in nvSettings) nvSettings.overrideImageSize = false;
+        }
+        if (st.imageGenModel && 'model' in nvSettings) nvSettings.model = st.imageGenModel;
     }
+
+    const genOptions = {};
+    if (st.imageGenSquare !== false) genOptions.aspectRatio = '1:1';
 
     try {
-        // style = null → возьмётся дефолтный стиль из настроек novarakk
-        const dataUrl = await nv.pipeline.generateImageWithRetry(prompt, null, onStatus, {});
+        // style = null → расширение подставит СВОЙ активный стиль (resolveEffectiveStyle)
+        const dataUrl = await mod.pipeline.generateImageWithRetry(prompt, null, onStatus, genOptions);
         if (!dataUrl || typeof dataUrl !== 'string') throw new Error('Пустой результат генерации');
-
-        // Сохраняем в файлы ST — в метаданных остаётся короткий URL, не base64
         let src = dataUrl;
-        try {
-            src = await nv.utils.saveImageToFile(dataUrl, { mode: 'glassphone-ig' });
-        } catch (e) {
-            console.warn('[GlassPhone] saveImageToFile failed, keeping dataURL:', e);
+        if (typeof mod.utils?.saveImageToFile === 'function') {
+            try { src = await mod.utils.saveImageToFile(dataUrl, { mode: 'glassphone-ig' }); }
+            catch (e) { console.warn('[GlassPhone] saveImageToFile failed, keeping dataURL:', e); }
+        } else if (dataUrl.startsWith('data:')) {
+            // Расширение без saveImageToFile → сохраняем средствами ST
+            try {
+                const b64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
+                src = await saveBase64AsFile(b64, 'glassphone', `iggen_${Date.now()}`, 'jpeg');
+            } catch (e) { /* оставляем dataURL */ }
         }
         post.image = src;
         saveMeta();
         return src;
     } finally {
-        // Возвращаем настройки novarakk как были
-        if (nvSettings && saved) Object.assign(nvSettings, saved);
+        if (nvSettings) for (const k of keys) if (k in saved) nvSettings[k] = saved[k];
+    }
+}
+
+// ── ВСТРОЕННЫЙ драйвер генерации (настройки любого форка inline_image_gen) ──
+// Мини-клиент: openai (/v1/images/generations|edits) и gemini (:generateContent).
+// Стиль — активный стиль форка ([STYLE: ...]), рефы — аватары чара/персоны
+// по правилам форка (sendCharAvatar/sendUserAvatar) с нашим гейтом wantChar/isUserPost.
+
+async function _fetchB64(url) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        const blob = await r.blob();
+        return await new Promise((resolve) => {
+            const fr = new FileReader();
+            fr.onloadend = () => resolve(String(fr.result).split(',')[1] || null);
+            fr.onerror = () => resolve(null);
+            fr.readAsDataURL(blob);
+        });
+    } catch (e) { return null; }
+}
+
+async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
+    const iig = extension_settings.inline_image_gen || {};
+    const endpoint = String(iig.endpoint || '').trim().replace(/\/$/, '');
+    if (!endpoint || !iig.apiKey || !iig.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
+
+    const st = getSettings();
+    const model = st.imageGenModel || iig.model;
+    const aspect = st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1');
+
+    // Активный стиль форка
+    let style = '';
+    try {
+        const s = (iig.styles || []).find(x => x && x.id === iig.activeStyleId);
+        style = String(s?.value ?? s?.style ?? '').trim();
+    } catch (e) { /* ignore */ }
+    let fullPrompt = style ? `[STYLE: ${style}]\n\n${prompt}` : prompt;
+
+    // Рефы: аватар чара/персоны (по флажкам форка + наш гейт)
+    const refs = [];
+    try {
+        const ctx = SillyTavern.getContext();
+        if (wantChar && iig.sendCharAvatar !== false) {
+            const ch = ctx?.characters?.[ctx.characterId];
+            if (ch?.avatar && ch.avatar !== 'none') {
+                const b = await _fetchB64(`/characters/${encodeURIComponent(ch.avatar)}`);
+                if (b) refs.push(b);
+            }
+        }
+        if (isUserPost && iig.sendUserAvatar !== false && typeof user_avatar === 'string' && user_avatar) {
+            const b = await _fetchB64(`/User Avatars/${encodeURIComponent(user_avatar)}`);
+            if (b) refs.push(b);
+        }
+    } catch (e) { /* без рефов */ }
+    if (refs.length > 0) {
+        fullPrompt = `[The reference image(s) show the EXACT appearance of the character(s) — copy face, hair, body precisely.]\n\n${fullPrompt}`;
+    }
+
+    onStatus?.('Генерация...');
+    const isGemini = iig.apiType === 'gemini' || /gemini|banana/i.test(String(model));
+    let b64 = null, mime = 'image/png';
+
+    if (isGemini) {
+        const pathModel = String(model).includes('/') ? String(model).slice(String(model).indexOf('/') + 1) : String(model);
+        const parts = refs.map(r => ({ inlineData: { mimeType: 'image/png', data: r } }));
+        parts.push({ text: fullPrompt });
+        const resp = await fetch(`${endpoint}/v1beta/models/${encodeURIComponent(pathModel)}:generateContent`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts }],
+                generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: aspect } },
+            }),
+        });
+        if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
+        const j = await resp.json();
+        const ps = j?.candidates?.[0]?.content?.parts || [];
+        const img = ps.find(p => p.inlineData?.data);
+        if (!img) throw new Error('Gemini не вернул картинку' + (ps.find(p => p.text) ? `: ${ps.find(p => p.text).text.slice(0, 100)}` : ''));
+        b64 = img.inlineData.data; mime = img.inlineData.mimeType || 'image/png';
+    } else {
+        // OpenAI-совместимый путь
+        const size = aspect === '1:1' ? '1024x1024' : (iig.size || 'auto');
+        let resp;
+        if (refs.length > 0) {
+            const form = new FormData();
+            form.append('model', model);
+            form.append('prompt', fullPrompt);
+            form.append('n', '1');
+            if (size && size !== 'auto') form.append('size', size);
+            const toBlob = (r) => {
+                const bin = atob(r); const arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                return new Blob([arr], { type: 'image/png' });
+            };
+            if (refs.length > 1) refs.forEach((r, i) => form.append('image[]', toBlob(r), `ref${i}.png`));
+            else form.append('image', toBlob(refs[0]), 'ref0.png');
+            resp = await fetch(`${endpoint}/v1/images/edits`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${iig.apiKey}` }, body: form,
+            });
+        } else {
+            const body = { model, prompt: fullPrompt, n: 1 };
+            if (size && size !== 'auto') body.size = size;
+            if (!/gpt-image/i.test(String(model))) body.response_format = 'b64_json';
+            resp = await fetch(`${endpoint}/v1/images/generations`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        }
+        if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
+        const j = await resp.json();
+        const d = j?.data?.[0];
+        if (d?.b64_json) b64 = d.b64_json;
+        else if (d?.url) {
+            // URL → тянем и конвертим (для сохранения файлом)
+            b64 = await _fetchB64(d.url);
+            if (!b64) { post.image = d.url; saveMeta(); return d.url; }
+        }
+        if (!b64) throw new Error('API не вернул картинку');
+    }
+
+    let src = `data:${mime};base64,${b64}`;
+    try {
+        src = await saveBase64AsFile(b64, 'glassphone', `iggen_${Date.now()}`, mime.includes('png') ? 'png' : 'jpeg');
+    } catch (e) { /* оставляем dataURL */ }
+    post.image = src;
+    saveMeta();
+    return src;
+}
+
+// ═══ Журнал соцсетей в чат ═══
+// Пост юзера записывается СКРЫТОЙ строкой прямо в историю чата (без генерации,
+// без событий — другие расширения не триггерятся). Зачем: событие остаётся в
+// контексте модели ПО МЕСТУ в истории и попадает в саммарайз — долговременная
+// память о соц-активности без вечного роста инжекта.
+export async function logSocialToChat(text, image = null) {
+    if (getSettings().socialLogToChat === false) return;
+    try {
+        const ctx = SillyTavern.getContext();
+        if (!ctx?.chat) return;
+
+        // Фото поста прикладывается к журнальной записи (extra.image) —
+        // vision-модель видит сам снимок в РП-контексте, описание не обязательно.
+        // dataURL сохраняем файлом, чтобы не раздувать файл чата.
+        let imgSrc = null;
+        if (image) {
+            imgSrc = String(image);
+            if (imgSrc.startsWith('data:')) {
+                try {
+                    const base64 = imgSrc.replace(/^data:image\/[a-z]+;base64,/i, '');
+                    imgSrc = await saveBase64AsFile(base64, 'glassphone', `post_${Date.now()}`, 'jpeg');
+                } catch (e) {
+                    console.warn('[GlassPhone] журнал: не сохранилось файлом, кладу dataURL:', e);
+                }
+            }
+        }
+
+        ctx.chat.push({
+            name: ctx.name1 || 'User',
+            is_user: true,
+            is_system: false,
+            send_date: new Date().toLocaleString('en-US'),
+            mes: `<!--tel:log-->\n[Соцсети] ${String(text).slice(0, 1500)}`,
+            extra: imgSrc ? { image: imgSrc, inline_image: true } : {},
+        });
+        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    } catch (e) {
+        console.warn('[GlassPhone] logSocialToChat failed:', e);
     }
 }
 
 // ═══ Активность юзера для инжекции в основной чат ═══
+// При включённом журнале события уже лежат в истории чата — сводка не дублирует их,
+// в инжекте остаётся только ПОСТОЯННОЕ состояние (кошелёк). Экономия + нет двойного контекста.
 export function getSocialActivitySummary() {
     const s = getSocial();
+
+    if (getSettings().socialLogToChat !== false) {
+        return s.ofWallet > 0
+            ? `- She has $${s.ofWallet} of her own money available (on her personal card). The SOURCE is her secret — characters see only that she can afford things.`
+            : '';
+    }
+
     const lines = [];
     const fmtThread = (arr) => (arr || []).slice(-3).map(r => `${r.ak === 'user' ? getUserName() : r.author}: "${String(r.text).slice(0, 80)}"`).join(' | ');
 
@@ -812,6 +1714,17 @@ export function getSocialActivitySummary() {
     }
     interactions.sort((a, b) => b.time - a.time);
     lines.push(...interactions.slice(0, 3).map(x => x.line));
+
+    // OnlyFans: только последний пост, с пометкой приватности
+    const lastOf = s.ofPosts.filter(p => p.ak === 'user')[0];
+    if (lastOf) {
+        const photo = lastOf.imgDesc ? `photo: ${lastOf.imgDesc.slice(0, 80)}` : 'photo';
+        lines.push(`- Her PRIVATE OnlyFans post (${timeAgo(lastOf.time)} ago, subscribers-only): ${photo}${lastOf.caption ? `, caption: "${lastOf.caption.slice(0, 80)}"` : ''}. Characters know about it ONLY if the story established they secretly subscribe.`);
+    }
+    // Деньги, выведенные с OnlyFans — доступны ей в РП (источник приватен)
+    if (s.ofWallet > 0) {
+        lines.push(`- She has $${s.ofWallet} of her own money available (on her personal card). The SOURCE is her secret — characters see only that she can afford things, never assume they know where it came from.`);
+    }
 
     return lines.join('\n');
 }

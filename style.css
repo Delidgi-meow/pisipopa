@@ -11,6 +11,10 @@
     --gp-text-dim: rgba(255, 255, 255, 0.45);
     --gp-accent-a: #6a8dff;
     --gp-accent-b: #9a6aff;
+    /* RGB-триплеты тех же акцентов — для полупрозрачных градиентов/теней
+       (rgba(var(--gp-accent-a-rgb), .85)). Скины переопределяют И hex, И rgb. */
+    --gp-accent-a-rgb: 106, 141, 255;
+    --gp-accent-b-rgb: 140, 106, 255;
     --gp-radius: 44px;
 }
 
@@ -19,20 +23,23 @@
 /* Смс-переписка, спрятанная из ленты чата (сообщения остаются в истории/контексте) */
 #chat .mes.gp-sms-hidden { display: none !important; }
 
-/* ═══ FAB — только силуэт телефона ═══ */
+/* ═══ FAB — только силуэт телефона ═══
+   position/z-index через !important (как в Asta): чужой мобильный CSS / стили ST
+   не должны смещать или прятать кнопку. Позиционирование — left/top (инлайн из JS). */
 #gp-fab {
-    position: fixed;
-    right: 20px;
-    bottom: 190px;
-    width: 32px;
-    height: 32px;
-    z-index: 2147482900;
-    display: flex;
+    position: fixed !important;
+    z-index: 2147482900 !important;
+    left: auto;
+    top: 55%;
+    right: 16px;
+    width: 48px;
+    height: 48px;
+    display: flex !important;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     color: var(--gp-text);
-    font-size: 18px;
+    font-size: 19px;
     background: none;
     border: none;
     box-shadow: none;
@@ -42,43 +49,33 @@
     user-select: none;
     overflow: visible;
 }
+/* Скрытие настройкой «Плавающая кнопка»: id+class перебивает #gp-fab{display:flex!important} */
+#gp-fab.gp-hidden { display: none !important; }
 
-/* Полупрозрачный силуэт без уведомлений */
-#gp-fab.gp-fab-idle {
-    opacity: 0.2;
+/* Полупрозрачный силуэт без уведомлений (только на устройствах с курсором) */
+@media (hover: hover) {
+    #gp-fab.gp-fab-idle { opacity: 0.35; }
+    #gp-fab.gp-fab-idle:hover { opacity: 0.7; }
+    #gp-fab.gp-fab-alert { opacity: 0.7; }
+    #gp-fab.gp-fab-alert:hover { opacity: 1; }
 }
-#gp-fab.gp-fab-idle:hover {
-    opacity: 0.6;
-}
-/* Тачскрины: hover нет, полупрозрачный силуэт на пёстром фоне теряется.
-   На мобильных FAB — полноценный стеклянный кружок, всегда видимый. */
+
+/* Тачскрины: hover нет — тот же минималистичный силуэт, что на ПК (без кружка/
+   backdrop-filter — blur iOS Safari рендерит невидимым). Видимость даёт drop-shadow. */
 @media (hover: none) {
     #gp-fab,
     #gp-fab.gp-fab-idle,
     #gp-fab.gp-fab-alert {
         opacity: 1;
-        width: 46px;
-        height: 46px;
-        border-radius: 50%;
-        background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.05));
-        backdrop-filter: blur(20px) saturate(160%);
-        -webkit-backdrop-filter: blur(20px) saturate(160%);
-        border: 1px solid rgba(255, 255, 255, 0.22);
-        box-shadow:
-            0 10px 26px rgba(0, 0, 0, 0.45),
-            inset 0 1px 0 rgba(255, 255, 255, 0.32);
+        background: none;
+        border: none;
+        box-shadow: none;
+        color: var(--gp-text);
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75));
     }
 }
 
-/* При уведомлениях — чуть ярче */
-#gp-fab.gp-fab-alert {
-    opacity: 0.7;
-}
-#gp-fab.gp-fab-alert:hover {
-    opacity: 1;
-}
-
-#gp-fab:active { transform: scale(0.9); }
+#gp-fab:active { transform: scale(0.92); }
 
 #gp-fab-badge {
     position: absolute;
@@ -161,6 +158,45 @@
     pointer-events: none;
     background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.055) 44%, rgba(255,255,255,0.09) 50%, rgba(255,255,255,0.055) 56%, transparent 70%);
     z-index: 5;
+}
+
+/* ═══ Обои телефона ═══ */
+.gp-wallpaper {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    pointer-events: none;
+    z-index: 0;
+}
+/* Размытие обоев (filter blur — не backdrop, iOS рендерит нормально; scale
+   прячет прозрачную кромку, которую даёт blur по краям inset:0) */
+.gp-wallpaper.gp-wall-blur {
+    filter: blur(16px);
+    transform: scale(1.12);
+}
+/* Активная кнопка-тоггл в настройках (напр. блюр обоев) */
+.menu_button.gp-btn-on {
+    background: linear-gradient(135deg, var(--gp-accent-a, #6a8dff), var(--gp-accent-b, #9a6aff)) !important;
+    color: #fff !important;
+}
+/* Скрим поверх фото для читаемости текста/статус-бара */
+.gp-wallpaper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.15) 22%, rgba(0,0,0,0.28) 70%, rgba(0,0,0,0.5) 100%);
+}
+/* Когда есть обои — контент поднимаем над слоем фото */
+#gp-phone.gp-has-wall > .gp-island,
+#gp-phone.gp-has-wall > .gp-statusbar,
+#gp-phone.gp-has-wall > #gp-screen,
+#gp-phone.gp-has-wall > .gp-homebar {
+    position: relative;
+    z-index: 2;
 }
 
 .gp-island {
@@ -320,7 +356,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 8px rgba(106, 141, 255, 0.45);
+    box-shadow: 0 2px 8px rgba(var(--gp-accent-a-rgb), 0.45);
 }
 
 /* ═══ Тред ═══ */
@@ -381,11 +417,11 @@
     -webkit-backdrop-filter: blur(14px);
 }
 .gp-out .gp-bubble {
-    background: linear-gradient(135deg, rgba(106, 141, 255, 0.85), rgba(140, 106, 255, 0.78));
-    border: 1px solid rgba(160, 180, 255, 0.35);
+    background: linear-gradient(135deg, rgba(var(--gp-accent-a-rgb), 0.85), rgba(var(--gp-accent-b-rgb), 0.78));
+    border: 1px solid rgba(var(--gp-accent-a-rgb), 0.45);
     border-bottom-right-radius: 6px;
     color: #fff;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 14px rgba(106, 141, 255, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 14px rgba(var(--gp-accent-a-rgb), 0.28);
     text-shadow: 0 1px 1px rgba(0,0,0,0.12);
 }
 .gp-in .gp-bubble {
@@ -458,10 +494,10 @@
     align-items: center;
     justify-content: center;
     padding: 0 2px 0 0;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 5px 16px rgba(106, 141, 255, 0.4);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 5px 16px rgba(var(--gp-accent-a-rgb), 0.4);
     transition: transform .15s, box-shadow .2s;
 }
-.gp-send:hover:not(:disabled) { transform: scale(1.08); box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 7px 20px rgba(106, 141, 255, 0.55); }
+.gp-send:hover:not(:disabled) { transform: scale(1.08); box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 7px 20px rgba(var(--gp-accent-a-rgb), 0.55); }
 .gp-send:active:not(:disabled) { transform: scale(0.94); }
 .gp-send:disabled { opacity: 0.45; cursor: default; }
 
@@ -507,7 +543,14 @@
     flex-direction: column;
     gap: 14px;
     padding: 18px 10px;
+    /* Скролл: при куче контактов (чекбоксы группы) форма выше экрана */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
 }
+.gp-add-form::-webkit-scrollbar { display: none; }
+.gp-add-form > * { flex: 0 0 auto; }
 .gp-add-avatar {
     width: 84px; height: 84px;
     margin: 4px auto 6px;
@@ -554,7 +597,7 @@
     border: 1px solid rgba(160, 180, 255, 0.4);
     background: linear-gradient(135deg, var(--gp-accent-a), var(--gp-accent-b));
     cursor: pointer;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 6px 18px rgba(106, 141, 255, 0.35);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 6px 18px rgba(var(--gp-accent-a-rgb), 0.35);
     transition: transform .15s;
     display: flex;
     align-items: center;
@@ -822,6 +865,11 @@
     padding: 9px 12px;
 }
 .gp-ig-name { font-weight: 700; font-size: 12.5px; }
+.gp-ig-nameblock { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.gp-ig-handle { font-size: 10px; opacity: 0.5; }
+.gp-ban-btn i { color: #ff8a9a; }
+.gp-rename-pen { font-size: 9px; opacity: 0.4; margin-left: 3px; }
+.gp-row-name:hover .gp-rename-pen { opacity: 0.8; }
 .gp-ig-img {
     width: 100%;
     aspect-ratio: 1 / 1;
@@ -1116,3 +1164,330 @@
 @media (hover: none) {
     .gp-reply-del { color: rgba(255, 255, 255, 0.3); }
 }
+
+/* ═══ v1.5: скины ═══ */
+#gp-phone.gp-skin-rose {
+    --gp-accent-a: #ff6a9e;
+    --gp-accent-b: #c66bff;
+    --gp-accent-a-rgb: 255, 106, 158;
+    --gp-accent-b-rgb: 198, 107, 255;
+}
+#gp-phone.gp-skin-rose:not(.gp-noglass) {
+    background:
+        radial-gradient(120% 90% at 15% -5%, rgba(255, 106, 158, 0.16), transparent 55%),
+        radial-gradient(120% 90% at 95% 105%, rgba(198, 107, 255, 0.13), transparent 55%),
+        linear-gradient(160deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.06));
+}
+#gp-phone.gp-skin-emerald {
+    --gp-accent-a: #3ec9a7;
+    --gp-accent-b: #4a90d9;
+    --gp-accent-a-rgb: 62, 201, 167;
+    --gp-accent-b-rgb: 74, 144, 217;
+}
+#gp-phone.gp-skin-emerald:not(.gp-noglass) {
+    background:
+        radial-gradient(120% 90% at 15% -5%, rgba(62, 201, 167, 0.15), transparent 55%),
+        radial-gradient(120% 90% at 95% 105%, rgba(74, 144, 217, 0.12), transparent 55%),
+        linear-gradient(160deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03) 40%, rgba(255,255,255,0.06));
+}
+#gp-phone.gp-skin-mono {
+    --gp-accent-a: #9aa3b2;
+    --gp-accent-b: #6b7280;
+    --gp-accent-a-rgb: 154, 163, 178;
+    --gp-accent-b-rgb: 107, 114, 128;
+}
+#gp-phone.gp-skin-mono:not(.gp-noglass) {
+    background:
+        linear-gradient(160deg, rgba(255,255,255,0.09), rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.05));
+}
+
+/* ═══ Банк ═══ */
+.gp-app-bank { background: linear-gradient(140deg, rgba(46, 196, 132, 0.6), rgba(20, 130, 90, 0.5)); }
+.gp-bank-title i { color: #35d69a; }
+.gp-bank-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 2px 12px; display: flex; flex-direction: column; gap: 10px; }
+
+.gp-bank-card {
+    border-radius: 18px;
+    padding: 16px 18px;
+    background: linear-gradient(140deg, rgba(46, 196, 132, 0.4), rgba(20, 110, 80, 0.32));
+    border: 1px solid rgba(120, 240, 190, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 6px 18px rgba(0,0,0,0.25);
+}
+.gp-bank-card.gp-bank-neg {
+    background: linear-gradient(140deg, rgba(220, 80, 90, 0.4), rgba(150, 40, 55, 0.32));
+    border-color: rgba(255, 150, 160, 0.3);
+}
+.gp-bank-card-label { font-size: 11px; opacity: 0.7; letter-spacing: 0.4px; }
+.gp-bank-balance { font-size: 30px; font-weight: 800; margin: 3px 0 8px; letter-spacing: -0.5px; }
+.gp-bank-io { display: flex; gap: 14px; font-size: 12px; font-weight: 600; }
+.gp-bank-in { color: #7cf0bb; }
+.gp-bank-out { color: #ff9aa6; }
+
+.gp-bank-remind {
+    border-radius: 14px;
+    padding: 9px 12px;
+    background: rgba(255, 180, 60, 0.12);
+    border: 1px solid rgba(255, 180, 60, 0.35);
+    font-size: 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.gp-bank-remind i { color: #ffbf4d; }
+.gp-bank-remind-item {
+    padding: 1px 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.08); font-size: 11px; font-weight: 600;
+}
+.gp-bank-remind-item.gp-overdue { background: rgba(255, 90, 100, 0.2); color: #ff9aa6; }
+
+.gp-bank-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gp-bank-act {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 11px 8px; border-radius: 13px; cursor: pointer;
+    background: var(--gp-glass-strong); border: 1px solid var(--gp-border-soft);
+    color: var(--gp-text); font-size: 12.5px; font-weight: 600;
+    transition: transform .12s, background .2s;
+}
+.gp-bank-act:hover { background: rgba(255,255,255,0.16); }
+.gp-bank-act:active { transform: scale(0.97); }
+.gp-bank-act-out { border-color: rgba(255, 140, 150, 0.3); }
+.gp-bank-act-in { border-color: rgba(120, 240, 190, 0.3); }
+.gp-bank-chip { font-size: 10px; opacity: 0.75; font-weight: 700; }
+
+.gp-bank-section { display: flex; flex-direction: column; gap: 4px; }
+.gp-bank-section-h { font-size: 11px; font-weight: 700; opacity: 0.55; letter-spacing: 0.4px; padding: 2px 4px; text-transform: uppercase; }
+
+.gp-bank-cat { display: flex; align-items: center; gap: 8px; padding: 4px 4px; font-size: 12px; }
+.gp-bank-cat-i { width: 18px; text-align: center; opacity: 0.7; }
+.gp-bank-cat-n { flex: 0 0 84px; opacity: 0.85; text-transform: capitalize; }
+.gp-bank-cat-bar { flex: 1 1 auto; height: 6px; border-radius: 4px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.gp-bank-cat-bar > span { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--gp-accent-a), var(--gp-accent-b)); }
+.gp-bank-cat-s { flex: 0 0 auto; font-size: 11px; font-weight: 600; opacity: 0.8; }
+
+.gp-bank-tx { display: flex; align-items: center; gap: 9px; padding: 8px 6px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-bank-tx:last-child { border-bottom: none; }
+.gp-bank-tx-i { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.08); font-size: 11px; opacity: 0.85; }
+.gp-bank-tx-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.gp-bank-tx-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-bank-tx-cat { font-size: 10px; opacity: 0.5; text-transform: capitalize; }
+.gp-bank-tx-amt { flex: 0 0 auto; font-size: 13px; font-weight: 700; }
+.gp-bank-tx-amt.gp-neg { color: #ff9aa6; }
+.gp-bank-tx-amt.gp-pos { color: #7cf0bb; }
+.gp-pos { color: #7cf0bb; }
+.gp-bank-tx-del { flex: 0 0 auto; background: none; border: none; color: var(--gp-text-dim); cursor: pointer; font-size: 12px; opacity: 0; transition: opacity .2s; padding: 2px; }
+.gp-bank-tx:hover .gp-bank-tx-del, .gp-bank-rec:hover .gp-bank-tx-del { opacity: 0.7; }
+@media (hover: none) { .gp-bank-tx-del { opacity: 0.5; } }
+
+.gp-bank-loan { border-radius: 13px; padding: 10px 12px; background: var(--gp-glass); border: 1px solid var(--gp-border-soft); display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.gp-bank-loan.gp-paid { opacity: 0.55; }
+.gp-bank-loan-top { display: flex; align-items: center; }
+.gp-bank-loan-name { flex: 1 1 auto; font-weight: 700; font-size: 13px; }
+.gp-bank-loan-info { font-size: 11.5px; opacity: 0.8; }
+.gp-bank-pay {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 7px 10px; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(135deg, rgba(46,196,132,0.85), rgba(30,150,110,0.8));
+    border: 1px solid rgba(120,240,190,0.35); color: #fff; font-size: 11.5px; font-weight: 700;
+}
+.gp-bank-pay-sm { padding: 6px 9px; flex: 0 0 auto; }
+.gp-bank-pay:active { transform: scale(0.96); }
+
+.gp-bank-rec { display: flex; align-items: center; gap: 9px; padding: 8px 6px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-bank-rec:last-child { border-bottom: none; }
+.gp-bank-rec-due { background: rgba(255, 180, 60, 0.08); border-radius: 10px; }
+.gp-bank-rec-due .gp-bank-tx-cat { color: #ffbf4d; opacity: 0.9; }
+
+.gp-primary-out { background: linear-gradient(135deg, #ff6a7e, #ff8a5f) !important; }
+
+/* ═══ Магазин ═══ */
+.gp-app-shop { background: linear-gradient(140deg, rgba(255, 150, 70, 0.6), rgba(220, 90, 60, 0.5)); }
+.gp-shop-title i { color: #ff9d4d; }
+.gp-shop-balance { font-size: 12px; opacity: 0.75; padding: 4px 6px 6px; }
+.gp-shop-balance b { color: var(--gp-text); font-weight: 700; }
+.gp-shop-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 2px 12px; display: flex; flex-direction: column; gap: 12px; }
+
+.gp-shop-grid { flex: 1 1 auto; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 6px 4px 14px; align-content: start; }
+.gp-shop-cat {
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 14px 6px; border-radius: 16px; cursor: pointer;
+    background: var(--gp-glass); border: 1px solid var(--gp-border-soft);
+    transition: transform .12s, background .2s;
+}
+.gp-shop-cat:hover { background: rgba(255,255,255,0.13); }
+.gp-shop-cat:active { transform: scale(0.96); }
+.gp-shop-cat-icon {
+    width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+    font-size: 19px; color: #ffb877;
+    background: linear-gradient(140deg, rgba(255, 150, 70, 0.28), rgba(220, 90, 60, 0.2));
+    border: 1px solid rgba(255, 170, 100, 0.25);
+}
+.gp-shop-cat-name { font-size: 11px; text-align: center; line-height: 1.2; opacity: 0.9; }
+.gp-shop-cat-dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: #6fdc9c; }
+.gp-shop-cat-del {
+    position: absolute; top: 4px; left: 4px; width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; color: var(--gp-text-dim); cursor: pointer; font-size: 10px;
+}
+.gp-shop-cat-add { border-style: dashed; opacity: 0.75; }
+.gp-shop-cat-add .gp-shop-cat-icon { background: var(--gp-glass); border-color: var(--gp-border-soft); color: var(--gp-text-dim); }
+
+.gp-shop-store { display: flex; flex-direction: column; gap: 2px; }
+.gp-shop-store-name { font-size: 12px; font-weight: 700; opacity: 0.7; padding: 2px 4px 6px; }
+.gp-shop-store-name i { color: #ff9d4d; margin-right: 4px; }
+.gp-shop-item { display: flex; align-items: center; gap: 10px; padding: 9px 8px; border-radius: 12px; background: var(--gp-glass); border: 1px solid var(--gp-border-soft); margin-bottom: 6px; }
+.gp-shop-item-body { flex: 1 1 auto; min-width: 0; }
+.gp-shop-item-name { font-size: 13px; font-weight: 600; }
+.gp-shop-item-desc { font-size: 10.5px; opacity: 0.55; margin-top: 1px; }
+.gp-shop-item-buy { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.gp-shop-item-price { font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.gp-shop-buy {
+    width: 32px; height: 32px; border-radius: 10px; cursor: pointer; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff;
+    background: linear-gradient(135deg, rgba(255, 150, 70, 0.9), rgba(220, 90, 60, 0.85));
+    border: 1px solid rgba(255, 170, 100, 0.35);
+}
+.gp-shop-buy:active { transform: scale(0.9); }
+.gp-shop-order { display: flex; align-items: center; gap: 9px; padding: 8px 6px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-shop-order:last-child { border-bottom: none; }
+
+/* ═══ v1.5: OnlyFans ═══ */
+.gp-app-of { background: linear-gradient(140deg, rgba(0,150,240,0.55), rgba(0,90,200,0.45)); }
+.gp-of-title i { color: #29a3ff; }
+.gp-of-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9px;
+    color: #7cc7ff;
+    border: 1px solid rgba(41, 163, 255, 0.35);
+    background: rgba(41, 163, 255, 0.1);
+}
+.gp-of-tips {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #6fdc9c;
+}
+.gp-of-tip-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #6fdc9c;
+    border: 1px solid rgba(111, 220, 156, 0.35);
+}
+.gp-of-stats {
+    display: flex;
+    gap: 8px;
+    padding: 4px 2px 10px;
+    border-bottom: 1px solid var(--gp-border-soft);
+}
+.gp-of-stat {
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+}
+.gp-of-stat b { display: block; font-size: 15px; }
+.gp-of-stat span { font-size: 9px; color: var(--gp-text-dim); }
+.gp-of-primary { background: linear-gradient(135deg, #29a3ff, #0077cc); border-color: rgba(41,163,255,0.4); }
+.gp-of-card { border-color: rgba(41, 163, 255, 0.18); }
+
+/* ═══ v1.5: группы ═══ */
+.gp-avatar-group {
+    background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06));
+    font-size: 15px;
+    color: rgba(255,255,255,0.8);
+}
+.gp-bubble-sender {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--gp-accent-a);
+    margin-bottom: 3px;
+}
+.gp-group-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.gp-member-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 12px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 11px;
+    cursor: pointer;
+}
+.gp-member-check:has(input:checked) {
+    border-color: rgba(140, 160, 255, 0.5);
+    background: var(--gp-glass-strong);
+}
+
+/* ═══ v1.5: фото в смс ═══ */
+.gp-bubble-img {
+    margin: 2px 0 6px;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.gp-bubble-img img { width: 100%; max-height: 280px; object-fit: contain; display: block; border-radius: 12px; }
+.gp-bubble-img-gen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 18px 14px;
+    text-align: center;
+    font-size: 16px;
+    color: rgba(255,255,255,0.85);
+}
+.gp-bubble-img-gen i { font-size: 10.5px; font-style: italic; opacity: 0.85; line-height: 1.4; }
+.gp-sms-attach {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    margin: 0 4px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 11px;
+    color: var(--gp-text-dim);
+}
+.gp-sms-attach img { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; }
+.gp-sms-attach span { flex: 1; }
+.gp-sms-attach .gp-iconbtn { width: 26px; height: 26px; font-size: 10px; }
+
+/* v1.2: кликабельные статы OnlyFans */
+.gp-of-stat-btn { cursor: pointer; transition: background .15s, transform .15s; }
+.gp-of-stat-btn:hover { background: var(--gp-glass-strong); transform: translateY(-1px); }
+#gp-of-withdraw b { color: #6fdc9c; }
+
+/* v1.2.1: плашка «что видит модель» под постом */
+.gp-imgdesc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 14px;
+    background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+    font-size: 10.5px;
+    font-style: italic;
+    color: var(--gp-text-dim);
+    line-height: 1.45;
+}
+.gp-imgdesc-note i.fa-solid { margin-top: 2px; flex: 0 0 auto; }
+.gp-imgdesc-warn { border-color: rgba(255, 170, 60, 0.3); color: rgba(255, 190, 110, 0.8); }

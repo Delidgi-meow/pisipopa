@@ -344,12 +344,42 @@ function detectProseNumber(text) {
     return null;
 }
 
-// ── Форматирование времени сообщения ──
-function parseMsgDate(msg) {
-    if (!msg) return null;
-    const sd = msg.send_date;
-    if (typeof sd === 'number') return new Date(sd);
-    if (typeof sd === 'string') {
+// ── Маппинг реальных дат на RP-шкалу ──
+// Вычисляет offset между реальным «сейчас» и RP «сейчас», сдвигает все даты.
+// Кэшируется на тот же цикл, что и getRpDateTime.
+let _rpOffsetMs = null;
+let _rpOffsetSig = null;
+
+function getRpOffsetMs() {
+    const rpDt = getRpDateTime();
+    if (!rpDt) return 0; // нет RP — offset 0, показываем реальные даты
+    const sig = `${rpDt.day}|${rpDt.month}|${rpDt.year}|${rpDt.hours}|${rpDt.minutes}`;
+    if (sig === _rpOffsetSig && _rpOffsetMs !== null) return _rpOffsetMs;
+    _rpOffsetSig = sig;
+    const realNow = new Date();
+    const rpNow = new Date(
+        rpDt.year, rpDt.month - 1, rpDt.day,
+        rpDt.hours ?? realNow.getHours(),
+        rpDt.minutes ?? realNow.getMinutes(),
+        0, 0,
+    );
+    _rpOffsetMs = rpNow.getTime() - realNow.getTime();
+    return _rpOffsetMs;
+}
+
+/** Преобразует реальную дату в RP-дату (сдвиг на offset) */
+export function realToRpDate(realDate) {
+    if (!realDate) return null;
+    const off = getRpOffsetMs();
+    if (off === 0) return realDate;
+    return new Date(realDate.getTime() + off);
+}
+
+function parseRealDate(sd) {
+    if (typeof sd === 'number') {
+        const d = new Date(sd);
+        if (!isNaN(d.getTime())) return d;
+    } else if (typeof sd === 'string') {
         const d = new Date(sd);
         if (!isNaN(d.getTime())) return d;
     }
@@ -358,18 +388,15 @@ function parseMsgDate(msg) {
 
 export function fmtTime(date) {
     if (!date) return '';
-    // Сравниваем «сегодня» с RP-датой, а не с реальной
-    const rpNow = getRpDateTime();
-    let sameDay;
-    if (rpNow) {
-        sameDay = date.getDate() === rpNow.day
-            && (date.getMonth() + 1) === rpNow.month
-            && date.getFullYear() === rpNow.year;
-    } else {
-        const now = new Date();
-        sameDay = date.getFullYear() === now.getFullYear()
-            && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-    }
+    // date уже в RP-шкале (через parseMsgDate → realToRpDate),
+    // «сегодня» = текущая RP-дата
+    const rpDt = getRpDateTime();
+    const now = rpDt
+        ? new Date(rpDt.year, rpDt.month - 1, rpDt.day)
+        : new Date();
+    const sameDay = date.getFullYear() === now.getFullYear()
+        && date.getMonth() === now.getMonth()
+        && date.getDate() === now.getDate();
     if (sameDay) {
         return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     }
@@ -490,22 +517,46 @@ export function getRpDateTime() {
     try {
         const chat = SillyTavern.getContext()?.chat || [];
         const calText = calendarInjectText();
-        const sig = `${chat.length}|${calText.slice(0, 200)}|${chat.length ? (chat[chat.length - 1]?.mes || '').slice(-80) : ''}`;
+        let chatSig = '';
+        for (let i = Math.max(0, chat.length - 8); i < chat.length; i++) {
+            const m = chat[i]?.mes || '';
+            chatSig += m.length + '|' + m.slice(0, 50) + '|' + m.slice(-50) + '|';
+        }
+        const sig = `${chat.length}|${calText.length}|${calText.slice(0, 100)}|${calText.slice(-100)}|${chatSig}`;
         if (sig === _rpDateSig) return _rpDateCache;
         _rpDateSig = sig;
 
-        // 1) Инжект календаря
-        let res = parseAnyDateTime(calText);
-        // 2) Тег/проза в последних сообщениях (Pregnancy RP_DATE или дата в тексте)
-        if (!res) {
-            for (let i = chat.length - 1; i >= 0 && i >= chat.length - 8; i--) {
+        // 1) Тег/проза в последних сообщениях (самые свежие данные)
+        let res = null;
+        for (let i = chat.length - 1; i >= 0 && i >= chat.length - 3; i--) {
+            const mes = chat[i]?.mes;
+            if (!mes || chat[i].is_system) continue;
+            const r = parseAnyDateTime(mes);
+            if (r && !r.timeOnly) { res = r; break; }
+            if (r && !res) res = r; // запомним time-only, но ищем дальше полную
+        }
+
+        // 2) Инжект календаря (если в последних сообщениях нет полной даты)
+        if (!res || res.timeOnly) {
+            const calRes = parseAnyDateTime(calText);
+            if (calRes && !calRes.timeOnly) {
+                res = calRes;
+            } else if (calRes && !res) {
+                res = calRes; // берём хотя бы время из календаря, если вообще ничего нет
+            }
+        }
+
+        // 3) Добиваем более старыми сообщениями (до 8 назад)
+        if (!res || res.timeOnly) {
+            for (let i = chat.length - 4; i >= 0 && i >= chat.length - 8; i--) {
                 const mes = chat[i]?.mes;
                 if (!mes || chat[i].is_system) continue;
                 const r = parseAnyDateTime(mes);
                 if (r && !r.timeOnly) { res = r; break; }
-                if (r && !res) res = r; // time-only — запомним, но ищем дальше полную дату
+                if (r && !res) res = r;
             }
         }
+
         _rpDateCache = res || null;
         return _rpDateCache;
     } catch (e) { _rpDateCache = null; return null; }
@@ -549,6 +600,35 @@ export function scanChat() {
     let chat = [];
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { /* ignore */ }
 
+    const currentGlobalOffset = getRpOffsetMs();
+    const offsets = new Array(chat.length).fill(null);
+    let lastKnownOffset = null;
+    
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (msg && msg.mes && !msg.is_system) {
+            const r = parseAnyDateTime(msg.mes);
+            if (r && !r.timeOnly) {
+                const realDate = parseRealDate(msg.send_date) || new Date();
+                const rpDate = new Date(
+                    r.year, r.month - 1, r.day,
+                    r.hours ?? realDate.getHours(),
+                    r.minutes ?? realDate.getMinutes(),
+                    0, 0
+                );
+                lastKnownOffset = rpDate.getTime() - realDate.getTime();
+            }
+        }
+        offsets[i] = lastKnownOffset;
+    }
+
+    let firstKnown = offsets.find(o => o !== null);
+    if (firstKnown === undefined) firstKnown = currentGlobalOffset;
+
+    for (let i = 0; i < chat.length; i++) {
+        if (offsets[i] === null) offsets[i] = firstKnown;
+    }
+
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
         if (!msg || !msg.mes) continue;
@@ -556,7 +636,12 @@ export function scanChat() {
         if (msg.is_system && !ANY_TEL_RE.test(msg.mes)) continue;
         // Теги внутри CoT-блоков не считаются (иначе дубли сообщений)
         const text = stripThink(msg.mes);
-        const time = parseMsgDate(msg);
+        
+        let time = null;
+        const realDate = parseRealDate(msg.send_date);
+        if (realDate) {
+            time = new Date(realDate.getTime() + (offsets[i] || 0));
+        }
 
         if (msg.is_user) {
             // Исходящая смс юзера

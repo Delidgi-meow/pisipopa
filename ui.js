@@ -592,7 +592,11 @@ function renderThread(screen) {
             const day = `${m.time.getDate()}.${m.time.getMonth()}.${m.time.getFullYear()}`;
             if (day !== lastDay) {
                 lastDay = day;
-                const now = new Date();
+                // m.time уже в RP-шкале — сравниваем с RP «сейчас»
+                const rpDt = getRpDateTime();
+                const now = rpDt
+                    ? new Date(rpDt.year, rpDt.month - 1, rpDt.day)
+                    : new Date();
                 const isToday = now.getFullYear() === m.time.getFullYear() && now.getMonth() === m.time.getMonth() && now.getDate() === m.time.getDate();
                 const label = isToday ? 'Сегодня' : `${String(m.time.getDate()).padStart(2, '0')}.${String(m.time.getMonth() + 1).padStart(2, '0')}`;
                 bubbles += `<div class="gp-day"><span>${label}</span></div>`;

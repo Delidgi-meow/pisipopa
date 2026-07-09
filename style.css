@@ -1321,6 +1321,13 @@
 }
 .gp-shop-cat-name { font-size: 11px; text-align: center; line-height: 1.2; opacity: 0.9; }
 .gp-shop-cat-dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: #6fdc9c; }
+.gp-shop-cat-del {
+    position: absolute; top: 4px; left: 4px; width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; color: var(--gp-text-dim); cursor: pointer; font-size: 10px;
+}
+.gp-shop-cat-add { border-style: dashed; opacity: 0.75; }
+.gp-shop-cat-add .gp-shop-cat-icon { background: var(--gp-glass); border-color: var(--gp-border-soft); color: var(--gp-text-dim); }
 
 .gp-shop-store { display: flex; flex-direction: column; gap: 2px; }
 .gp-shop-store-name { font-size: 12px; font-weight: 700; opacity: 0.7; padding: 2px 4px 6px; }

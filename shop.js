@@ -18,6 +18,9 @@ function genId() { return Date.now().toString(36) + Math.random().toString(36).s
 export const SHOP_CATS = [
     { id: 'food', name: 'Доставка еды', icon: 'fa-burger', hint: 'Restaurants / food delivery: dishes, cuisines, combos, desserts.' },
     { id: 'grocery', name: 'Продукты', icon: 'fa-basket-shopping', hint: 'Grocery / supermarket goods and everyday products.' },
+    { id: 'clothes', name: 'Одежда', icon: 'fa-shirt', hint: 'Clothing stores: dresses, outerwear, shoes, accessories — fitting local fashion.' },
+    { id: 'beauty', name: 'Косметика', icon: 'fa-spray-can-sparkles', hint: 'Cosmetics / beauty: makeup, skincare, perfume, haircare.' },
+    { id: 'kids', name: 'Детские товары', icon: 'fa-baby-carriage', hint: 'Baby & kids goods: clothes, toys, strollers, care products, nursery.' },
     { id: 'tech', name: 'Бытовая техника', icon: 'fa-blender', hint: 'Home appliances and electronics (fridges, phones, gadgets).' },
     { id: 'jewelry', name: 'Ювелирка', icon: 'fa-gem', hint: 'Jewelry: rings, necklaces, earrings, luxury watches.' },
     { id: 'furniture', name: 'Мебель', icon: 'fa-couch', hint: 'Furniture: sofas, beds, tables, storage.' },
@@ -27,7 +30,30 @@ export const SHOP_CATS = [
     { id: 'travel', name: 'Тур-агенство', icon: 'fa-plane', hint: 'Travel agency — each "store" is an operator, items are tour packages/trips with prices.' },
 ];
 
-export function catById(id) { return SHOP_CATS.find(c => c.id === id) || null; }
+// Кастомные категории юзера (per-chat): «пропиши какой магазин нужен»
+export function getCustomCats() {
+    const s = getShop();
+    if (!Array.isArray(s.customCats)) s.customCats = [];
+    return s.customCats;
+}
+export function addCustomCat(name) {
+    const n = String(name || '').trim().slice(0, 40);
+    if (!n) return null;
+    const cat = { id: 'custom_' + genId(), name: n, icon: 'fa-store', hint: `Custom shop category requested by the user: "${n}". Generate stores and items matching this request.`, custom: true };
+    getCustomCats().push(cat);
+    saveMeta();
+    return cat;
+}
+export function delCustomCat(id) {
+    const s = getShop();
+    s.customCats = getCustomCats().filter(c => c.id !== id);
+    delete s.cats[id]; // каталог тоже удаляем
+    saveMeta();
+}
+
+export function catById(id) {
+    return SHOP_CATS.find(c => c.id === id) || getCustomCats().find(c => c.id === id) || null;
+}
 
 export function getShop() {
     const m = getMeta();

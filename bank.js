@@ -235,11 +235,37 @@ export function getBankSummaryLine() {
 // ── Одна компактная строка-правило для директивы (инжектится только если банк активен) ──
 export function bankInjectRule() {
     if (!bankActive()) return '';
-    return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers her cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
+    return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers her cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. This INCLUDES bank notification SMS: if you send {{user}} an SMS from a bank about money credited/debited, the tel:bank tag with the same amount is MANDATORY alongside it — the SMS alone does not move money in the app. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
 }
 
-// ── Харвест тегов tel:bank из чата ──
+// ── Харвест тегов tel:bank + банковских СМС из чата ──
 const BANK_TAG_RE = /<!--\s*tel:bank:(\{[\s\S]*?\})\s*-->/gi;
+const SMS_TAG_RE = /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/gi;
+
+// «Банковская» смс: отправитель похож на банк, текст содержит сумму и слово-направление.
+// Страховка на случай, когда модель написала смс от банка, но забыла tel:bank тег
+// («смс о списании пришла, а в банке пусто»).
+const BANK_SENDER_RE = /банк|bank|сбер|тинькофф|tinkoff|альфа|втб|райффайзен|газпром|озон|уралсиб|росбанк|совкомбанк|мтс[\s-]?банк|900/i;
+const SPEND_RE = /списан|списание|покупк|оплат|платил|платеж|платёж|перевод\s+(отправлен|выполнен)|снятие|снят[оы]|аренда|штраф|комисси/i;
+const INCOME_RE = /пополнен|пополнение|зачислен|поступлени|перевод\s+от|получен\s+перевод|возврат|зарплат|начислен|кэшбэк|cashback/i;
+const AMOUNT_RE = /(\d[\d\s]{0,12}(?:[.,]\d{1,2})?)\s*(?:₽|руб|р\.|р\b|\$|€|£|usd|eur)/i;
+
+function parseBankSms(smsJson) {
+    const from = String(smsJson.from || '');
+    const text = String(smsJson.text || '');
+    if (!BANK_SENDER_RE.test(from) && !BANK_SENDER_RE.test(text.slice(0, 40))) return null;
+    const am = text.match(AMOUNT_RE);
+    if (!am) return null;
+    const amount = Math.round(parseFloat(am[1].replace(/\s/g, '').replace(',', '.')) || 0);
+    if (!amount) return null;
+    let sign = 0;
+    if (SPEND_RE.test(text)) sign = -1;
+    else if (INCOME_RE.test(text)) sign = 1;
+    if (!sign) return null;
+    // Метка: кусок текста без суммы, коротко
+    const label = text.replace(AMOUNT_RE, '').replace(/\s+/g, ' ').trim().slice(0, 50) || (sign < 0 ? 'Списание (смс банка)' : 'Пополнение (смс банка)');
+    return { amount: sign * amount, label, category: 'смс банка' };
+}
 
 export function harvestBankTags() {
     const b = getBank();
@@ -248,11 +274,18 @@ export function harvestBankTags() {
     let added = 0;
     const seen = new Set(b.seenTags);
     for (const msg of chat) {
-        if (!msg || !msg.mes || msg.is_system) continue;
+        if (!msg || !msg.mes) continue;
+        // is_system пропускаем, НО наши смс-призраки (is_system на 1.5с) содержат
+        // tel:sms банка — их тоже сканируем
+        if (msg.is_system && !/tel:(bank|sms)/i.test(msg.mes)) continue;
         const text = stripThink(msg.mes);
+
+        // 1) Явные теги tel:bank (протокол)
+        let hasBankTag = false;
         BANK_TAG_RE.lastIndex = 0;
         let m;
         while ((m = BANK_TAG_RE.exec(text)) !== null) {
+            hasBankTag = true;
             const h = 'bk' + hash32(m[1]);
             if (seen.has(h)) continue;
             seen.add(h); b.seenTags.push(h);
@@ -266,8 +299,25 @@ export function harvestBankTags() {
             });
             added++;
         }
+
+        // 2) Смс от банка без тега (страховка). Если в сообщении УЖЕ был tel:bank —
+        // не парсим смс того же сообщения (иначе одна операция задвоится).
+        if (!hasBankTag) {
+            SMS_TAG_RE.lastIndex = 0;
+            while ((m = SMS_TAG_RE.exec(text)) !== null) {
+                const h = 'bs' + hash32(m[1]);
+                if (seen.has(h)) continue;
+                const j = safeJson(m[1]);
+                if (!j) continue;
+                const tx = parseBankSms(j);
+                if (!tx) continue;
+                seen.add(h); b.seenTags.push(h);
+                addTransaction({ ...tx, silent: true });
+                added++;
+            }
+        }
     }
-    if (b.seenTags.length > 300) b.seenTags = b.seenTags.slice(-300);
+    if (b.seenTags.length > 400) b.seenTags = b.seenTags.slice(-400);
     if (added) saveMeta();
     return added;
 }

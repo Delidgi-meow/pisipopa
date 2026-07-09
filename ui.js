@@ -16,7 +16,7 @@ import {
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency,
 } from './bank.js';
-import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder } from './shop.js';
+import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat } from './shop.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
@@ -2110,18 +2110,34 @@ function renderShop(screen) {
         </div>
         <div class="gp-shop-balance">Баланс: <b>${esc(fmtMoney(b.balance))}</b></div>
         <div class="gp-shop-grid">
-            ${SHOP_CATS.map(c => `
+            ${[...SHOP_CATS, ...getCustomCats()].map(c => `
                 <div class="gp-shop-cat" data-cat="${c.id}">
                     <div class="gp-shop-cat-icon">${ic(c.icon)}</div>
                     <div class="gp-shop-cat-name">${esc(c.name)}</div>
                     ${getCategory(c.id) ? `<div class="gp-shop-cat-dot" title="Каталог загружен"></div>` : ''}
+                    ${c.custom ? `<button class="gp-shop-cat-del" data-delcat="${c.id}" title="Удалить">${ic('fa-xmark')}</button>` : ''}
                 </div>`).join('')}
+            <div class="gp-shop-cat gp-shop-cat-add" id="gp-shop-addcat">
+                <div class="gp-shop-cat-icon">${ic('fa-plus')}</div>
+                <div class="gp-shop-cat-name">Свой магазин</div>
+            </div>
         </div>`;
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
     screen.querySelector('#gp-shop-orders')?.addEventListener('click', () => goto('shoporders'));
-    screen.querySelectorAll('.gp-shop-cat').forEach(el => el.addEventListener('click', () => {
+    screen.querySelectorAll('.gp-shop-cat[data-cat]').forEach(el => el.addEventListener('click', () => {
         currentShopCat = el.getAttribute('data-cat');
         goto('shopcat');
+    }));
+    // Своя категория: юзер описывает, какой магазин нужен
+    screen.querySelector('#gp-shop-addcat')?.addEventListener('click', () => {
+        const name = prompt('Какой магазин нужен? (например: зоомагазин, оружейный, цветы, книжный...)');
+        if (!name || !name.trim()) return;
+        const cat = addCustomCat(name);
+        if (cat) { currentShopCat = cat.id; goto('shopcat'); }
+    });
+    screen.querySelectorAll('[data-delcat]').forEach(btn => btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm('Удалить эту категорию?')) { delCustomCat(btn.getAttribute('data-delcat')); render(); }
     }));
 }
 

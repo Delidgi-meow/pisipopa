@@ -21,7 +21,7 @@
 
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
-import { extensionNames } from '../../../extensions.js';
+import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName } from './state.js';
 
 const MAX_TWEETS = 50;
@@ -1291,6 +1291,17 @@ async function loadImageExt() {
             if (mod) break;
         }
     }
+    // Фолбэк: ВСТРОЕННЫЙ драйвер. Однофайловые форки (vish, sillyimages и т.п.)
+    // НЕ экспортируют generateImageWithRetry — импортировать нельзя (второй
+    // инстанс задублировал бы их UI). Но ВСЕ форки семейства делят один ключ
+    // настроек inline_image_gen (endpoint/apiKey/apiType/model/styles/refs) —
+    // генерим сами их настройками (мини-клиент openai/gemini ниже).
+    if (!mod) {
+        const iig = extension_settings?.inline_image_gen;
+        if (iig && iig.endpoint && iig.apiKey && iig.model) {
+            mod = { builtin: true, folder: '(встроенный: настройки inline_image_gen)' };
+        }
+    }
     _imgExt = { key, mod };
     return mod;
 }
@@ -1306,6 +1317,17 @@ export async function isImageGenAvailable() {
 export async function fetchImageModels() {
     const mod = await loadImageExt();
     if (!mod) throw new Error('картинко-расширение не найдено');
+    if (mod.builtin) {
+        const iig = extension_settings.inline_image_gen;
+        const resp = await fetch(`${String(iig.endpoint).replace(/\/$/, '')}/v1/models`, {
+            headers: { 'Authorization': `Bearer ${iig.apiKey}` },
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const j = await resp.json();
+        const models = (j.data || j.models || []).map(m => m.id || m.name || m).filter(Boolean);
+        if (!models.length) throw new Error('список пуст');
+        return models;
+    }
     const base = `/scripts/extensions/third-party/${mod.folder}`;
     const provMod = await import(`${base}/src/providers.js`);
     const setMod = (typeof mod.settings?.getSettings === 'function') ? mod.settings : await import(`${base}/src/settings.js`);
@@ -1403,7 +1425,7 @@ export function generatePostImage(post, onStatus = null) {
 // (у юзера стоял 16:9). Снимаем оверрайды на время генерации → побеждает наш 1:1.
 async function _generatePostImage(post, onStatus = null) {
     const mod = await loadImageExt();
-    if (!mod) throw new Error('Картинко-расширение не найдено (нужно novarakk-подобное — с src/pipeline.js). Установи его или укажи имя папки в настройках.');
+    if (!mod) throw new Error('Картинко-расширение не найдено и картинко-API не настроен. Установи novarakk-подобное расширение или настрой endpoint/key/model в любом форке inline_image_gen.');
 
     const nvSettings = (typeof mod.settings?.getSettings === 'function') ? mod.settings.getSettings() : null;
 
@@ -1428,6 +1450,11 @@ async function _generatePostImage(post, onStatus = null) {
         prompt = [framing, tags].filter(Boolean).join(', ') || buildImagePrompt(post, { anonymous, allowChar: wantChar });
     } else {
         prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
+    }
+
+    // Встроенный драйвер (форки без экспортов — vish/sillyimages и т.п.)
+    if (mod.builtin) {
+        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus });
     }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
@@ -1469,6 +1496,135 @@ async function _generatePostImage(post, onStatus = null) {
     } finally {
         if (nvSettings) for (const k of keys) if (k in saved) nvSettings[k] = saved[k];
     }
+}
+
+// ── ВСТРОЕННЫЙ драйвер генерации (настройки любого форка inline_image_gen) ──
+// Мини-клиент: openai (/v1/images/generations|edits) и gemini (:generateContent).
+// Стиль — активный стиль форка ([STYLE: ...]), рефы — аватары чара/персоны
+// по правилам форка (sendCharAvatar/sendUserAvatar) с нашим гейтом wantChar/isUserPost.
+
+async function _fetchB64(url) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        const blob = await r.blob();
+        return await new Promise((resolve) => {
+            const fr = new FileReader();
+            fr.onloadend = () => resolve(String(fr.result).split(',')[1] || null);
+            fr.onerror = () => resolve(null);
+            fr.readAsDataURL(blob);
+        });
+    } catch (e) { return null; }
+}
+
+async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
+    const iig = extension_settings.inline_image_gen || {};
+    const endpoint = String(iig.endpoint || '').trim().replace(/\/$/, '');
+    if (!endpoint || !iig.apiKey || !iig.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
+
+    const st = getSettings();
+    const model = st.imageGenModel || iig.model;
+    const aspect = st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1');
+
+    // Активный стиль форка
+    let style = '';
+    try {
+        const s = (iig.styles || []).find(x => x && x.id === iig.activeStyleId);
+        style = String(s?.value ?? s?.style ?? '').trim();
+    } catch (e) { /* ignore */ }
+    let fullPrompt = style ? `[STYLE: ${style}]\n\n${prompt}` : prompt;
+
+    // Рефы: аватар чара/персоны (по флажкам форка + наш гейт)
+    const refs = [];
+    try {
+        const ctx = SillyTavern.getContext();
+        if (wantChar && iig.sendCharAvatar !== false) {
+            const ch = ctx?.characters?.[ctx.characterId];
+            if (ch?.avatar && ch.avatar !== 'none') {
+                const b = await _fetchB64(`/characters/${encodeURIComponent(ch.avatar)}`);
+                if (b) refs.push(b);
+            }
+        }
+        if (isUserPost && iig.sendUserAvatar !== false && typeof user_avatar === 'string' && user_avatar) {
+            const b = await _fetchB64(`/User Avatars/${encodeURIComponent(user_avatar)}`);
+            if (b) refs.push(b);
+        }
+    } catch (e) { /* без рефов */ }
+    if (refs.length > 0) {
+        fullPrompt = `[The reference image(s) show the EXACT appearance of the character(s) — copy face, hair, body precisely.]\n\n${fullPrompt}`;
+    }
+
+    onStatus?.('Генерация...');
+    const isGemini = iig.apiType === 'gemini' || /gemini|banana/i.test(String(model));
+    let b64 = null, mime = 'image/png';
+
+    if (isGemini) {
+        const pathModel = String(model).includes('/') ? String(model).slice(String(model).indexOf('/') + 1) : String(model);
+        const parts = refs.map(r => ({ inlineData: { mimeType: 'image/png', data: r } }));
+        parts.push({ text: fullPrompt });
+        const resp = await fetch(`${endpoint}/v1beta/models/${encodeURIComponent(pathModel)}:generateContent`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts }],
+                generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: aspect } },
+            }),
+        });
+        if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
+        const j = await resp.json();
+        const ps = j?.candidates?.[0]?.content?.parts || [];
+        const img = ps.find(p => p.inlineData?.data);
+        if (!img) throw new Error('Gemini не вернул картинку' + (ps.find(p => p.text) ? `: ${ps.find(p => p.text).text.slice(0, 100)}` : ''));
+        b64 = img.inlineData.data; mime = img.inlineData.mimeType || 'image/png';
+    } else {
+        // OpenAI-совместимый путь
+        const size = aspect === '1:1' ? '1024x1024' : (iig.size || 'auto');
+        let resp;
+        if (refs.length > 0) {
+            const form = new FormData();
+            form.append('model', model);
+            form.append('prompt', fullPrompt);
+            form.append('n', '1');
+            if (size && size !== 'auto') form.append('size', size);
+            const toBlob = (r) => {
+                const bin = atob(r); const arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                return new Blob([arr], { type: 'image/png' });
+            };
+            if (refs.length > 1) refs.forEach((r, i) => form.append('image[]', toBlob(r), `ref${i}.png`));
+            else form.append('image', toBlob(refs[0]), 'ref0.png');
+            resp = await fetch(`${endpoint}/v1/images/edits`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${iig.apiKey}` }, body: form,
+            });
+        } else {
+            const body = { model, prompt: fullPrompt, n: 1 };
+            if (size && size !== 'auto') body.size = size;
+            if (!/gpt-image/i.test(String(model))) body.response_format = 'b64_json';
+            resp = await fetch(`${endpoint}/v1/images/generations`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        }
+        if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
+        const j = await resp.json();
+        const d = j?.data?.[0];
+        if (d?.b64_json) b64 = d.b64_json;
+        else if (d?.url) {
+            // URL → тянем и конвертим (для сохранения файлом)
+            b64 = await _fetchB64(d.url);
+            if (!b64) { post.image = d.url; saveMeta(); return d.url; }
+        }
+        if (!b64) throw new Error('API не вернул картинку');
+    }
+
+    let src = `data:${mime};base64,${b64}`;
+    try {
+        src = await saveBase64AsFile(b64, 'glassphone', `iggen_${Date.now()}`, mime.includes('png') ? 'png' : 'jpeg');
+    } catch (e) { /* оставляем dataURL */ }
+    post.image = src;
+    saveMeta();
+    return src;
 }
 
 // ═══ Журнал соцсетей в чат ═══

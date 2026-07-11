@@ -309,6 +309,36 @@ function createPhone() {
 const SKINS = ['indigo', 'sunset', 'zephyr', 'neon', 'noir', 'fern', 'lcd', 'void', 'porcelain'];
 const LEGACY_SKINS = { rose: 'sunset', emerald: 'fern', mono: 'lcd' };
 const THEME_BODY_CLASSES = [...SKINS, ...Object.values(LEGACY_SKINS)].map(sk => `gp-theme-${sk}`);
+const THEME_INFO = [
+    { id: 'indigo', name: 'Индиго', note: 'Liquid glass', colors: ['#6a8dff', '#9a6aff', '#4aaaff'] },
+    { id: 'sunset', name: 'Закат', note: 'Тёплое стекло', colors: ['#ff8a5f', '#ff5a8c', '#a04a45'] },
+    { id: 'zephyr', name: 'Зефир', note: 'Мягкий kawaii', colors: ['#ff9ec7', '#b79bff', '#8dcfff'] },
+    { id: 'neon', name: 'Neon City', note: 'Cyberpunk', colors: ['#ff2d78', '#00e5ff', '#8d42ff'] },
+    { id: 'noir', name: "Noir d'Or", note: 'Чёрное золото', colors: ['#f0d49a', '#d9ab5e', '#6f5732'] },
+    { id: 'fern', name: 'Fern', note: 'Глубокий лес', colors: ['#a3e08a', '#5cbf8a', '#d5aa55'] },
+    { id: 'lcd', name: 'LCD 3310', note: 'Пиксельное ретро', colors: ['#242e12', '#56642c', '#a7bd5e'] },
+    { id: 'void', name: 'Void', note: 'True AMOLED', colors: ['#00ff9d', '#00d984', '#303030'] },
+    { id: 'porcelain', name: 'Porcelain', note: 'Светлый день', colors: ['#5a92ff', '#3a7bfd', '#a9c2ff'] },
+];
+
+function hexRgb(hex) {
+    const m = String(hex || '').trim().match(/^#([0-9a-f]{6})$/i);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
+
+function normalizedThemeCustom(value = getSettings().themeCustom) {
+    const v = value && typeof value === 'object' ? value : {};
+    return {
+        accentA: /^#[0-9a-f]{6}$/i.test(v.accentA || '') ? v.accentA : null,
+        accentB: /^#[0-9a-f]{6}$/i.test(v.accentB || '') ? v.accentB : null,
+        radius: Math.max(2, Math.min(30, Number(v.radius) || 18)),
+        transparency: Math.max(3, Math.min(28, Number(v.transparency) || 10)),
+        iconScale: Math.max(80, Math.min(115, Number(v.iconScale) || 100)),
+    };
+}
+
 export function applySkin() {
     const ph = document.getElementById('gp-phone');
     if (ph) {
@@ -318,6 +348,27 @@ export function applySkin() {
         if (skin !== 'indigo') ph.classList.add(`gp-skin-${skin}`);
         document.body?.classList.remove(...THEME_BODY_CLASSES);
         document.body?.classList.add(`gp-theme-${skin}`);
+
+        const c = normalizedThemeCustom();
+        const theme = THEME_INFO.find(x => x.id === skin) || THEME_INFO[0];
+        const accentA = c.accentA || theme.colors[0];
+        const accentB = c.accentB || theme.colors[1];
+        ph.style.setProperty('--gp-accent-a', accentA);
+        ph.style.setProperty('--gp-accent-b', accentB);
+        ph.style.setProperty('--gp-accent-a-rgb', hexRgb(accentA));
+        ph.style.setProperty('--gp-accent-b-rgb', hexRgb(accentB));
+        ph.style.setProperty('--gp-theme-card-radius', `${c.radius}px`);
+        ph.style.setProperty('--gp-theme-icon-radius', `${Math.max(3, Math.round(c.radius * .95))}px`);
+        ph.style.setProperty('--gp-theme-icon-scale', String(c.iconScale / 100));
+        const alpha = c.transparency / 100;
+        const light = skin === 'zephyr' || skin === 'porcelain';
+        const lcd = skin === 'lcd';
+        ph.style.setProperty('--gp-glass', lcd
+            ? `rgba(255,255,230,${Math.min(.45, alpha + .12)})`
+            : light ? `rgba(255,255,255,${Math.min(.9, alpha + .5)})` : `rgba(255,255,255,${alpha})`);
+        ph.style.setProperty('--gp-glass-strong', lcd
+            ? `rgba(255,255,230,${Math.min(.55, alpha + .22)})`
+            : light ? `rgba(255,255,255,${Math.min(.96, alpha + .68)})` : `rgba(255,255,255,${Math.min(.4, alpha + .06)})`);
     }
     // Кастомный CSS юзера
     let styleEl = document.getElementById('gp-custom-css');
@@ -444,6 +495,7 @@ export function render() {
     else if (currentScreen === 'shop') renderShop(screen);
     else if (currentScreen === 'shopcat') renderShopCat(screen);
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
+    else if (currentScreen === 'appearance') renderAppearance(screen);
     else renderHome(screen);
 }
 
@@ -513,12 +565,156 @@ function renderHome(screen) {
                     <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}</div>
                     <div class="gp-app-name">Магазин</div>
                 </div>
+                <div class="gp-app" data-app="appearance">
+                    <div class="gp-app-icon gp-app-appearance">${ic('fa-palette')}</div>
+                    <div class="gp-app-name">Оформление</div>
+                </div>
             </div>
         </div>`;
 
     screen.querySelectorAll('.gp-app').forEach(el => {
         el.addEventListener('click', () => goto(el.getAttribute('data-app')));
     });
+}
+
+// ── Экран «Оформление» ──
+function renderAppearance(screen) {
+    currentScreen = 'appearance';
+    const s = getSettings();
+    const skin = LEGACY_SKINS[s.skin] || (SKINS.includes(s.skin) ? s.skin : 'indigo');
+    const custom = normalizedThemeCustom();
+    const presets = Array.isArray(s.themePresets) ? s.themePresets : [];
+    const cards = THEME_INFO.map(t => `
+        <button class="gp-theme-card${t.id === skin ? ' gp-active' : ''}" data-skin="${t.id}" type="button">
+            <span class="gp-theme-preview gp-preview-${t.id}">
+                <span class="gp-preview-island"></span>
+                <span class="gp-preview-lines"><i></i><i></i><i></i></span>
+                <span class="gp-preview-dock">${t.colors.map(c => `<i style="background:${c}"></i>`).join('')}</span>
+            </span>
+            <strong>${esc(t.name)}</strong>
+            <small>${esc(t.note)}</small>
+            <b>${t.id === skin ? 'АКТИВНА' : 'ВЫБРАТЬ'}</b>
+        </button>`).join('');
+    const dots = THEME_INFO.map(t => `<button class="gp-theme-dot${t.id === skin ? ' gp-active' : ''}" data-skin="${t.id}" aria-label="${esc(t.name)}"></button>`).join('');
+    const chips = presets.length ? presets.map(p => `
+        <button class="gp-preset-chip" data-preset="${esc(p.id)}" type="button">
+            <span>${esc(p.name || 'Мой пресет')}</span><i class="fa-solid fa-xmark" data-delete-preset="${esc(p.id)}"></i>
+        </button>`).join('') : '<div class="gp-presets-empty">Здесь появятся ваши варианты оформления</div>';
+
+    screen.innerHTML = `
+        <div class="gp-header gp-appearance-header">
+            <button class="gp-iconbtn" id="gp-home-btn">${ic('fa-chevron-left')}</button>
+            <div class="gp-title">Оформление</div>
+            <button class="gp-iconbtn" id="gp-theme-reset" title="Сбросить настройки">${ic('fa-rotate-left')}</button>
+        </div>
+        <div class="gp-appearance-scroll">
+            <div class="gp-theme-carousel" id="gp-theme-carousel">${cards}</div>
+            <div class="gp-theme-dots">${dots}</div>
+
+            <section class="gp-theme-section">
+                <h3>Мои пресеты</h3>
+                <div class="gp-presets">${chips}</div>
+                <button class="gp-save-preset" id="gp-save-preset" type="button">${ic('fa-plus')} Сохранить текущую</button>
+            </section>
+
+            <section class="gp-theme-section gp-theme-editor">
+                <h3>Настроить</h3>
+                <label class="gp-theme-control gp-color-control">
+                    <span>Акцент</span>
+                    <span class="gp-color-pickers">
+                        <input id="gp-accent-a" type="color" value="${custom.accentA || (THEME_INFO.find(x => x.id === skin)?.colors[0] || '#6a8dff')}">
+                        <input id="gp-accent-b" type="color" value="${custom.accentB || (THEME_INFO.find(x => x.id === skin)?.colors[1] || '#9a6aff')}">
+                    </span>
+                </label>
+                <label class="gp-theme-control">
+                    <span>Скругление <output id="gp-radius-out">${custom.radius}px</output></span>
+                    <input id="gp-theme-radius" type="range" min="2" max="30" value="${custom.radius}">
+                </label>
+                <label class="gp-theme-control">
+                    <span>Прозрачность <output id="gp-alpha-out">${custom.transparency}%</output></span>
+                    <input id="gp-theme-alpha" type="range" min="3" max="28" value="${custom.transparency}">
+                </label>
+                <label class="gp-theme-control">
+                    <span>Размер иконок <output id="gp-icons-out">${custom.iconScale}%</output></span>
+                    <input id="gp-theme-icons" type="range" min="80" max="115" value="${custom.iconScale}">
+                </label>
+            </section>
+        </div>`;
+
+    screen.querySelector('#gp-home-btn')?.addEventListener('click', () => goto('home'));
+    const carousel = screen.querySelector('#gp-theme-carousel');
+    const activeCard = carousel?.querySelector('.gp-theme-card.gp-active');
+    requestAnimationFrame(() => activeCard?.scrollIntoView({ inline: 'center', block: 'nearest' }));
+
+    const chooseSkin = (nextSkin) => {
+        if (!SKINS.includes(nextSkin)) return;
+        getSettings().skin = nextSkin;
+        saveSettingsDebounced();
+        applySkin();
+        const select = document.getElementById('gp-set-skin');
+        if (select) select.value = nextSkin;
+        renderAppearance(screen);
+    };
+    screen.querySelectorAll('[data-skin]').forEach(el => el.addEventListener('click', () => chooseSkin(el.dataset.skin)));
+
+    const updateCustom = (patch, rerender = false) => {
+        const st = getSettings();
+        st.themeCustom = { ...normalizedThemeCustom(st.themeCustom), ...patch };
+        saveSettingsDebounced();
+        applySkin();
+        if (rerender) renderAppearance(screen);
+    };
+    const bindRange = (id, key, outId, suffix) => {
+        const el = screen.querySelector(id);
+        el?.addEventListener('input', () => {
+            screen.querySelector(outId).textContent = `${el.value}${suffix}`;
+            updateCustom({ [key]: Number(el.value) });
+        });
+    };
+    bindRange('#gp-theme-radius', 'radius', '#gp-radius-out', 'px');
+    bindRange('#gp-theme-alpha', 'transparency', '#gp-alpha-out', '%');
+    bindRange('#gp-theme-icons', 'iconScale', '#gp-icons-out', '%');
+    screen.querySelector('#gp-accent-a')?.addEventListener('input', e => updateCustom({ accentA: e.target.value }));
+    screen.querySelector('#gp-accent-b')?.addEventListener('input', e => updateCustom({ accentB: e.target.value }));
+
+    screen.querySelector('#gp-theme-reset')?.addEventListener('click', () => {
+        getSettings().themeCustom = { accentA: null, accentB: null, radius: 18, transparency: 10, iconScale: 100 };
+        saveSettingsDebounced();
+        applySkin();
+        renderAppearance(screen);
+        toast('Настройки темы сброшены', 'fa-rotate-left');
+    });
+    screen.querySelector('#gp-save-preset')?.addEventListener('click', () => {
+        const name = prompt('Название пресета:', `Мой ${THEME_INFO.find(x => x.id === skin)?.name || 'стиль'}`)?.trim();
+        if (!name) return;
+        const st = getSettings();
+        st.themePresets.push({
+            id: `theme_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            name: name.slice(0, 32), skin: st.skin, custom: { ...normalizedThemeCustom(st.themeCustom) },
+        });
+        saveSettingsDebounced();
+        renderAppearance(screen);
+        toast(`Пресет «${name.slice(0, 32)}» сохранён`, 'fa-bookmark');
+    });
+    screen.querySelectorAll('[data-preset]').forEach(el => el.addEventListener('click', e => {
+        if (e.target.closest('[data-delete-preset]')) return;
+        const p = getSettings().themePresets.find(x => x.id === el.dataset.preset);
+        if (!p) return;
+        const presetSkin = LEGACY_SKINS[p.skin] || p.skin;
+        getSettings().skin = SKINS.includes(presetSkin) ? presetSkin : 'indigo';
+        getSettings().themeCustom = { ...normalizedThemeCustom(p.custom) };
+        saveSettingsDebounced();
+        applySkin();
+        renderAppearance(screen);
+        toast(`Пресет «${p.name}» применён`, 'fa-wand-magic-sparkles');
+    }));
+    screen.querySelectorAll('[data-delete-preset]').forEach(el => el.addEventListener('click', e => {
+        e.stopPropagation();
+        const st = getSettings();
+        st.themePresets = st.themePresets.filter(x => x.id !== el.dataset.deletePreset);
+        saveSettingsDebounced();
+        renderAppearance(screen);
+    }));
 }
 
 // ── Экран «Сообщения» ──

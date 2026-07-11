@@ -74,6 +74,17 @@ const defaultSettings = () => ({
     wallpaperBlur: false,
     // Тема телефона: indigo | sunset | zephyr | neon | noir | fern | lcd | void | porcelain
     skin: 'indigo',
+    // Визуальные поправки, настраиваемые прямо в приложении «Оформление».
+    // null у цветов означает «использовать авторскую палитру выбранной темы».
+    themeCustom: {
+        accentA: null,
+        accentB: null,
+        radius: 18,
+        transparency: 10,
+        iconScale: 100,
+    },
+    // Пользовательские снимки оформления: [{id,name,skin,custom}]
+    themePresets: [],
     // Кастомный CSS телефона
     customCss: '',
     // Автоматически тянуть аватарки из карточек персонажей/персоны
@@ -94,6 +105,13 @@ export function getSettings() {
     const s = extension_settings[EXT_NAME];
     const def = defaultSettings();
     for (const k in def) if (s[k] === undefined) s[k] = def[k];
+    if (!s.themeCustom || typeof s.themeCustom !== 'object' || Array.isArray(s.themeCustom)) {
+        s.themeCustom = { ...def.themeCustom };
+    } else {
+        for (const k in def.themeCustom) if (s.themeCustom[k] === undefined) s.themeCustom[k] = def.themeCustom[k];
+    }
+    if (!Array.isArray(s.themePresets)) s.themePresets = [];
+    else s.themePresets = s.themePresets.filter(p => p && typeof p === 'object' && typeof p.id === 'string');
     return s;
 }
 

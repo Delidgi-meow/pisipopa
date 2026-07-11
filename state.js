@@ -492,14 +492,38 @@ const EN_MONTHS = [
 
 // Толерантный парс даты+времени из произвольного текста. Возвращает
 // {day,month,year,hours?,minutes?} или null.
-function parseAnyDateTime(text) {
+export function parseAnyDateTime(text, base = null) {
     if (!text) return null;
     const t = String(text);
     let day = null, month = null, year = null, hours, minutes;
 
-    // Время HH:MM (24ч) — первое вхождение
-    const tm = t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
-    if (tm) { hours = parseInt(tm[1]); minutes = parseInt(tm[2]); }
+    // Время: 19:30 / 19.30 / 7:30 PM / 7 PM / «в 7 вечера».
+    const tm = t.match(/\b(1[0-2]|0?\d)(?::|\.)([0-5]\d)(?![.\/-]\d)\s*(am|pm)\b/i)
+        || t.match(/\b(1[0-2]|0?\d)\s*(am|pm)\b/i)
+        // Сначала часы с двоеточием. Точку разрешаем отдельно только когда
+        // совпадение не является началом даты вроде 15.06.2025: раньше такая
+        // дата ошибочно превращала RP-время в 15:06, игнорируя стоящее далее 19:35.
+        || t.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/)
+        || t.match(/\b([01]?\d|2[0-3])\.([0-5]\d)(?![.\/-]\d)\b/);
+    if (tm) {
+        hours = parseInt(tm[1]);
+        if (/am|pm/i.test(tm[tm.length - 1] || '')) {
+            const ap = String(tm[tm.length - 1]).toLowerCase();
+            minutes = tm.length > 3 ? parseInt(tm[2]) : 0;
+            if (ap === 'pm' && hours < 12) hours += 12;
+            if (ap === 'am' && hours === 12) hours = 0;
+        } else minutes = parseInt(tm[2]);
+    }
+    if (hours === undefined) {
+        const proseTime = t.match(/(?:\bв|\bat|около|примерно)\s+(\d{1,2})(?:[:.]([0-5]\d))?\s*(утра|дня|вечера|ночи)\b/i);
+        if (proseTime) {
+            hours = parseInt(proseTime[1]); minutes = parseInt(proseTime[2] || '0');
+            const part = proseTime[3].toLowerCase();
+            if ((part === 'дня' || part === 'вечера') && hours < 12) hours += 12;
+            if (part === 'ночи' && hours === 12) hours = 0;
+        } else if (/\b(?:полдень|noon)\b/i.test(t)) { hours = 12; minutes = 0; }
+        else if (/\b(?:полночь|midnight)\b/i.test(t)) { hours = 0; minutes = 0; }
+    }
 
     // 1) [RP_DATE:DD.MM.YYYY]
     let m = t.match(RP_DATE_RE);
@@ -524,9 +548,10 @@ function parseAnyDateTime(text) {
             const around = low.slice(Math.max(0, mo.idx - 12), mo.idx + mo.stem.length + 12);
             const dMatch = around.match(/\b(\d{1,2})\b/);
             if (dMatch) day = parseInt(dMatch[1]);
-            // год — 4 цифры где-то в тексте
+            // год — 4 цифры где-то в тексте; без года наследуем RP-год.
             const yMatch = low.match(/\b(19|20)\d{2}\b/);
             if (yMatch) year = parseInt(yMatch[0]);
+            else if (base?.year) year = base.year;
         }
     }
     // 3) Числовая дата DD.MM.YYYY / DD/MM/YYYY / YYYY-MM-DD
@@ -534,9 +559,23 @@ function parseAnyDateTime(text) {
         let dm = t.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/); // ISO
         if (dm) { year = parseInt(dm[1]); month = parseInt(dm[2]); day = parseInt(dm[3]); }
         else {
-            dm = t.match(/\b(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})\b/);
+            dm = t.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})\b/);
             if (dm) { day = parseInt(dm[1]); month = parseInt(dm[2]); year = parseInt(dm[3]); }
+            else {
+                dm = t.match(/\b(\d{1,2})[.\/-](\d{1,2})(?![.\/-]\d)\b/);
+                if (dm && base?.year) { day = parseInt(dm[1]); month = parseInt(dm[2]); year = base.year; }
+            }
         }
+    }
+
+    // Относительная дата считается только при известной базовой RP-дате.
+    if (day === null && base?.year && /\b(?:сегодня|today|завтра|tomorrow|послезавтра|day after tomorrow|вчера|yesterday)\b/i.test(t)) {
+        let shift = 0;
+        if (/\b(?:послезавтра|day after tomorrow)\b/i.test(t)) shift = 2;
+        else if (/\b(?:завтра|tomorrow)\b/i.test(t)) shift = 1;
+        else if (/\b(?:вчера|yesterday)\b/i.test(t)) shift = -1;
+        const d = new Date(base.year, base.month - 1, base.day + shift);
+        day = d.getDate(); month = d.getMonth() + 1; year = d.getFullYear();
     }
 
     if (day === null && hours === undefined) return null; // ничего не нашли
@@ -555,6 +594,23 @@ function parseAnyDateTime(text) {
     };
     if (hours !== undefined) { res.hours = hours; res.minutes = minutes; }
     return res;
+}
+
+// Текстовый контекст сохраняем вместе с нормализованным значением: модели важно
+// отличать «завтра в 8» от даты публикации и не подменять её реальными часами.
+export function extractTemporalContext(text, base = null) {
+    const source = String(text || '').trim();
+    if (!source) return { raw: '', normalized: '' };
+    const effectiveBase = base || getRpDateTime();
+    const parsed = parseAnyDateTime(source, effectiveBase);
+    const mentions = source.match(/(?:\b(?:сегодня|завтра|послезавтра|вчера|today|tomorrow|yesterday|noon|midnight)\b[^.!?\n]{0,35}|\b\d{1,2}[.:]\d{2}\s*(?:am|pm)?\b|\b\d{1,2}\s*(?:am|pm)\b|\b\d{1,2}[.\/-]\d{1,2}(?:[.\/-]\d{2,4})?\b|\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}\s+(?:январ\w*|феврал\w*|март\w*|апрел\w*|ма[йя]|июн\w*|июл\w*|август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*)[^.!?\n]{0,12})/gi) || [];
+    let normalized = '';
+    if (parsed) {
+        const date = parsed.timeOnly ? '' : `${String(parsed.day).padStart(2, '0')}.${String(parsed.month).padStart(2, '0')}.${parsed.year}`;
+        const time = parsed.hours === undefined ? '' : `${String(parsed.hours).padStart(2, '0')}:${String(parsed.minutes || 0).padStart(2, '0')}`;
+        normalized = [date, time].filter(Boolean).join(' ');
+    }
+    return { raw: mentions.join(' | ').slice(0, 300), normalized };
 }
 
 // Собрать текст инжектов календаря (rp-calendar и подобные) из реестра
@@ -586,7 +642,7 @@ export function getRpDateTime() {
         const chat = SillyTavern.getContext()?.chat || [];
         const calText = calendarInjectText();
         let chatSig = '';
-        for (let i = Math.max(0, chat.length - 8); i < chat.length; i++) {
+        for (let i = Math.max(0, chat.length - 20); i < chat.length; i++) {
             const m = chat[i]?.mes || '';
             chatSig += m.length + '|' + m.slice(0, 50) + '|' + m.slice(-50) + '|';
         }
@@ -603,7 +659,7 @@ export function getRpDateTime() {
             if (mes && !chat[i].is_system) parsed.push(parseAnyDateTime(mes));
         }
         parsed.push(parseAnyDateTime(calText));
-        for (let i = chat.length - 4; i >= 0 && i >= chat.length - 8; i--) {
+        for (let i = chat.length - 4; i >= 0 && i >= chat.length - 20; i--) {
             const mes = chat[i]?.mes;
             if (mes && !chat[i].is_system) parsed.push(parseAnyDateTime(mes));
         }

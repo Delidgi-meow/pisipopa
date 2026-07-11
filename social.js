@@ -22,7 +22,8 @@
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
-import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName } from './state.js';
+import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext } from './state.js';
+import { ensureSocialSystems, settlePost, shouldOfferEvent, validateAndOfferEvent, applyEventResolution } from './social-events.js';
 
 const MAX_TWEETS = 50;
 const MAX_IG_POSTS = 30;
@@ -41,6 +42,7 @@ export function getSocial() {
     if (typeof s.ofEarned !== 'number') s.ofEarned = 0;
     if (typeof s.ofWallet !== 'number') s.ofWallet = 0; // выведено на карту (доступно в РП)
     if (!Array.isArray(s.seenTags)) s.seenTags = [];
+    ensureSocialSystems(s);
     return s;
 }
 export function getTweets() { return getSocial().tweets; }
@@ -239,12 +241,15 @@ function trimFeeds(s) {
 
 export function postTweet(text) {
     const s = getSocial();
-    s.tweets.unshift({
+    const post = {
         id: genId(), author: getUserName(), handle: getUserHandle(), ak: 'user',
         text: String(text).slice(0, 280), time: Date.now(),
         likes: 0, liked: false, rts: 0, replies: [],
-    });
+    };
+    post.temporalContext = extractTemporalContext(post.text);
+    s.tweets.unshift(post);
     trimFeeds(s); saveMeta();
+    return post;
 }
 
 export function likeTweet(id) {
@@ -299,6 +304,7 @@ export function postIg({ image = null, imgDesc = '', caption = '' }) {
         image, imgDesc: String(imgDesc).slice(0, 200), caption: String(caption).slice(0, 400),
         time: Date.now(), likes: 0, liked: false, comments: [],
     };
+    post.temporalContext = extractTemporalContext(`${post.caption} ${post.imgDesc}`);
     s.igPosts.unshift(post);
     trimFeeds(s); saveMeta();
     return post;
@@ -915,14 +921,18 @@ async function taskHeader(what) {
     let block = `You are a content generator for a phone app inside a text roleplay. Task: ${what}
 This is a STANDALONE task — do NOT roleplay, do NOT write for characters outside the requested format.
 `;
+    let rc = { charDesc: '', persona: '', wi: '' };
     if (rich) {
-        const rc = await richContext();
+        rc = await richContext();
         if (rc.charDesc) block += `\n=== MAIN CHARACTER (how they think, talk, behave — use this voice) ===\n${rc.charDesc}\n`;
         if (rc.persona) block += `\n=== ${getUserName()} (the user's persona) ===\n${rc.persona}\n`;
         if (rc.wi) block += `\n=== WORLD / LOREBOOK (relevant entries) ===\n${rc.wi}\n`;
     }
     const rp = rpContextBlock(rich ? 16 : 12);
     if (rp) block += `\n=== RECENT ROLEPLAY EXCERPT (current events) ===\n${rp}\n=== END OF EXCERPT ===\n`;
+    const dt = getRpDateTime();
+    if (dt) block += `\n=== AUTHORITATIVE RP CLOCK ===\nCurrent in-world date/time: ${String(dt.day).padStart(2, '0')}.${String(dt.month).padStart(2, '0')}.${dt.year}${dt.hours === undefined ? '' : ` ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes || 0).padStart(2, '0')}`}. This overrides the computer/server date. Relative phrases in posts (today/tomorrow/tonight) must be interpreted from this clock.\n`;
+    block += `\n=== CULTURAL / NAME CONSISTENCY ===\nInfer the story's actual country, city, language community and cultural naming pool from WORLD/LOREBOOK, character card, persona and RP excerpt. The UI/output language is NOT evidence of country. Invented stranger accounts must use names, handles, places, institutions and prices natural for that inferred setting. If evidence is mixed or absent, prefer setting-neutral handles instead of assuming Russian, American, Japanese or any other nationality. Known characters keep their exact display names.\n`;
     return block;
 }
 
@@ -985,12 +995,13 @@ export async function generateTweetComments(tweet) {
     const existing = (tweet.replies || []).map(r => `${r.author}: ${r.text}`).join('\n');
     const prompt = `${await taskHeader('generate replies under a tweet in the Twitter-like app.')}
 Tweet by ${tweet.author} (${tweet.handle || makeHandle(tweet.author)}): "${tweet.text}"
+${tweet.advertisement ? `This is a PAID AD for ${tweet.advertisement.brand} (${tweet.advertisement.product}). Brief: ${tweet.advertisement.brief}. Risk level: ${tweet.advertisement.risk}. The audience MUST notice the sponsorship: mix believable support, skepticism, jokes, criticism and questions; controversial offers should provoke stronger disagreement.` : ''}
 ${existing ? `Existing replies (do not repeat):\n${existing}\n` : ''}
 ${contactsBlock()}
 
-Generate 4-7 replies: known characters in-character when relevant + random accounts (fans, haters, reply guys, bots). Realistic engagement — some agree, some argue, some joke. Max 280 chars each. NO emojis.
+Generate 4-7 replies: known characters in-character when relevant + random accounts (fans, haters, reply guys, bots). Realistic engagement — some agree, some argue, some joke. Max 280 chars each. NO emojis. Add sentiment="positive|neutral|negative" to every reply.
 ${JSON_RULES}
-Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]`;
+Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]`;
 
     const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1536, prefill: '[{"author":"' }));
     if (!Array.isArray(parsed)) return 0;
@@ -1003,7 +1014,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
         tweet.replies.push({
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
-            text: String(it.text).slice(0, 280), time: Date.now() - Math.floor(Math.random() * 900000),
+            text: String(it.text).slice(0, 280), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 900000),
         });
         added++;
     }
@@ -1120,15 +1131,16 @@ export async function generateIgComments(post) {
         : `Photo (description): ${post.imgDesc || (post.image ? 'her photo, no text description available' : '(no description)')}`;
     const existing = (post.comments || []).map(c => `${c.author}: ${c.text}`).join('\n');
     const formatLine = wantDesc
-        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph (who/what, pose, clothes, setting, lighting, mood, details)","comments":[{"author":"Имя","text":"...","type":"contact|random"},...]}`
-        : `Format: [{"author":"Имя","text":"...","type":"contact|random"},...]`;
+        ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph (who/what, pose, clothes, setting, lighting, mood, details)","comments":[{"author":"Имя","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]}`
+        : `Format: [{"author":"Имя","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]`;
     const prompt = `${await taskHeader('generate comments under an Instagram post.')}
+${post.advertisement ? `This is a PAID AD for ${post.advertisement.brand} (${post.advertisement.product}). Brief: ${post.advertisement.brief}. Risk level: ${post.advertisement.risk}. The audience MUST recognize the sponsorship and react naturally; include both fans and skeptical/critical accounts, especially for controversial products.` : ''}
 Post by ${post.author}. ${photoLine}
 Caption: "${post.caption || '(none)'}"
 ${existing ? `Existing comments (do not repeat):\n${existing}\n` : ''}
 ${contactsBlock()}
 
-Generate 4-7 comments: known characters in-character (reacting to the photo/caption — especially if the post is by ${getUserName()}) + random accounts. Instagram tone: compliments, questions, jokes. NO emojis at all. Max 200 chars each.
+Generate 4-7 comments: known characters in-character (reacting to the photo/caption — especially if the post is by ${getUserName()}) + random accounts. Instagram tone: compliments, questions, jokes. NO emojis at all. Max 200 chars each. Add sentiment="positive|neutral|negative" to every comment.
 ${JSON_RULES}
 ${formatLine}`;
 
@@ -1161,13 +1173,71 @@ ${formatLine}`;
         post.comments.push({
             id: genId(), author: String(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
-            text: String(it.text).slice(0, 300), time: Date.now() - Math.floor(Math.random() * 600000),
+            text: String(it.text).slice(0, 300), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 600000),
         });
         added++;
     }
     post.likes = Math.max(post.likes || 0, Math.floor(Math.random() * 40) + post.comments.length * 3);
     saveMeta();
     return added;
+}
+
+export function settleSocialPost(platform, post, options = {}) {
+    return settlePost(platform, post, options);
+}
+
+export async function maybeGenerateStoryEvent(platform, post, { force = false } = {}) {
+    const systems = getSocial();
+    // В обычном режиме событие выпадает по шансу после подсчёта реакции поста.
+    // force используется явной кнопкой в приложении «Ивенты»: пользователь может
+    // попросить сюжетный поворот из уже завершённого собственного поста, не ожидая
+    // случайного срабатывания. Активное событие всё равно не перезаписываем.
+    if (systems.storyEvents.active || !post?.performance?.settled) return null;
+    if (!force && !shouldOfferEvent(post)) return null;
+    const s = getSocial();
+    const recent = s.storyEvents.recent.slice(0, 5).map(e => `${e.title}: ${e.premise}`).join('\n');
+    const pending = s.rpConsequences.filter(c => c.status === 'pending').map(c => c.summary).join('\n');
+    const postText = platform === 'twitter' ? post.text : `${post.caption || ''}\nPhoto: ${post.imgDesc || '(attached image)'}`;
+    const prompt = `${await taskHeader('propose THREE optional, canon-grounded story events caused by the user social-media post.')}
+SOURCE POST (${platform}, id ${post.id}): ${postText}
+PUBLIC REACTION: ${post.performance?.label}; reach ${post.performance?.reach}; known replies: ${(platform === 'twitter' ? post.replies : post.comments).filter(c => String(c.ak).startsWith('contact:')).map(c => `${c.author}: ${c.text}`).join(' | ') || 'none'}
+${pending ? `Pending established consequences (do not duplicate):\n${pending}` : ''}
+${recent ? `Recent event themes (avoid repetition):\n${recent}` : ''}
+
+Create exactly three concrete, meaningfully different event hooks. Every hook must clearly grow from the source post AND at least one fact in the supplied canon context. Do not reveal hidden thoughts, invent a major contradiction, complete a scene for the user, or force travel/romance/risk. Each hook must require a decision. For every event provide exactly three meaningfully different response choices with different intents, none obviously optimal. The fourth custom response is supplied by code.
+Output STRICT JSON object only:
+{"events":[{"title":"...","hook":"...","premise":"...","source_post_id":"${post.id}","involved_actors":["..."],"visibility":"public|followers|known_characters","stakes":"social|relationship|mystery|danger|opportunity|comedy|reputation","urgency":"soft|next_scene|immediate","canon_evidence":["specific fact from context"],"opening_message":"...","choices":[{"id":"a","label":"...","intent":"honest","text":"..."},{"id":"b","label":"...","intent":"deflect","text":"..."},{"id":"c","label":"...","intent":"confront","text":"..."}]}]}`;
+    const candidate = parseJsonObject(await socialGen(prompt, { maxTokens: 3600, image: platform === 'instagram' ? post.image : null, prefill: '{"events":[{"title":"' }));
+    return validateAndOfferEvent(candidate, post, platform);
+}
+
+export async function resolveStoryEvent(choice) {
+    const s = getSocial();
+    const event = s.storyEvents.active;
+    if (!event) throw new Error('Нет активного события');
+    const exactText = String(choice?.text || '').trim();
+    if (!exactText) throw new Error('Пустой ответ');
+    let classification = { intent: choice.intent || 'custom', tone: 'calm', publicness: event.visibility === 'public' ? 'public' : 'private', risk: 0.5 };
+    if (choice.custom) {
+        const classifyPrompt = `${await taskHeader('classify a user-written story-event response without rewriting or interpreting away its literal meaning.')}
+EVENT: ${event.hook}
+USER RESPONSE, preserve verbatim: ${exactText}
+Output STRICT JSON object only: {"intent":"honest|deflect|confront|withdraw|cooperate|investigate|custom","tone":"warm|calm|sharp|playful|cold","publicness":"public|private|offline","risk":0.45}`;
+        classification = parseJsonObject(await socialGen(classifyPrompt, { maxTokens: 220, prefill: '{"intent":"' })) || classification;
+    }
+    const prompt = `${await taskHeader('resolve one user decision in an existing phone-triggered story event.')}
+EVENT TITLE: ${event.title}
+HOOK: ${event.hook}
+PREMISE: ${event.premise}
+CANON EVIDENCE: ${event.canonEvidence.join(' | ')}
+EXACT USER RESPONSE (do not rewrite, extend or decide extra actions): ${exactText}
+CLASSIFICATION: ${JSON.stringify(classification)}
+
+Describe only the immediate response and a future RP consequence; do not play the future scene. Private/offline choices produce no public bot reactions unless a leak is explicitly justified by the premise. Known actors may react only if visibility lets them know. Maximum 3 bot reactions.
+Output STRICT JSON object only:
+{"immediate_result":"...","bot_reactions":[{"author":"...","channel":"comment|tweet|instagram|sms","text":"...","sentiment":"positive|neutral|negative"}],"audience_shift":{"positive":0,"neutral":0,"negative":0},"follower_modifier":1,"relationship_signals":[{"actor":"...","direction":"up|down|complicated","reason":"..."}],"rp_consequence":{"summary":"...","urgency":"soft|next_scene|immediate","actors":["..."]},"next_hook":"","arc_state":"active|resolved|failed"}`;
+    const result = parseJsonObject(await socialGen(prompt, { maxTokens: 1600, prefill: '{"immediate_result":"' })) || {};
+    return applyEventResolution({ ...choice, text: exactText }, classification, result);
 }
 
 // ═══ Фото: сжатие до разумного размера (dataURL хранится в chat_metadata) ═══
@@ -1240,6 +1310,41 @@ export function avatarForAuthor(ak) {
         return getContactAvatar(ak.slice(8));
     }
     return '';
+}
+
+// Короткий портрет для вымышленных аккаунтов-комментаторов. Сохраняется прямо
+// в комментарии, поэтому повторно не генерируется и переживает перезагрузку чата.
+export async function generateCommentAvatar(comment) {
+    if (!comment || comment.ak !== 'random' || comment.avatar || comment.avatarPending) return comment?.avatar || '';
+    comment.avatarPending = true;
+    try {
+        const mod = await loadImageExt();
+        if (!mod) return '';
+        const subject = `${comment.author || 'anonymous social media user'} (${comment.handle || makeHandle(comment.author)})`;
+        const prompt = `square social-media profile avatar, close-up head-and-shoulders portrait of ${subject}, one person, clean readable face, simple unobtrusive background, no text, no logo, no watermark`;
+        const temp = { author: comment.author || 'Account', ak: 'random', kind: 'avatar' };
+        let src = '';
+        if (mod.builtin) {
+            src = await _generateViaBuiltin(temp, { prompt, wantChar: false, isUserPost: false, onStatus: null });
+        } else {
+            const dataUrl = await mod.pipeline.generateImageWithRetry(prompt, null, null, { aspectRatio: '1:1' });
+            src = dataUrl;
+            if (typeof mod.utils?.saveImageToFile === 'function') {
+                try { src = await mod.utils.saveImageToFile(dataUrl, { mode: 'glassphone-avatar' }); } catch (e) { /* dataURL */ }
+            } else if (String(dataUrl || '').startsWith('data:')) {
+                try {
+                    const b64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
+                    src = await saveBase64AsFile(b64, 'glassphone', `avatar_${Date.now()}`, 'jpeg');
+                } catch (e) { /* dataURL */ }
+            }
+        }
+        if (src) comment.avatar = src;
+        saveMeta();
+        return comment.avatar || '';
+    } finally {
+        delete comment.avatarPending;
+        saveMeta();
+    }
 }
 
 // ═══ Генерация картинок — через novarakk-ПОДОБНОЕ расширение ═══
@@ -1693,6 +1798,30 @@ export async function logSocialToChat(text, image = null) {
     }
 }
 
+// Читаемая копия скрытого журнала, который реально лежит в истории чата и
+// передаётся модели/саммарайзеру. Ничего не синтезируем отдельно: экран показывает
+// именно те записи, на которые может опираться память бота.
+export function getSocialJournalEntries() {
+    try {
+        const chat = SillyTavern.getContext()?.chat || [];
+        return chat.map((msg, index) => ({ msg, index }))
+            .filter(({ msg }) => String(msg?.mes || '').includes('<!--tel:log-->'))
+            .map(({ msg, index }) => ({
+                index,
+                time: msg?.send_date || '',
+                text: String(msg?.mes || '')
+                    .replace(/<!--tel:log-->/g, '')
+                    .replace(/^\s*\[Событие мира — соцсети\/телефон\]\s*/i, '')
+                    .trim(),
+                image: msg?.extra?.image || null,
+            }))
+            .reverse();
+    } catch (e) {
+        console.warn('[GlassPhone] journal read failed:', e);
+        return [];
+    }
+}
+
 // ═══ Активность юзера для инжекции в основной чат ═══
 // При включённом журнале события уже лежат в истории чата — сводка не дублирует их,
 // в инжекте остаётся только ПОСТОЯННОЕ состояние (кошелёк). Экономия + нет двойного контекста.
@@ -1706,7 +1835,9 @@ export function getSocialActivitySummary() {
     }
 
     const lines = [];
-    const fmtThread = (arr) => (arr || []).slice(-3).map(r => `${r.ak === 'user' ? getUserName() : r.author}: "${String(r.text).slice(0, 80)}"`).join(' | ');
+    // Не заменяем реальные реплики обезличенным «ещё N»: модели полезнее видеть,
+    // кто именно и что написал. Ограничиваем только общий объём свежей ветки.
+    const fmtThread = (arr) => (arr || []).slice(-8).map(r => `${r.ak === 'user' ? getUserName() : (r.author || 'Account')}: "${String(r.text || '').slice(0, 120)}"`).join(' | ');
 
     // Её посты + ветки под ними (персонажи в РП знают и свои ответы в комментах)
     for (const t of s.tweets.filter(t => t.ak === 'user').slice(0, 2)) {

@@ -11,6 +11,7 @@ import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } fr
 import { getSettings, getMeta, scanChat, getBlockedSmsKeys, EXT_NAME } from './state.js';
 import { getSocialActivitySummary } from './social.js';
 import { getBankSummaryLine, bankInjectRule } from './bank.js';
+import { pendingConsequences } from './social-events.js';
 
 const CHAT_KEY = EXT_NAME;
 const SYS_KEY = EXT_NAME + '_sys';
@@ -18,6 +19,13 @@ const SYS_KEY = EXT_NAME + '_sys';
 function buildPrompt() {
     const { contacts } = scanChat();
     const meta = getMeta();
+    let consequenceBlock = '';
+    try {
+        const pending = pendingConsequences();
+        if (pending.length) {
+            consequenceBlock = `[PENDING STORY CONSEQUENCES FROM THE PHONE — established facts, not suggestions]\n${pending.map(c => `- (${c.urgency}; visibility: ${c.visibility}) ${c.summary}${c.actors?.length ? ` Actors: ${c.actors.join(', ')}.` : ''}`).join('\n')}\nIntroduce each naturally only when compatible with location, timing and who can know it. Do not retcon, repeat the phone exchange, force {{user}}'s actions, or reveal private knowledge. Once it appears clearly in the scene, do not keep restating it.`;
+        }
+    } catch (e) { /* ignore */ }
 
     const contactLines = [];
     for (const c of contacts.values()) {
@@ -51,6 +59,7 @@ function buildPrompt() {
         let socialC = '';
         try { socialC = getSocialActivitySummary(); } catch (e) { /* ignore */ }
         if (socialC) c += `\n[{{user}}'S RECENT SOCIAL ACTIVITY — characters who follow her may react:]\n${socialC}\n`;
+        if (consequenceBlock) c += `\n${consequenceBlock}\n`;
         try {
             const bankRule = bankInjectRule();
             if (bankRule) c += `\n${bankRule}\n`;
@@ -92,6 +101,7 @@ function buildPrompt() {
     if (social) {
         p += `\n[{{user}}'S RECENT SOCIAL MEDIA ACTIVITY] Characters who follow her (friends, contacts) may have seen these and can react naturally in the story or in comments:\n${social}\n`;
     }
+    if (consequenceBlock) p += `\n${consequenceBlock}\n`;
 
     // Банк — правило + сводка ТОЛЬКО если приложение реально используется (иначе 0 токенов)
     try {

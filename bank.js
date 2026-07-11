@@ -34,6 +34,7 @@ export function getBank() {
     if (!Array.isArray(b.loans)) b.loans = [];
     if (!Array.isArray(b.recurring)) b.recurring = [];
     if (!Array.isArray(b.seenTags)) b.seenTags = [];
+    if (!Array.isArray(b.seenRpBalances)) b.seenRpBalances = [];
     return b;
 }
 
@@ -250,6 +251,34 @@ const SPEND_RE = /списан|списание|покупк|оплат|плат
 const INCOME_RE = /пополнен|пополнение|зачислен|поступлени|перевод\s+от|получен\s+перевод|возврат|зарплат|начислен|кэшбэк|cashback/i;
 const AMOUNT_RE = /(\d[\d\s]{0,12}(?:[.,]\d{1,2})?)\s*(?:₽|руб|р\.|р\b|\$|€|£|usd|eur)/i;
 
+function reEscape(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Некоторые RP-пресеты держат актуальные деньги персонажей не в tel:bank,
+// а в служебном инфоблоке внутри <think><!--sims ... -->. Это не операция,
+// поэтому значение синхронизируется как абсолютный баланс и применяется
+// только один раз для конкретного сообщения/значения.
+function parseRpBalance(raw, userName) {
+    const name = String(userName || '').trim();
+    if (!name || !raw) return null;
+    const text = String(raw).replace(/&nbsp;/gi, ' ').replace(/[\u00a0\u202f]/g, ' ');
+    const n = reEscape(name);
+    const amount = '([+-]?\\d(?:[\\d ]{0,18}\\d)?)\\s*(?:₽|руб(?:лей|ля)?|р\\b)?';
+    const patterns = [
+        new RegExp(`(?:💰|💵|деньги\\s*[:—-]?)\\s*${n}\\s*:\\s*${amount}`, 'i'),
+        new RegExp(`${n}\\s*:\\s*(?:💰|💵|деньги\\s*[:—-]?)\\s*${amount}`, 'i'),
+        new RegExp(`${n}[\\s\\S]{0,320}?\\bденьги\\s*[:—-]?\\s*${amount}`, 'i'),
+    ];
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (!match) continue;
+        const value = Math.round(Number(String(match[1]).replace(/\s/g, '')) || 0);
+        if (Number.isFinite(value)) return { value, index: match.index || 0 };
+    }
+    return null;
+}
+
 function parseBankSms(smsJson) {
     const from = String(smsJson.from || '');
     const text = String(smsJson.text || '');
@@ -270,9 +299,15 @@ function parseBankSms(smsJson) {
 export function harvestBankTags() {
     const b = getBank();
     let chat = [];
-    try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return 0; }
+    let userName = '';
+    try {
+        const ctx = SillyTavern.getContext();
+        chat = ctx?.chat || [];
+        userName = ctx?.name1 || '';
+    } catch (e) { return 0; }
     let added = 0;
     const seen = new Set(b.seenTags);
+    const seenRpBalances = new Set(b.seenRpBalances);
     let migratedLegacyKeys = false;
     for (let msgIndex = 0; msgIndex < chat.length; msgIndex++) {
         const msg = chat[msgIndex];
@@ -281,6 +316,24 @@ export function harvestBankTags() {
         // tel:sms банка — их тоже сканируем
         if (msg.is_system && !/tel:(bank|sms)/i.test(msg.mes)) continue;
         const text = stripThink(msg.mes);
+        const containsBankTag = /<!--\s*tel:bank:/i.test(text);
+
+        // RP-инфоблок намеренно читаем из исходного сообщения: stripThink
+        // правильно скрывает reasoning от тегов телефона, но именно там sims-
+        // пресеты публикуют текущий баланс пользователя.
+        if (!msg.is_user && !containsBankTag) {
+            const rpBalance = parseRpBalance(msg.mes, userName);
+            if (rpBalance) {
+                const source = String(msg.send_date || msg.extra?.gen_id || msgIndex);
+                const h = `br${hash32(`${userName}:${rpBalance.value}`)}:${source}:${rpBalance.index}`;
+                if (!seenRpBalances.has(h)) {
+                    seenRpBalances.add(h);
+                    b.seenRpBalances.push(h);
+                    b.balance = rpBalance.value;
+                    added++;
+                }
+            }
+        }
 
         // 1) Явные теги tel:bank (протокол)
         let hasBankTag = false;
@@ -336,6 +389,7 @@ export function harvestBankTags() {
         b.seenTags = b.seenTags.filter(k => !/^(?:bk|bs)-?\d+$/.test(k));
     }
     if (b.seenTags.length > 400) b.seenTags = b.seenTags.slice(-400);
+    if (b.seenRpBalances.length > 120) b.seenRpBalances = b.seenRpBalances.slice(-120);
     if (added || migratedLegacyKeys) saveMeta();
     return added;
 }

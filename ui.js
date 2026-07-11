@@ -26,8 +26,11 @@ import {
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
-    handleFor, setContactHandle, describePostImage, generateSmsPhotoReply, logSocialToChat,
+    handleFor, setContactHandle, setUserHandle, getUserHandle, generateCommentAvatar, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
+    settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent,
 } from './social.js';
+import { getSystemsView, equipCharm, deferEvent, declineEvent, selectStoryEvent, CHARM_CATALOG, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
+import { giftVisualHtml } from './gift-visual.js';
 
 // ── Локальное UI-состояние (не персистится) ──
 let currentScreen = 'home';     // + 'of' | 'ofnew' | 'ofview'
@@ -38,6 +41,7 @@ let typingKey = null;           // тред, в котором «печатае�
 let sending = false;
 let _smsDraftImage = null;      // фото, приложенное к смс (dataURL до отправки)
 let genBusy = false;            // идёт генерация ленты/комментов
+let selectedStoryEventId = null;
 let clockTimer = null;
 let prevIncomingCounts = new Map(); // для детекта новых входящих (тосты)
 
@@ -485,6 +489,10 @@ export function render() {
     else if (currentScreen === 'ig') renderIg(screen);
     else if (currentScreen === 'igview' && currentPostId) renderIgView(screen);
     else if (currentScreen === 'ignew') renderIgNew(screen);
+    else if (currentScreen === 'socialhub') renderSocialHub(screen);
+    else if (currentScreen === 'storyevent') renderStoryEvent(screen);
+    else if (currentScreen === 'storyresult') renderStoryResult(screen);
+    else if (currentScreen === 'socialjournal') renderSocialJournal(screen);
     else if (currentScreen === 'of') renderOf(screen);
     else if (currentScreen === 'ofview' && currentPostId) renderOfView(screen);
     else if (currentScreen === 'ofnew') renderOfNew(screen);
@@ -497,6 +505,7 @@ export function render() {
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
     else if (currentScreen === 'appearance') renderAppearance(screen);
     else renderHome(screen);
+    syncEquippedCharm();
 }
 
 function goto(screenName) {
@@ -515,10 +524,251 @@ function setHtmlKeepScroll(screen, selector, html) {
     }
 }
 
+function compactNum(value) {
+    const n = Number(value) || 0;
+    if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1)}м`;
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}к`;
+    return String(n);
+}
+
+function performanceHtml(post) {
+    const p = post?.performance;
+    if (!p?.settled) return '';
+    const delta = Number(p.followerDelta) || 0;
+    return `<div class="gp-social-result">
+        <div class="gp-social-result-head"><b>${esc(p.label)}</b><span>${ic('fa-eye')} ${compactNum(p.reach)} · <span class="${delta < 0 ? 'gp-social-down' : 'gp-social-up'}">${delta >= 0 ? '+' : ''}${delta}</span> ${ic('fa-user-plus')}</span></div>
+        <div class="gp-sentiment" title="Позитивные ${p.positive}% · нейтральные ${p.neutral}% · негативные ${p.negative}%"><i class="gp-sent-pos" style="width:${p.positive}%"></i><i class="gp-sent-neu" style="width:${p.neutral}%"></i><i class="gp-sent-neg" style="width:${p.negative}%"></i></div>
+        <div class="gp-sentiment-labels"><span>${p.positive}% позитив</span><span>${p.neutral}% нейтр.</span><span>${p.negative}% негатив</span></div>
+        ${p.storyEventId ? `<button class="gp-story-link" data-open-story>${ic('fa-wand-sparkles')} Сюжетный поворот</button>` : ''}
+    </div>`;
+}
+
+const charmVisualHtml = (charmId, className = '') => giftVisualHtml(charmId, CHARM_CATALOG[charmId], className);
+
+function syncEquippedCharm() {
+    const ph = document.getElementById('gp-phone');
+    if (!ph) return;
+    // Старого подвеса за рамкой больше нет: подарки рисуются на обоях home.
+    ph.querySelector('.gp-equipped-charm')?.remove();
+}
+
+function socialImpactToast(platform, post, addedComments = 0, addedFeed = 0) {
+    const p = post?.performance;
+    if (!p) return;
+    const contacts = (platform === 'twitter' ? post.replies : post.comments || [])
+        .filter(r => typeof r.ak === 'string' && r.ak.startsWith('contact:'));
+    const names = [...new Set(contacts.map(r => r.author).filter(Boolean))].slice(0, 2);
+    const delta = Number(p.followerDelta) || 0;
+    const reaction = names.length ? `${names.join(' и ')} отреагировали` : `${addedComments} новых реакций`;
+    const feed = addedFeed > 0 ? ` · лента +${addedFeed}` : '';
+    toast(`${p.label}: ${reaction} · охват ${compactNum(p.reach)} · ${delta >= 0 ? '+' : ''}${delta} подписчиков${feed}`,
+        platform === 'twitter' ? 'fa-x-twitter' : 'fa-instagram');
+}
+
+async function finalizeSocialPost(platform, post, { addedComments = 0, addedFeed = 0 } = {}) {
+    if (!post || post.ak !== 'user' || post.performance?.settled) return null;
+    const perf = settleSocialPost(platform, post);
+    updatePhoneInjection();
+    if (perf) {
+        socialImpactToast(platform, post, addedComments, addedFeed);
+        const event = await maybeGenerateStoryEvent(platform, post);
+        if (event) {
+            updatePhoneInjection();
+            toast('Новый сюжетный поворот', 'fa-wand-sparkles');
+            // Не прячем созданный ивент за отдельной иконкой: сразу показываем
+            // три варианта ответа и поле собственного действия.
+            goto('storyevent');
+        }
+    }
+    return perf;
+}
+
+function bindSocialSystemLinks(root) {
+    root.querySelectorAll('[data-open-social]').forEach(b => b.addEventListener('click', () => goto('socialhub')));
+    root.querySelectorAll('[data-open-story]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); goto('storyevent'); }));
+}
+
+function findStoryEvent(id) {
+    const systems = getSystemsView();
+    if (systems.storyEvents.active?.id === id) return systems.storyEvents.active;
+    return (systems.storyEvents.recent || []).find(e => e.id === id) || null;
+}
+
+function openStoryResult(id) {
+    selectedStoryEventId = id;
+    goto('storyresult');
+}
+
+function renderSocialHub(screen) {
+    currentScreen = 'socialhub';
+    // Самовосстановление незавершённых рекламных интеграций. Это покрывает
+    // сохранения, где пост уже получил реакции/результат, но активное предложение
+    // осталось в состоянии published и деньги не были начислены.
+    for (const post of getTweets()) {
+        if (post.ak === 'user' && post.advertisement && post.performance?.settled) settleSocialPost('twitter', post);
+    }
+    for (const post of getIgPosts()) {
+        if (post.ak === 'user' && post.advertisement && post.performance?.settled) settleSocialPost('instagram', post);
+    }
+    const s = getSystemsView();
+    const tasks = s.postingTasks.active || [];
+    const owned = s.charms.owned || [];
+    const equipped = Array.isArray(s.charms.equipped) ? s.charms.equipped : [];
+    const event = s.storyEvents.active;
+    const ads = s.advertising || { offers: [], active: null, history: [] };
+    const recentEvents = s.storyEvents.recent || [];
+    const eventSources = [
+        ...getTweets().filter(p => p.ak === 'user' && p.performance?.settled).map(post => ({ platform: 'twitter', post })),
+        ...getIgPosts().filter(p => p.ak === 'user' && p.performance?.settled).map(post => ({ platform: 'instagram', post })),
+    ].sort((a, b) => new Date(b.post.time || 0) - new Date(a.post.time || 0));
+    const latestSource = eventSources[0] || null;
+    screen.innerHTML = `<div class="gp-header gp-thread-header">
+        <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Социальный профиль</div>
+        <button class="gp-iconbtn" id="gp-open-journal" title="Журнал памяти">${ic('fa-book-open')}</button>
+        ${event ? `<button class="gp-iconbtn gp-event-pulse" data-open-story title="Сюжетный поворот">${ic('fa-wand-sparkles')}</button>` : ''}
+    </div><div class="gp-feed gp-social-hub">
+        <div class="gp-profile-grid">
+            <div class="gp-profile-card"><div>${brand('fa-x-twitter')} Twitter</div><b>${compactNum(s.socialProfiles.twitter.followers)}</b><span>подписчиков · ${esc(getReputationStatus(s.socialProfiles.twitter.reputation))}</span></div>
+            <div class="gp-profile-card"><div>${brand('fa-instagram')} Instagram</div><b>${compactNum(s.socialProfiles.instagram.followers)}</b><span>подписчиков · ${esc(getReputationStatus(s.socialProfiles.instagram.reputation))}</span></div>
+        </div>
+        <section class="gp-social-section gp-ad-section"><h3>${ic('fa-star')} Рекламные предложения</h3>
+            ${ads.active ? `<div class="gp-ad-active"><b>${esc(ads.active.brand)} · ${ads.active.platform === 'twitter' ? 'Twitter' : 'Instagram'}</b><span>${esc(ads.active.product)}</span><small>${ads.active.state === 'published' ? `Публикация размещена · ожидается подсчёт реакции и выплата ${fmtMoney(ads.active.payment)}` : `Следующая публикация в этой соцсети станет рекламной · ${fmtMoney(ads.active.payment)}`}</small></div>` : (ads.offers || []).map(a => `<div class="gp-ad-card gp-ad-${esc(a.risk)}"><div><b>${esc(a.title)}</b><span>${esc(a.product)}</span><small>${esc(a.brief)} · ${fmtMoney(a.payment)}</small></div><div class="gp-ad-actions"><button class="gp-ad-accept" data-ad-accept="${esc(a.id)}">${ic('fa-check')} Взять</button><button class="gp-ad-decline" data-ad-decline="${esc(a.id)}" title="Отклонить">${ic('fa-xmark')}</button></div></div>`).join('')}
+        </section>
+        <section class="gp-social-section gp-events-section">
+            <h3>${ic('fa-wand-sparkles')} Сюжетные ивенты</h3>
+            ${event
+                ? `<button class="gp-event-banner" data-open-story><span>${ic('fa-wand-sparkles')}</span><div><b>${esc(event.title)}</b><small>${esc(event.hook)}</small></div>${ic('fa-chevron-right')}</button>`
+                : `<div class="gp-event-empty"><b>Активного ивента пока нет</b><span>Ивенты рождаются из твоих постов после того, как под ними появились реакции и был подсчитан результат.</span></div>
+                   <button class="gp-event-generate" id="gp-event-generate" ${latestSource && !genBusy ? '' : 'disabled'}>
+                       ${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}
+                       ${latestSource ? 'Создать из последнего поста' : 'Сначала опубликуй пост и получи реакции'}
+                   </button>`}
+            ${recentEvents.length ? `<div class="gp-event-history"><small>Архив</small>${recentEvents.slice(0, 8).map(e => `<button data-story-result="${esc(e.id)}" ${e.state === 'declined' ? 'disabled' : ''}><i class="fa-solid ${e.state === 'declined' ? 'fa-ban' : 'fa-check'}"></i><span><b>${esc(e.title)}</b><small>${esc(e.state === 'declined' ? 'отклонён' : 'нажми, чтобы прочитать итог')}</small></span>${e.state === 'declined' ? '' : ic('fa-chevron-right')}</button>`).join('')}</div>` : ''}
+        </section>
+        <section class="gp-social-section"><h3>${ic('fa-list-check')} Задания на постинг</h3>${tasks.map(t => `<div class="gp-task-card"><div><b>${esc(t.title)}</b><span>${esc(t.text)}</span></div><strong>${Math.min(t.progress, t.goal)}/${t.goal}</strong><i><em style="width:${Math.round(Math.min(1, t.progress / t.goal) * 100)}%"></em></i></div>`).join('')}</section>
+        <section class="gp-social-section gp-gifts-section"><h3>${ic('fa-gift')} Подарки <small>${equipped.length}/3 на экране</small></h3><div class="gp-charms">${Object.entries(CHARM_CATALOG).map(([id, c]) => { const has = owned.includes(id), on = equipped.includes(id); return `<button class="gp-charm${has ? ' gp-charm-owned' : ''}${on ? ' gp-charm-on' : ''}" data-charm="${esc(id)}" ${has ? '' : 'disabled'}>${charmVisualHtml(id, 'gp-charm-preview')}<span>${esc(c.name)}</span><small>${has ? (on ? 'на главном экране' : c.rarity) : 'закрыт'}</small>${on ? `<b class="gp-gift-check">${ic('fa-check')}</b>` : ''}</button>`; }).join('')}</div>${equipped.length ? `<button class="gp-secondary gp-unequip" id="gp-charm-off">Убрать все с экрана</button>` : ''}</section>
+    </div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelector('#gp-open-journal')?.addEventListener('click', () => goto('socialjournal'));
+    screen.querySelectorAll('[data-ad-accept]').forEach(b => b.addEventListener('click', () => { acceptAdOffer(b.getAttribute('data-ad-accept')); toast('Рекламное задание принято', 'fa-star'); render(); }));
+    screen.querySelectorAll('[data-ad-decline]').forEach(b => b.addEventListener('click', () => { declineAdOffer(b.getAttribute('data-ad-decline')); render(); }));
+    screen.querySelectorAll('[data-story-result]').forEach(b => b.addEventListener('click', () => openStoryResult(b.getAttribute('data-story-result'))));
+    bindSocialSystemLinks(screen);
+    screen.querySelector('#gp-event-generate')?.addEventListener('click', async () => {
+        if (genBusy || !latestSource) return;
+        genBusy = true;
+        render();
+        try {
+            const created = await maybeGenerateStoryEvent(latestSource.platform, latestSource.post, { force: true });
+            if (created) {
+                updatePhoneInjection();
+                toast('Сюжетный ивент создан', 'fa-wand-sparkles');
+                goto('storyevent');
+                return;
+            }
+            toast('Не удалось собрать ивент из этого поста', 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] manual story event failed:', e);
+            toast('Ошибка генерации ивента', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'socialhub') render();
+        }
+    });
+    screen.querySelectorAll('[data-charm]').forEach(b => b.addEventListener('click', () => {
+        if (!equipCharm(b.getAttribute('data-charm'))) toast('На экран можно поставить не больше трёх подарков', 'fa-gift');
+        render();
+    }));
+    screen.querySelector('#gp-charm-off')?.addEventListener('click', () => { equipCharm(null); render(); });
+}
+
+function renderStoryEvent(screen) {
+    currentScreen = 'storyevent';
+    const event = getSystemsView().storyEvents.active;
+    if (!event) { goto('socialhub'); return; }
+    const waiting = !!event.appliedAt;
+    const alternatives = Array.isArray(event.alternatives) && event.alternatives.length ? event.alternatives : [event];
+    const choosingEvent = !waiting && alternatives.length > 1 && event.selectedAlternative == null;
+    if (choosingEvent) {
+        screen.innerHTML = `<div class="gp-header gp-thread-header"><button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Выбрать ивент</div></div><div class="gp-feed gp-story-screen"><div class="gp-story-card">
+            <div class="gp-story-kicker">${ic('fa-wand-sparkles')} Три возможных поворота</div><h2>Какую нить вплести в историю?</h2><p class="gp-story-hook">Выбери сам ивент. Следующим экраном появятся варианты реакции на него.</p>
+            <div class="gp-story-choices">${alternatives.map((a, i) => `<button data-select-event="${i}"><b>${esc(a.title)}</b><span>${esc(a.hook)}</span></button>`).join('')}</div>
+            <div class="gp-story-foot"><button id="gp-event-later">Не сейчас</button><button id="gp-event-decline">Отклонить все</button></div>
+        </div></div>`;
+        screen.querySelector('#gp-back')?.addEventListener('click', () => goto('socialhub'));
+        screen.querySelectorAll('[data-select-event]').forEach(b => b.addEventListener('click', () => {
+            if (selectStoryEvent(Number(b.getAttribute('data-select-event')))) render();
+        }));
+        screen.querySelector('#gp-event-later')?.addEventListener('click', () => { deferEvent(); goto('socialhub'); });
+        screen.querySelector('#gp-event-decline')?.addEventListener('click', () => { if (confirm('Отклонить все предложенные сюжетные повороты?')) { declineEvent(); updatePhoneInjection(); goto('socialhub'); } });
+        return;
+    }
+    screen.innerHTML = `<div class="gp-header gp-thread-header"><button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Сюжетный поворот</div></div><div class="gp-feed gp-story-screen"><div class="gp-story-card">
+        <div class="gp-story-kicker">${ic('fa-wand-sparkles')} ${esc(event.urgency === 'immediate' ? 'Срочно' : 'Новая нить истории')}</div><h2>${esc(event.title)}</h2><p class="gp-story-hook">${esc(event.hook)}</p>
+        ${event.openingMessage ? `<blockquote>${esc(event.openingMessage)}</blockquote>` : ''}${event.involvedActors?.length ? `<div class="gp-story-actors">${event.involvedActors.map(a => `<span>${ic('fa-user')} ${esc(a)}</span>`).join('')}</div>` : ''}
+        ${waiting ? `<div class="gp-story-result"><b>${ic('fa-circle-check')} Решение принято</b><p>${esc(event.immediateResult)}</p>${event.state === 'waiting_rp' ? '<small>Продолжение естественно появится в основном RP.</small>' : ''}</div>` : `<div class="gp-story-choices">${event.choices.map((c, i) => `<button data-event-choice="${i}"><b>${esc(c.label)}</b><span>${esc(c.text)}</span></button>`).join('')}<button id="gp-custom-toggle"><b>${ic('fa-pen')} Свой ответ</b><span>Написать собственное действие или реплику</span></button></div><div class="gp-story-custom" id="gp-story-custom" hidden><textarea id="gp-story-text" rows="4" maxlength="1000" placeholder="Что вы отвечаете или делаете?"></textarea><button class="gp-primary" id="gp-story-send">Продолжить</button></div><div class="gp-story-foot"><button id="gp-event-later">Не сейчас</button><button id="gp-event-decline">Отклонить</button></div>`}
+    </div></div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('socialhub'));
+    const resolve = async choice => {
+        if (genBusy) return;
+        genBusy = true;
+        screen.querySelectorAll('button, textarea').forEach(el => { el.disabled = true; });
+        const loading = document.createElement('div');
+        loading.className = 'gp-story-loading';
+        loading.innerHTML = `<div>${ic('fa-spinner fa-spin')}</div><b>История меняется…</b><span>Ждём итог и последствия выбранного ответа</span>`;
+        screen.appendChild(loading);
+        try { const outcome = await resolveStoryEvent(choice); if (outcome) { await logSocialToChat(`[Сюжетный поворот из соцсети] ${event.hook} ${getUserName()}: «${outcome.choice.text}». Результат: ${outcome.event.immediateResult}`); updatePhoneInjection(); toast('Выбор изменил историю', 'fa-wand-sparkles'); selectedStoryEventId = outcome.event.id; currentScreen = 'storyresult'; } }
+        catch (e) { console.error('[GlassPhone] story event failed:', e); toast('Не удалось продолжить событие', 'fa-circle-exclamation'); }
+        finally { genBusy = false; render(); }
+    };
+    screen.querySelectorAll('[data-event-choice]').forEach(b => b.addEventListener('click', () => resolve(event.choices[Number(b.getAttribute('data-event-choice'))])));
+    screen.querySelector('#gp-custom-toggle')?.addEventListener('click', () => { const el = screen.querySelector('#gp-story-custom'); el.hidden = !el.hidden; screen.querySelector('#gp-story-text')?.focus(); });
+    screen.querySelector('#gp-story-send')?.addEventListener('click', () => { const text = screen.querySelector('#gp-story-text')?.value.trim(); if (text) resolve({ label: 'Свой ответ', intent: 'custom', text, custom: true }); });
+    screen.querySelector('#gp-event-later')?.addEventListener('click', () => { deferEvent(); goto('socialhub'); });
+    screen.querySelector('#gp-event-decline')?.addEventListener('click', () => { if (confirm('Отклонить этот сюжетный поворот?')) { declineEvent(); updatePhoneInjection(); goto('socialhub'); } });
+}
+
+function renderStoryResult(screen) {
+    currentScreen = 'storyresult';
+    const event = findStoryEvent(selectedStoryEventId);
+    if (!event) { goto('socialhub'); return; }
+    const decision = event.decisions?.[event.decisions.length - 1];
+    const shift = event.audienceShift || {};
+    const reactions = event.botReactions || [];
+    const relations = event.relationshipSignals || [];
+    screen.innerHTML = `<div class="gp-header gp-thread-header"><button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Итог ивента</div></div>
+    <div class="gp-feed gp-story-screen"><article class="gp-story-card gp-story-summary">
+        <div class="gp-story-kicker">${ic(event.state === 'failed' ? 'fa-triangle-exclamation' : 'fa-circle-check')} ${event.state === 'failed' ? 'Неудачный исход' : 'Ивент завершён'}</div>
+        <h2>${esc(event.title)}</h2><p class="gp-story-hook">${esc(event.hook)}</p>
+        ${decision ? `<section><h3>Твой выбор</h3><blockquote><b>${esc(decision.label)}</b><br>${esc(decision.text)}</blockquote></section>` : ''}
+        <section><h3>Итог</h3><p>${esc(event.immediateResult || event.recap || 'Ивент завершён.')}</p></section>
+        ${reactions.length ? `<section><h3>Реакции</h3><div class="gp-result-reactions">${reactions.map(r => `<div class="gp-result-reaction gp-sent-${esc(r.sentiment)}"><b>${esc(r.author || 'Аккаунт')}</b><small>${esc(r.channel)}</small><p>${esc(r.text)}</p></div>`).join('')}</div></section>` : ''}
+        ${(shift.positive || shift.neutral || shift.negative) ? `<section><h3>Сдвиг аудитории</h3><div class="gp-result-stats"><span class="gp-social-up">+${Number(shift.positive) || 0} позитив</span><span>+${Number(shift.neutral) || 0} нейтр.</span><span class="gp-social-down">+${Number(shift.negative) || 0} негатив</span></div>${event.followerModifier && event.followerModifier !== 1 ? `<small>Модификатор подписчиков: ×${esc(event.followerModifier)}</small>` : ''}</section>` : ''}
+        ${relations.length ? `<section><h3>Отношения</h3>${relations.map(r => `<div class="gp-result-note"><b>${esc(r.actor)}</b><small>${esc(r.direction)}</small><p>${esc(r.reason)}</p></div>`).join('')}</section>` : ''}
+        ${event.rpConsequence ? `<section><h3>Последствие в RP</h3><div class="gp-result-note"><b>${esc(event.rpConsequence.actors?.join(', ') || 'Следующая сцена')}</b><small>${esc(event.rpConsequence.urgency)}</small><p>${esc(event.rpConsequence.summary)}</p></div></section>` : ''}
+        ${event.nextHook ? `<section><h3>Следующий крючок</h3><p>${esc(event.nextHook)}</p></section>` : ''}
+        <div class="gp-story-foot"><button id="gp-result-archive">Вернуться в архив</button></div>
+    </article></div>`;
+    const back = () => goto('socialhub');
+    screen.querySelector('#gp-back')?.addEventListener('click', back);
+    screen.querySelector('#gp-result-archive')?.addEventListener('click', back);
+}
+
+function renderSocialJournal(screen) {
+    currentScreen = 'socialjournal';
+    const entries = getSocialJournalEntries();
+    screen.innerHTML = `<div class="gp-header gp-thread-header"><button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Журнал памяти</div></div>
+    <div class="gp-feed gp-journal-screen"><div class="gp-journal-info">${ic('fa-brain')} Здесь показаны скрытые записи, которые действительно добавлены в историю чата и доступны боту и саммарайзеру.</div>
+    ${entries.length ? entries.map(e => `<article class="gp-journal-entry"><div><b>Запись #${e.index + 1}</b><small>${esc(e.time)}</small></div>${e.image ? `<img src="${esc(e.image)}" alt="Фото из записи">` : ''}<p>${esc(e.text)}</p></article>`).join('') : `<div class="gp-event-empty"><b>Журнал пока пуст</b><span>Новые посты, комментарии, ответы и итоги ивентов появятся здесь после записи в чат.</span></div>`}</div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('socialhub'));
+}
+
 // ── Домашний экран ──
 function renderHome(screen) {
     currentScreen = 'home';
     const unread = getTotalUnread();
+    const activeStoryEvent = getSystemsView().storyEvents.active;
+    const equippedGifts = (getSystemsView().charms.equipped || []).slice(0, 3);
     const rpDt = getRpDateTime();
     const d = new Date();
     const DAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
@@ -538,6 +788,7 @@ function renderHome(screen) {
 
     screen.innerHTML = `
         <div class="gp-home">
+            ${equippedGifts.length ? `<div class="gp-home-gifts">${equippedGifts.map((id, i) => `<div class="gp-home-gift-slot gp-home-gift-${i + 1}" title="${esc(CHARM_CATALOG[id]?.name || '')}">${charmVisualHtml(id, 'gp-home-gift')}</div>`).join('')}</div>` : ''}
             <div class="gp-home-clock">${String(clockH).padStart(2, '0')}:${String(clockM).padStart(2, '0')}</div>
             <div class="gp-home-date">${dateStr}</div>
             <div class="gp-home-grid">
@@ -552,6 +803,10 @@ function renderHome(screen) {
                 <div class="gp-app" data-app="ig">
                     <div class="gp-app-icon gp-app-ig">${brand('fa-instagram')}</div>
                     <div class="gp-app-name">Instagram</div>
+                </div>
+                <div class="gp-app" data-app="${activeStoryEvent ? 'storyevent' : 'socialhub'}">
+                    <div class="gp-app-icon gp-app-events${activeStoryEvent ? ' gp-event-pulse' : ''}">${ic('fa-wand-sparkles')}${activeStoryEvent ? '<span class="gp-app-badge">!</span>' : ''}</div>
+                    <div class="gp-app-name">Ивенты</div>
                 </div>
                 <div class="gp-app" data-app="of">
                     <div class="gp-app-icon gp-app-of">${ic('fa-heart')}</div>
@@ -1089,6 +1344,13 @@ function dispHandle(item) {
     return item.handle || makeHandle(item.author);
 }
 
+async function hydrateGeneratedCommentAvatars(items) {
+    const targets = (items || []).filter(x => x?.ak === 'random' && !x.avatar && !x.avatarPending).slice(0, 3);
+    if (!targets.length) return;
+    await Promise.allSettled(targets.map(x => generateCommentAvatar(x)));
+    if (targets.some(x => x.avatar) && (currentScreen === 'twthread' || currentScreen === 'igview')) render();
+}
+
 function twCard(t, { clickable = true } = {}) {
     const isUser = t.ak === 'user';
     const replyCount = t.replies?.length || 0;
@@ -1125,11 +1387,13 @@ function twCard(t, { clickable = true } = {}) {
                 <button class="gp-tw-act${t.rted ? ' gp-tw-on-rt' : ''}" data-rt="${esc(t.id)}">${ic('fa-retweet')}<span>${t.rts || ''}</span></button>
                 <button class="gp-tw-act${t.liked ? ' gp-tw-on' : ''}" data-like="${esc(t.id)}">${ic('fa-heart')}<span>${t.likes || ''}</span></button>
             </div>
+            ${performanceHtml(t)}
         </div>
     </div>`;
 }
 
 function bindTwCardActions(root, rerender) {
+    bindSocialSystemLinks(root);
     root.querySelectorAll('[data-like]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); likeTweet(b.getAttribute('data-like')); rerender();
     }));
@@ -1166,11 +1430,13 @@ function renderTw(screen) {
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
             <div class="gp-title gp-title-app">${brand('fa-x-twitter')}</div>
+            <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
             <button class="gp-iconbtn" id="gp-tw-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-tw-compose">
-            ${avatarHtml(getUserName(), '', 'gp-avatar gp-avatar-sm')}
+            ${avatarHtml(getUserName(), avatarForAuthor('user'), 'gp-avatar gp-avatar-sm')}
             <input type="text" id="gp-tw-input" maxlength="280" placeholder="Что происходит?">
+            <button class="gp-tw-handle-edit" id="gp-tw-handle" title="Изменить @ник">${esc(getUserHandle())}</button>
             <button class="gp-send gp-send-sm" id="gp-tw-post" disabled>${ic('fa-feather')}</button>
         </div>
         <div class="gp-feed" id="gp-tw-feed">
@@ -1180,22 +1446,35 @@ function renderTw(screen) {
         </div>`);
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    bindSocialSystemLinks(screen);
 
     const input = screen.querySelector('#gp-tw-input');
     const postBtn = screen.querySelector('#gp-tw-post');
+    screen.querySelector('#gp-tw-handle')?.addEventListener('click', () => {
+        const value = prompt('Твой @ник в Twitter', getUserHandle());
+        if (value === null) return;
+        setUserHandle(value);
+        render();
+    });
     input?.addEventListener('input', () => { postBtn.disabled = !input.value.trim(); });
     const doPost = async () => {
         const v = input?.value.trim();
         if (!v || genBusy) return;
-        postTweet(v);
+        const userPost = postTweet(v);
+        const ad = attachActiveAd('twitter', userPost);
+        if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
         logSocialToChat(`${getUserName()} опубликовала твит: «${v}»`); // в историю чата (память/саммарайз)
         updatePhoneInjection(); // персонажи «видят» твит юзера
         
         genBusy = true;
         render();
         try {
-            const n = await generateTweetFeed();
-            toast(n > 0 ? `Новых твитов: ${n}` : 'Отправлено', n > 0 ? 'fa-x-twitter' : 'fa-check');
+            const before = (userPost.replies || []).length;
+            const addedFeed = await generateTweetFeed();
+            const addedComments = await generateTweetComments(userPost);
+            updatePhoneInjection();
+            logNewReplies('твитом', userPost.text, userPost.replies, before);
+            await finalizeSocialPost('twitter', userPost, { addedComments, addedFeed });
         } catch (e) {
             console.error('[GlassPhone] tw feed auto-gen failed:', e);
             toast('Твит отправлен, но лента не обновилась', 'fa-circle-exclamation');
@@ -1247,7 +1526,7 @@ function renderTwThread(screen) {
                     ? `<div class="gp-empty-text gp-replies-empty">Комментариев нет — нажми ${ic('fa-comments')}</div>`
                     : replies.map(r => `
                     <div class="gp-reply">
-                        ${avatarHtml(r.author, avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
+                        ${avatarHtml(r.author, r.avatar || avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(r.author)}</span>
@@ -1297,6 +1576,8 @@ function renderTwThread(screen) {
         try {
             const before = (t.replies || []).length;
             const n = await generateTweetComments(t);
+            void hydrateGeneratedCommentAvatars(t.replies);
+            if (t.ak === 'user') await finalizeSocialPost('twitter', t);
             if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
             if (t.ak === 'user') logNewReplies('твитом', t.text, t.replies, before);
         } catch (e) {
@@ -1339,8 +1620,7 @@ function renderTwThread(screen) {
             await generateTweetComments(t);
             // Журнал: её ответ + значимые ответы одной строкой
             const added = (t.replies || []).slice(beforeGen).filter(r => r.ak !== 'user');
-            const cparts = added.filter(r => typeof r.ak === 'string' && r.ak.startsWith('contact:'))
-                .map(r => `${r.author}: «${String(r.text).slice(0, 90)}»`);
+            const cparts = added.map(r => `${r.author || 'Аккаунт'}: «${String(r.text || '').slice(0, 120)}»`);
             let line = `${getUserName()} ответила под твитом ${t.author} («${String(t.text).slice(0, 50)}»): «${v}»`;
             if (cparts.length) line += ` — ответы: ${cparts.join('; ')}`;
             logSocialToChat(line);
@@ -1398,19 +1678,13 @@ function bindDescEdit(screen, p) {
     }));
 }
 
-// Журнал веток: новые реплики под постом/тредом юзера → одной скрытой строкой в чат.
-// Реплики знакомых персонажей — дословно (сюжетно значимы), рандомы — счётчиком.
+// Журнал веток: все новые реплики под постом/тредом юзера → одной скрытой строкой в чат.
 function logNewReplies(kindLabel, postText, arr, beforeLen) {
     const added = (arr || []).slice(beforeLen).filter(r => r.ak !== 'user');
     if (!added.length) return;
-    const contacts = added.filter(r => typeof r.ak === 'string' && r.ak.startsWith('contact:'));
-    const randomCount = added.length - contacts.length;
     let line = `под её ${kindLabel}${postText ? ` («${String(postText).slice(0, 80)}»)` : ''}`;
-    // Комменты знакомых персонажей — ПОЛНЫМ текстом (сюжетно значимы, модель
-    // должна видеть их целиком; сам коммент уже ограничен 300 симв. при создании).
-    const parts = contacts.map(c => `${c.author}: «${String(c.text).trim()}»`);
-    if (parts.length) line += ` прокомментировали: ${parts.join('; ')}`;
-    if (randomCount > 0) line += `${parts.length ? ', и' : ''} +${randomCount} реакций от других аккаунтов`;
+    const parts = added.map(c => `${c.author || 'Аккаунт'}: «${String(c.text || '').trim()}»`);
+    line += ` прокомментировали: ${parts.join('; ')}`;
     logSocialToChat(line);
 }
 // Доступен ли novarakk (кэш; уточняется асинхронно при первом рендере инсты)
@@ -1464,10 +1738,12 @@ function igCard(p, { clickable = true } = {}) {
             <button class="gp-tw-act" data-open-ig2="${esc(p.id)}">${ic('fa-comment')}<span>${p.comments?.length || ''}</span></button>
         </div>
         ${p.caption ? `<div class="gp-ig-caption"><b>${esc(p.author)}</b> ${esc(p.caption)}</div>` : ''}
+        ${performanceHtml(p)}
     </div>`;
 }
 
 function bindIgCardActions(root) {
+    bindSocialSystemLinks(root);
     root.querySelectorAll('[data-like-ig]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); likeIg(b.getAttribute('data-like-ig')); render();
     }));
@@ -1541,6 +1817,7 @@ function renderIg(screen) {
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
             <div class="gp-title gp-title-app">${brand('fa-instagram')}</div>
+            <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
             <button class="gp-iconbtn" id="gp-ig-new" title="Новый пост">${ic('fa-plus')}</button>
             <button class="gp-iconbtn" id="gp-ig-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
@@ -1551,6 +1828,7 @@ function renderIg(screen) {
         </div>`);
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    bindSocialSystemLinks(screen);
     screen.querySelector('#gp-ig-new')?.addEventListener('click', () => goto('ignew'));
     screen.querySelector('#gp-ig-gen')?.addEventListener('click', async () => {
         if (genBusy) return;
@@ -1592,7 +1870,7 @@ function renderIgView(screen) {
                     ? `<div class="gp-empty-text gp-replies-empty">Комментариев нет — нажми ${ic('fa-comments')}, пусть отреагируют</div>`
                     : comments.map(c => `
                     <div class="gp-reply">
-                        ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
+                        ${avatarHtml(c.author, c.avatar || avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(c.author)}</span>
@@ -1642,6 +1920,8 @@ function renderIgView(screen) {
         try {
             const before = (p.comments || []).length;
             const n = await generateIgComments(p);
+            void hydrateGeneratedCommentAvatars(p.comments);
+            if (p.ak === 'user') await finalizeSocialPost('instagram', p);
             if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
             if (p.ak === 'user') logNewReplies('фото в Instagram', p.caption || p.imgDesc, p.comments, before);
         } catch (e) {
@@ -1681,8 +1961,7 @@ function renderIgView(screen) {
             await generateIgComments(p);
             // Журнал: её коммент + значимые ответы
             const added = (p.comments || []).slice(beforeGen).filter(c => c.ak !== 'user');
-            const cparts = added.filter(c => typeof c.ak === 'string' && c.ak.startsWith('contact:'))
-                .map(c => `${c.author}: «${String(c.text).slice(0, 90)}»`);
+            const cparts = added.map(c => `${c.author || 'Аккаунт'}: «${String(c.text || '').slice(0, 120)}»`);
             let line = `${getUserName()} прокомментировала пост ${p.author} в Instagram: «${v}»`;
             if (cparts.length) line += ` — ответы: ${cparts.join('; ')}`;
             logSocialToChat(line);
@@ -1747,6 +2026,8 @@ function renderIgNew(screen) {
             return;
         }
         const post = postIg({ image: _igDraftImage, imgDesc: desc, caption });
+        const ad = attachActiveAd('instagram', post);
+        if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
         _igDraftImage = null;
         updatePhoneInjection(); // персонажи «видят» пост юзера
         currentPostId = post.id;
@@ -1773,6 +2054,7 @@ function renderIgNew(screen) {
                 );
                 applyChatHiding();
                 logNewReplies('фото в Instagram', post.caption || post.imgDesc, post.comments, before);
+                await finalizeSocialPost('instagram', post);
             } catch (e) {
                 console.error('[GlassPhone] auto-comments failed:', e);
                 toast(`Реакции не сгенерились: ${String(e?.message || e).slice(0, 80)}`, 'fa-circle-exclamation');

@@ -34,7 +34,13 @@ function setupSettingsPanel() {
     <div class="inline-drawer-content">
         <label class="checkbox_label"><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели (теги смс/контактов)</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
+        <div class="gp-inject-depth-setting" style="display:flex;gap:6px;align-items:center;margin:5px 0 7px;padding:7px 8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.04)">
+            <i class="fa-solid fa-layer-group" style="opacity:.7"></i>
+            <label for="gp-set-depth" style="font-size:10px;font-weight:700;white-space:nowrap">Глубина инжекта</label>
+            <input type="number" id="gp-set-depth" class="text_pole" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}" style="width:62px;flex:0 0 auto">
+            <span style="font-size:8px;opacity:.6;line-height:1.2">0 — перед последним ходом</span>
+        </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Профиль для соцсетей:</span>
@@ -55,11 +61,6 @@ function setupSettingsPanel() {
             <span style="font-size:8px;opacity:0.4">0 = авто</span>
         </div>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Глубина инжекта:</span>
-            <input type="number" id="gp-set-depth" class="text_pole" min="0" max="99" step="1" value="${s.injectDepth || 0}" style="width:55px;flex:0 0 auto">
-            <span style="font-size:8px;opacity:0.4">0 = последний ход</span>
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Твой ник (@):</span>
             <input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени" style="flex:1">
         </div>
@@ -71,7 +72,11 @@ function setupSettingsPanel() {
         </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
-        <div class="menu_button" id="gp-imgprompt-toggle" style="font-size:10px;text-align:center;margin-top:4px">Промпты картинок ▼</div>
+        <div class="gp-settings-actions">
+            <div class="menu_button" id="gp-imgprompt-toggle">Промпты картинок ▼</div>
+            <div class="menu_button" id="gp-css-toggle">CSS телефона ▼</div>
+            <div class="menu_button" id="gp-reset-fab">Сбросить кнопку</div>
+        </div>
         <div id="gp-imgprompt-panel" style="display:none;flex-direction:column;gap:3px">
             <span style="font-size:9px;opacity:0.5">Instagram (стиль/кадр — описание поста и запрет на главперсонажей дописываются сами):</span>
             <textarea id="gp-set-imgprompt-ig" class="text_pole" rows="2" style="font-size:11px;resize:vertical"></textarea>
@@ -79,22 +84,8 @@ function setupSettingsPanel() {
             <textarea id="gp-set-imgprompt-of" class="text_pole" rows="2" style="font-size:11px;resize:vertical"></textarea>
             <button id="gp-imgprompt-apply" class="menu_button">Применить</button>
         </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат (память для саммарайза)</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте (экономия токенов)</span></label>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Тема:</span>
-            <select id="gp-set-skin" class="text_pole" style="flex:1">
-                <option value="indigo" ${s.skin === 'indigo' || !s.skin ? 'selected' : ''}>Индиго (стандарт)</option>
-                <option value="sunset" ${s.skin === 'sunset' || s.skin === 'rose' ? 'selected' : ''}>Закат · Sunset</option>
-                <option value="zephyr" ${s.skin === 'zephyr' ? 'selected' : ''}>Зефир · Kawaii</option>
-                <option value="neon" ${s.skin === 'neon' ? 'selected' : ''}>Neon City · Cyberpunk</option>
-                <option value="noir" ${s.skin === 'noir' ? 'selected' : ''}>Noir d'Or · Золото</option>
-                <option value="fern" ${s.skin === 'fern' || s.skin === 'emerald' ? 'selected' : ''}>Fern · Лес</option>
-                <option value="lcd" ${s.skin === 'lcd' || s.skin === 'mono' ? 'selected' : ''}>LCD 3310 · Ретро</option>
-                <option value="void" ${s.skin === 'void' ? 'selected' : ''}>Void · AMOLED</option>
-                <option value="porcelain" ${s.skin === 'porcelain' ? 'selected' : ''}>Porcelain · Светлая</option>
-            </select>
-        </div>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
         <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
             <span style="font-size:9px;opacity:0.5;white-space:nowrap">Обои:</span>
             <div class="menu_button" id="gp-wall-pick" style="flex:1;padding:4px 8px">${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</div>
@@ -102,12 +93,10 @@ function setupSettingsPanel() {
             <div class="menu_button" id="gp-wall-clear" title="Убрать обои" style="flex:0 0 auto;padding:4px 8px;${s.wallpaper ? '' : 'display:none'}"><i class="fa-solid fa-xmark"></i></div>
             <input type="file" id="gp-wall-file" accept="image/*" style="display:none">
         </div>
-        <div class="menu_button" id="gp-css-toggle" style="font-size:10px;text-align:center;margin-top:4px">CSS телефона ▼</div>
         <div id="gp-css-panel" style="display:none;flex-direction:column;gap:4px">
             <textarea id="gp-set-css" class="text_pole" rows="8" style="font-family:monospace;font-size:10px;resize:vertical" placeholder="/* Свой CSS: #gp-phone, .gp-bubble, .gp-tw-card, .gp-ig-card, ... */"></textarea>
             <button id="gp-css-apply" class="menu_button">Применить</button>
         </div>
-        <div class="menu_button" id="gp-reset-fab" style="font-size:10px;text-align:center;margin-top:4px">Сбросить позицию кнопки</div>
         <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:4px;font-weight:700"></small>
     </div>
 </div>`;
@@ -134,15 +123,17 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
         updatePhoneInjection();
     });
+    $('#gp-set-depth').on('change', function () {
+        const value = Math.max(0, Math.min(100, parseInt(this.value) || 0));
+        this.value = value;
+        getSettings().injectDepth = value;
+        saveSettingsDebounced();
+        updatePhoneInjection();
+    });
     $('#gp-set-hide').on('change', function () {
         getSettings().hideSmsInChat = this.checked;
         saveSettingsDebounced();
         applyChatHiding();
-    });
-    $('#gp-set-depth').on('change', function () {
-        getSettings().injectDepth = Math.max(0, Math.min(99, parseInt(this.value) || 0));
-        saveSettingsDebounced();
-        updatePhoneInjection();
     });
     // Ник юзера хранится per-chat (в метаданных) — подставляем при открытии панели
     try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* чат ещё не загружен */ }
@@ -202,11 +193,6 @@ function setupSettingsPanel() {
         getSettings().compactRules = this.checked;
         saveSettingsDebounced();
         updatePhoneInjection();
-    });
-    $('#gp-set-skin').on('change', function () {
-        getSettings().skin = this.value;
-        saveSettingsDebounced();
-        applySkin();
     });
     $('#gp-css-toggle').on('click', function () {
         const panel = $('#gp-css-panel');

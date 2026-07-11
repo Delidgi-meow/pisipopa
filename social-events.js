@@ -91,14 +91,6 @@ export function ensureSocialSystems(social = null) {
     return root;
 }
 
-const AD_BRANDS = [
-    { brand: 'Luma', product: 'новая коллекция одежды', brief: 'Покажи вещь в своём стиле и честно отметь рекламу.', risk: 'safe' },
-    { brand: 'Vela Skin', product: 'сыворотка для лица', brief: 'Расскажи о личном впечатлении без медицинских обещаний.', risk: 'safe' },
-    { brand: 'Pulse', product: 'энергетический напиток', brief: 'Сделай дерзкий пост о ночном ритме жизни.', risk: 'mixed' },
-    { brand: 'Lucky Drop', product: 'приложение с платными розыгрышами', brief: 'Позови подписчиков испытать удачу. Предложение спорное и может вызвать негатив.', risk: 'controversial' },
-    { brand: 'Mirage', product: 'капсулы для быстрого похудения', brief: 'Бренд просит громкое обещание результата. Аудитория может счесть рекламу опасной.', risk: 'controversial' },
-];
-
 function reputationTier(value) {
     const n = Number(value) || 0;
     if (n >= 82) return 'любимец аудитории';
@@ -111,21 +103,33 @@ function reputationTier(value) {
 export function getReputationStatus(value) { return reputationTier(value); }
 
 function ensureAdOffers(root) {
-    const ads = root.advertising;
-    if (ads.active || ads.offers.length >= 3) return;
+    // Предложения больше не собираются из циклического локального пула.
+    // Их по явной кнопке создаёт модель в social.js с учётом сеттинга и контекста.
+    if (!Array.isArray(root.advertising.offers)) root.advertising.offers = [];
+}
+
+export function replaceAdOffers(generated) {
+    const root = ensureSocialSystems();
+    if (root.advertising.active) return [];
     const followers = Math.max(root.socialProfiles.twitter.followers, root.socialProfiles.instagram.followers);
-    const completed = ads.history.length;
-    while (ads.offers.length < 3) {
-        const index = (completed + ads.offers.length * 2) % AD_BRANDS.length;
-        const base = AD_BRANDS[index];
-        const platform = (completed + ads.offers.length) % 2 ? 'instagram' : 'twitter';
-        const riskMul = base.risk === 'controversial' ? 2.1 : base.risk === 'mixed' ? 1.4 : 1;
-        const payment = Math.max(250, Math.round((220 + Math.sqrt(Math.max(1, followers)) * 45) * riskMul / 50) * 50);
-        ads.offers.push({
-            id: id('ad'), ...base, platform, payment,
-            title: `${base.brand}: рекламная интеграция`, createdAt: Date.now(),
-        });
-    }
+    const offers = (Array.isArray(generated) ? generated : []).slice(0, 3).map((raw, index) => {
+        const risk = ['safe', 'mixed', 'controversial'].includes(raw?.risk) ? raw.risk : 'safe';
+        const riskMul = risk === 'controversial' ? 2.1 : risk === 'mixed' ? 1.4 : 1;
+        const suggested = Number(raw?.payment);
+        const baseline = (220 + Math.sqrt(Math.max(1, followers)) * 45) * riskMul;
+        const payment = Math.max(250, Math.round((Number.isFinite(suggested) ? suggested : baseline) / 50) * 50);
+        const brand = String(raw?.brand || `Бренд ${index + 1}`).slice(0, 80);
+        return {
+            id: id('ad'), brand,
+            product: String(raw?.product || 'рекламная интеграция').slice(0, 160),
+            brief: String(raw?.brief || 'Создать органичную рекламную публикацию.').slice(0, 400),
+            risk, platform: raw?.platform === 'instagram' ? 'instagram' : 'twitter', payment,
+            title: String(raw?.title || `${brand}: рекламная интеграция`).slice(0, 120), createdAt: Date.now(),
+        };
+    });
+    root.advertising.offers = offers;
+    saveMeta();
+    return offers;
 }
 
 export function acceptAdOffer(offerId) {
@@ -144,7 +148,7 @@ export function declineAdOffer(offerId) {
     if (!offer) return false;
     root.advertising.offers = root.advertising.offers.filter(x => x.id !== offerId);
     root.advertising.history.unshift({ ...offer, state: 'declined', finishedAt: Date.now() });
-    ensureAdOffers(root); saveMeta(); return true;
+    saveMeta(); return true;
 }
 
 export function attachActiveAd(platform, post) {
@@ -175,7 +179,6 @@ function settleAdvertisement(root, post) {
     root.advertising.history.unshift({ ...ad });
     root.advertising.history = root.advertising.history.slice(0, 30);
     root.advertising.active = null;
-    ensureAdOffers(root);
     return paid;
 }
 
@@ -330,9 +333,9 @@ export function shouldOfferEvent(post) {
     return chance > 0 && hashUnit(`${post.id}:story-event`) < chance;
 }
 
-export function validateAndOfferEvent(candidate, post, platform) {
+export function validateAndOfferEvent(candidate, post = null, platform = 'phone') {
     const root = ensureSocialSystems();
-    if (!candidate || root.storyEvents.active || !post?.id) return null;
+    if (!candidate || root.storyEvents.active) return null;
     const rawCandidates = Array.isArray(candidate.events) ? candidate.events.slice(0, 3) : [candidate];
     const normalize = raw => {
         const choices = Array.isArray(raw?.choices) ? raw.choices.slice(0, 3) : [];
@@ -356,12 +359,12 @@ export function validateAndOfferEvent(candidate, post, platform) {
     if (!alternatives.length) return null;
     const first = alternatives[0];
     const event = {
-        id: id('event'), state: 'offered', sourcePostId: post.id, sourcePlatform: platform,
+        id: id('event'), state: 'offered', sourcePostId: post?.id || null, sourcePlatform: platform,
         ...first, alternatives, selectedAlternative: alternatives.length === 1 ? 0 : null,
         decisions: [], createdAt: Date.now(), recap: '',
     };
     root.storyEvents.active = event;
-    post.performance.storyEventId = event.id;
+    if (post?.performance) post.performance.storyEventId = event.id;
     saveMeta();
     return event;
 }

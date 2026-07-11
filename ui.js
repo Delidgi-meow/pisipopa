@@ -26,8 +26,8 @@ import {
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
-    handleFor, setContactHandle, setUserHandle, getUserHandle, generateCommentAvatar, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
-    settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent,
+    handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
+    settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
 } from './social.js';
 import { getSystemsView, equipCharm, deferEvent, declineEvent, selectStoryEvent, CHARM_CATALOG, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { giftVisualHtml } from './gift-visual.js';
@@ -539,7 +539,6 @@ function performanceHtml(post) {
         <div class="gp-social-result-head"><b>${esc(p.label)}</b><span>${ic('fa-eye')} ${compactNum(p.reach)} · <span class="${delta < 0 ? 'gp-social-down' : 'gp-social-up'}">${delta >= 0 ? '+' : ''}${delta}</span> ${ic('fa-user-plus')}</span></div>
         <div class="gp-sentiment" title="Позитивные ${p.positive}% · нейтральные ${p.neutral}% · негативные ${p.negative}%"><i class="gp-sent-pos" style="width:${p.positive}%"></i><i class="gp-sent-neu" style="width:${p.neutral}%"></i><i class="gp-sent-neg" style="width:${p.negative}%"></i></div>
         <div class="gp-sentiment-labels"><span>${p.positive}% позитив</span><span>${p.neutral}% нейтр.</span><span>${p.negative}% негатив</span></div>
-        ${p.storyEventId ? `<button class="gp-story-link" data-open-story>${ic('fa-wand-sparkles')} Сюжетный поворот</button>` : ''}
     </div>`;
 }
 
@@ -617,11 +616,6 @@ function renderSocialHub(screen) {
     const event = s.storyEvents.active;
     const ads = s.advertising || { offers: [], active: null, history: [] };
     const recentEvents = s.storyEvents.recent || [];
-    const eventSources = [
-        ...getTweets().filter(p => p.ak === 'user' && p.performance?.settled).map(post => ({ platform: 'twitter', post })),
-        ...getIgPosts().filter(p => p.ak === 'user' && p.performance?.settled).map(post => ({ platform: 'instagram', post })),
-    ].sort((a, b) => new Date(b.post.time || 0) - new Date(a.post.time || 0));
-    const latestSource = eventSources[0] || null;
     screen.innerHTML = `<div class="gp-header gp-thread-header">
         <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Социальный профиль</div>
         <button class="gp-iconbtn" id="gp-open-journal" title="Журнал памяти">${ic('fa-book-open')}</button>
@@ -632,16 +626,21 @@ function renderSocialHub(screen) {
             <div class="gp-profile-card"><div>${brand('fa-instagram')} Instagram</div><b>${compactNum(s.socialProfiles.instagram.followers)}</b><span>подписчиков · ${esc(getReputationStatus(s.socialProfiles.instagram.reputation))}</span></div>
         </div>
         <section class="gp-social-section gp-ad-section"><h3>${ic('fa-star')} Рекламные предложения</h3>
-            ${ads.active ? `<div class="gp-ad-active"><b>${esc(ads.active.brand)} · ${ads.active.platform === 'twitter' ? 'Twitter' : 'Instagram'}</b><span>${esc(ads.active.product)}</span><small>${ads.active.state === 'published' ? `Публикация размещена · ожидается подсчёт реакции и выплата ${fmtMoney(ads.active.payment)}` : `Следующая публикация в этой соцсети станет рекламной · ${fmtMoney(ads.active.payment)}`}</small></div>` : (ads.offers || []).map(a => `<div class="gp-ad-card gp-ad-${esc(a.risk)}"><div><b>${esc(a.title)}</b><span>${esc(a.product)}</span><small>${esc(a.brief)} · ${fmtMoney(a.payment)}</small></div><div class="gp-ad-actions"><button class="gp-ad-accept" data-ad-accept="${esc(a.id)}">${ic('fa-check')} Взять</button><button class="gp-ad-decline" data-ad-decline="${esc(a.id)}" title="Отклонить">${ic('fa-xmark')}</button></div></div>`).join('')}
+            ${ads.active
+                ? `<div class="gp-ad-active"><b>${esc(ads.active.brand)} · ${ads.active.platform === 'twitter' ? 'Twitter' : 'Instagram'}</b><span>${esc(ads.active.product)}</span><small>${ads.active.state === 'published' ? `Публикация размещена · ожидается подсчёт реакции и выплата ${fmtMoney(ads.active.payment)}` : `Следующая публикация в этой соцсети станет рекламной · ${fmtMoney(ads.active.payment)}`}</small></div>`
+                : `${(ads.offers || []).length
+                    ? (ads.offers || []).map(a => `<div class="gp-ad-card gp-ad-${esc(a.risk)}"><div><b>${esc(a.title)}</b><span>${esc(a.product)}</span><small>${esc(a.brief)} · ${fmtMoney(a.payment)}</small></div><div class="gp-ad-actions"><button class="gp-ad-accept" data-ad-accept="${esc(a.id)}">${ic('fa-check')} Взять</button><button class="gp-ad-decline" data-ad-decline="${esc(a.id)}" title="Отклонить">${ic('fa-xmark')}</button></div></div>`).join('')
+                    : `<div class="gp-event-empty"><b>Предложений пока нет</b><span>Запроси свежие интеграции — модель подберёт бренды, товары и оплату под сеттинг текущей ролевой.</span></div>`}
+                   <button class="gp-event-generate" id="gp-ad-generate" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')} ${(ads.offers || []).length ? 'Обновить предложения' : 'Найти предложения'}</button>`}
         </section>
         <section class="gp-social-section gp-events-section">
             <h3>${ic('fa-wand-sparkles')} Сюжетные ивенты</h3>
             ${event
                 ? `<button class="gp-event-banner" data-open-story><span>${ic('fa-wand-sparkles')}</span><div><b>${esc(event.title)}</b><small>${esc(event.hook)}</small></div>${ic('fa-chevron-right')}</button>`
-                : `<div class="gp-event-empty"><b>Активного ивента пока нет</b><span>Ивенты рождаются из твоих постов после того, как под ними появились реакции и был подсчитан результат.</span></div>
-                   <button class="gp-event-generate" id="gp-event-generate" ${latestSource && !genBusy ? '' : 'disabled'}>
+                : `<div class="gp-event-empty"><b>Активного ивента пока нет</b><span>Модель соберёт три сюжетных поворота из лорбука, карточки, истории RP, журнала телефона и всех недавних постов.</span></div>
+                   <button class="gp-event-generate" id="gp-event-generate" ${!genBusy ? '' : 'disabled'}>
                        ${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}
-                       ${latestSource ? 'Создать из последнего поста' : 'Сначала опубликуй пост и получи реакции'}
+                       Создать три сюжетных поворота
                    </button>`}
             ${recentEvents.length ? `<div class="gp-event-history"><small>Архив</small>${recentEvents.slice(0, 8).map(e => `<button data-story-result="${esc(e.id)}" ${e.state === 'declined' ? 'disabled' : ''}><i class="fa-solid ${e.state === 'declined' ? 'fa-ban' : 'fa-check'}"></i><span><b>${esc(e.title)}</b><small>${esc(e.state === 'declined' ? 'отклонён' : 'нажми, чтобы прочитать итог')}</small></span>${e.state === 'declined' ? '' : ic('fa-chevron-right')}</button>`).join('')}</div>` : ''}
         </section>
@@ -652,21 +651,36 @@ function renderSocialHub(screen) {
     screen.querySelector('#gp-open-journal')?.addEventListener('click', () => goto('socialjournal'));
     screen.querySelectorAll('[data-ad-accept]').forEach(b => b.addEventListener('click', () => { acceptAdOffer(b.getAttribute('data-ad-accept')); toast('Рекламное задание принято', 'fa-star'); render(); }));
     screen.querySelectorAll('[data-ad-decline]').forEach(b => b.addEventListener('click', () => { declineAdOffer(b.getAttribute('data-ad-decline')); render(); }));
-    screen.querySelectorAll('[data-story-result]').forEach(b => b.addEventListener('click', () => openStoryResult(b.getAttribute('data-story-result'))));
-    bindSocialSystemLinks(screen);
-    screen.querySelector('#gp-event-generate')?.addEventListener('click', async () => {
-        if (genBusy || !latestSource) return;
+    screen.querySelector('#gp-ad-generate')?.addEventListener('click', async () => {
+        if (genBusy) return;
         genBusy = true;
         render();
         try {
-            const created = await maybeGenerateStoryEvent(latestSource.platform, latestSource.post, { force: true });
+            const offers = await generateAdvertisingOffers();
+            toast(offers.length ? `Новых предложений: ${offers.length}` : 'Модель не вернула подходящих предложений', offers.length ? 'fa-star' : 'fa-circle-exclamation');
+        } catch (e) {
+            console.error('[GlassPhone] advertising offers failed:', e);
+            toast('Ошибка генерации рекламных предложений', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'socialhub') render();
+        }
+    });
+    screen.querySelectorAll('[data-story-result]').forEach(b => b.addEventListener('click', () => openStoryResult(b.getAttribute('data-story-result'))));
+    bindSocialSystemLinks(screen);
+    screen.querySelector('#gp-event-generate')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        genBusy = true;
+        render();
+        try {
+            const created = await maybeGenerateStoryEvent('phone', null, { force: true });
             if (created) {
                 updatePhoneInjection();
                 toast('Сюжетный ивент создан', 'fa-wand-sparkles');
                 goto('storyevent');
                 return;
             }
-            toast('Не удалось собрать ивент из этого поста', 'fa-circle-exclamation');
+            toast('Не удалось собрать ивент из контекста', 'fa-circle-exclamation');
         } catch (e) {
             console.error('[GlassPhone] manual story event failed:', e);
             toast('Ошибка генерации ивента', 'fa-circle-exclamation');
@@ -1344,13 +1358,6 @@ function dispHandle(item) {
     return item.handle || makeHandle(item.author);
 }
 
-async function hydrateGeneratedCommentAvatars(items) {
-    const targets = (items || []).filter(x => x?.ak === 'random' && !x.avatar && !x.avatarPending).slice(0, 3);
-    if (!targets.length) return;
-    await Promise.allSettled(targets.map(x => generateCommentAvatar(x)));
-    if (targets.some(x => x.avatar) && (currentScreen === 'twthread' || currentScreen === 'igview')) render();
-}
-
 function twCard(t, { clickable = true } = {}) {
     const isUser = t.ak === 'user';
     const replyCount = t.replies?.length || 0;
@@ -1576,7 +1583,6 @@ function renderTwThread(screen) {
         try {
             const before = (t.replies || []).length;
             const n = await generateTweetComments(t);
-            void hydrateGeneratedCommentAvatars(t.replies);
             if (t.ak === 'user') await finalizeSocialPost('twitter', t);
             if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
             if (t.ak === 'user') logNewReplies('твитом', t.text, t.replies, before);
@@ -1920,7 +1926,6 @@ function renderIgView(screen) {
         try {
             const before = (p.comments || []).length;
             const n = await generateIgComments(p);
-            void hydrateGeneratedCommentAvatars(p.comments);
             if (p.ak === 'user') await finalizeSocialPost('instagram', p);
             if (!n) toast('Не получилось — попробуй ещё раз', 'fa-circle-exclamation');
             if (p.ak === 'user') logNewReplies('фото в Instagram', p.caption || p.imgDesc, p.comments, before);

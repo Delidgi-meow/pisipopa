@@ -23,7 +23,7 @@ import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext } from './state.js';
-import { ensureSocialSystems, settlePost, shouldOfferEvent, validateAndOfferEvent, applyEventResolution } from './social-events.js';
+import { ensureSocialSystems, settlePost, validateAndOfferEvent, applyEventResolution, replaceAdOffers } from './social-events.js';
 
 const MAX_TWEETS = 50;
 const MAX_IG_POSTS = 30;
@@ -1120,6 +1120,22 @@ Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc"
     return parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"store":"' }));
 }
 
+export async function generateAdvertisingOffers() {
+    const s = getSocial();
+    if (s.advertising.active) return [];
+    const previous = (s.advertising.history || []).slice(0, 12)
+        .map(a => `${a.brand}: ${a.product}`).join('\n');
+    const prompt = `${await taskHeader(`invent THREE fresh advertising offers for ${getUserName()}'s social-media accounts.`)}
+Use the actual roleplay country, era, economy, culture, current events and the user's recent online activity. Brands may be real-looking fictional local businesses, creators, venues, products or services. Make all three substantially different; do not recycle generic placeholder brands.
+Current audience: Twitter ${s.socialProfiles.twitter.followers} followers; Instagram ${s.socialProfiles.instagram.followers} followers.
+${previous ? `Previously seen offers — DO NOT repeat or lightly rename them:\n${previous}` : ''}
+Include a believable fee in the setting's ordinary numeric scale. Exactly one offer may be ethically controversial, but never require illegal content.
+Output STRICT JSON array only:
+[{"brand":"...","title":"...","product":"...","brief":"...","platform":"twitter|instagram","risk":"safe|mixed|controversial","payment":500}]`;
+    const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"brand":"' }));
+    return replaceAdOffers(parsed);
+}
+
 export async function generateIgComments(post) {
     // Экономия: описание есть → фото не прикладываем (галочка visionInComments переопределяет)
     const willAttach = !!post.image && (getSettings().visionInComments || !post.imgDesc);
@@ -1186,29 +1202,30 @@ export function settleSocialPost(platform, post, options = {}) {
     return settlePost(platform, post, options);
 }
 
-export async function maybeGenerateStoryEvent(platform, post, { force = false } = {}) {
+export async function maybeGenerateStoryEvent(platform = 'phone', post = null, { force = false } = {}) {
     const systems = getSocial();
-    // В обычном режиме событие выпадает по шансу после подсчёта реакции поста.
-    // force используется явной кнопкой в приложении «Ивенты»: пользователь может
-    // попросить сюжетный поворот из уже завершённого собственного поста, не ожидая
-    // случайного срабатывания. Активное событие всё равно не перезаписываем.
-    if (systems.storyEvents.active || !post?.performance?.settled) return null;
-    if (!force && !shouldOfferEvent(post)) return null;
+    // Ивенты создаются только явной кнопкой. Источник — весь накопленный канон,
+    // а не один последний пост; это также исключает случайные плашки под постами.
+    if (systems.storyEvents.active || !force) return null;
     const s = getSocial();
     const recent = s.storyEvents.recent.slice(0, 5).map(e => `${e.title}: ${e.premise}`).join('\n');
     const pending = s.rpConsequences.filter(c => c.status === 'pending').map(c => c.summary).join('\n');
-    const postText = platform === 'twitter' ? post.text : `${post.caption || ''}\nPhoto: ${post.imgDesc || '(attached image)'}`;
-    const prompt = `${await taskHeader('propose THREE optional, canon-grounded story events caused by the user social-media post.')}
-SOURCE POST (${platform}, id ${post.id}): ${postText}
-PUBLIC REACTION: ${post.performance?.label}; reach ${post.performance?.reach}; known replies: ${(platform === 'twitter' ? post.replies : post.comments).filter(c => String(c.ak).startsWith('contact:')).map(c => `${c.author}: ${c.text}`).join(' | ') || 'none'}
+    const posts = [
+        ...s.tweets.filter(p => p.ak === 'user').slice(0, 6).map(p => `Twitter: ${p.text}; replies: ${(p.replies || []).slice(-4).map(c => `${c.author}: ${c.text}`).join(' | ') || 'none'}`),
+        ...s.igPosts.filter(p => p.ak === 'user').slice(0, 6).map(p => `Instagram: ${p.caption || ''}; photo: ${p.imgDesc || 'attached/undescribed'}; comments: ${(p.comments || []).slice(-4).map(c => `${c.author}: ${c.text}`).join(' | ') || 'none'}`),
+    ].join('\n');
+    const journal = getSocialJournalEntries().slice(0, 12).map(e => e.text).join('\n');
+    const prompt = `${await taskHeader('propose THREE optional, canon-grounded story events for the continuing roleplay.')}
+RECENT PHONE / SOCIAL ACTIVITY:\n${posts || '(no posts yet)'}
+MEMORY JOURNAL:\n${journal || '(empty)'}
 ${pending ? `Pending established consequences (do not duplicate):\n${pending}` : ''}
 ${recent ? `Recent event themes (avoid repetition):\n${recent}` : ''}
 
-Create exactly three concrete, meaningfully different event hooks. Every hook must clearly grow from the source post AND at least one fact in the supplied canon context. Do not reveal hidden thoughts, invent a major contradiction, complete a scene for the user, or force travel/romance/risk. Each hook must require a decision. For every event provide exactly three meaningfully different response choices with different intents, none obviously optimal. The fourth custom response is supplied by code.
+Create exactly three concrete, meaningfully different event hooks. Use the character card, persona, triggered lorebook, recent RP history, phone journal and posts together. A hook may originate offline, from a character, lore faction, location, unresolved RP detail, message, rumor or social activity; it MUST NOT be artificially tied to one post. Do not reveal hidden thoughts, contradict canon, complete a scene for the user, or force the user's actions. Each hook must require a decision. For every event provide exactly three meaningfully different response choices with different intents, none obviously optimal. The fourth custom response is supplied by code.
 Output STRICT JSON object only:
-{"events":[{"title":"...","hook":"...","premise":"...","source_post_id":"${post.id}","involved_actors":["..."],"visibility":"public|followers|known_characters","stakes":"social|relationship|mystery|danger|opportunity|comedy|reputation","urgency":"soft|next_scene|immediate","canon_evidence":["specific fact from context"],"opening_message":"...","choices":[{"id":"a","label":"...","intent":"honest","text":"..."},{"id":"b","label":"...","intent":"deflect","text":"..."},{"id":"c","label":"...","intent":"confront","text":"..."}]}]}`;
-    const candidate = parseJsonObject(await socialGen(prompt, { maxTokens: 3600, image: platform === 'instagram' ? post.image : null, prefill: '{"events":[{"title":"' }));
-    return validateAndOfferEvent(candidate, post, platform);
+{"events":[{"title":"...","hook":"...","premise":"...","involved_actors":["..."],"visibility":"public|followers|known_characters","stakes":"social|relationship|mystery|danger|opportunity|comedy|reputation","urgency":"soft|next_scene|immediate","canon_evidence":["specific fact from context"],"opening_message":"...","choices":[{"id":"a","label":"...","intent":"honest","text":"..."},{"id":"b","label":"...","intent":"deflect","text":"..."},{"id":"c","label":"...","intent":"confront","text":"..."}]}]}`;
+    const candidate = parseJsonObject(await socialGen(prompt, { maxTokens: 3600, prefill: '{"events":[{"title":"' }));
+    return validateAndOfferEvent(candidate, null, 'phone');
 }
 
 export async function resolveStoryEvent(choice) {

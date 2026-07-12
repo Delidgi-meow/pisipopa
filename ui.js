@@ -9,7 +9,7 @@ import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
     addGroup, delGroup, attachImageToMessage, renameContact, banAccount,
-    isSmsBlocked, blockSmsContact, unblockSmsContact,
+    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
@@ -28,9 +28,15 @@ import {
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
+    generateRepLabel,
 } from './social.js';
-import { getSystemsView, equipCharm, deferEvent, declineEvent, selectStoryEvent, CHARM_CATALOG, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
-import { giftVisualHtml } from './gift-visual.js';
+import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
+import { getAchievements, maybeGenerateAchievements } from './achievements.js';
+import { tr, trDom, lang, DAYS_I18N, MONTHS_I18N } from './i18n.js';
+
+// Все confirm/prompt модуля идут через перевод (шэдоуинг браузерных диалогов)
+const confirm = (msg) => window.confirm(tr(msg));
+const prompt = (msg, def) => window.prompt(tr(msg), def);
 
 // ── Локальное UI-состояние (не персистится) ──
 let currentScreen = 'home';     // + 'of' | 'ofnew' | 'ofview'
@@ -66,6 +72,13 @@ function avatarStyle(name) {
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
     const p = PALETTES[Math.abs(h) % PALETTES.length];
     return `background:linear-gradient(135deg, ${p[0]}, ${p[1]})`;
+}
+// Персональный цвет ника (групповые чаты): тот же хэш, что и у аватара
+function senderColor(name) {
+    let h = 0;
+    const s = String(name || '?');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return PALETTES[Math.abs(h) % PALETTES.length][0];
 }
 function initialOf(name) {
     const t = String(name || '?').trim();
@@ -505,7 +518,8 @@ export function render() {
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
     else if (currentScreen === 'appearance') renderAppearance(screen);
     else renderHome(screen);
-    syncEquippedCharm();
+    // Перевод отрендеренного экрана (en) / восстановление оригиналов (ru)
+    try { trDom(screen); } catch (e) { /* ignore */ }
 }
 
 function goto(screenName) {
@@ -542,13 +556,45 @@ function performanceHtml(post) {
     </div>`;
 }
 
-const charmVisualHtml = (charmId, className = '') => giftVisualHtml(charmId, CHARM_CATALOG[charmId], className);
+// Ачивки: генеративные — модель придумывает их по реальной активности.
+// Вызов асинхронный (LLM), сам себя гейтит (сигнатура активности + кулдаун).
+export function notifyAchievements(force = false) {
+    maybeGenerateAchievements({ force }).then(added => {
+        for (const def of added) {
+            toast(`${tr('Ачивка открыта')}: ${def.name}`, def.icon || 'fa-trophy');
+        }
+        if (force && !added.length) toast('Новых достижений пока нет', 'fa-trophy');
+        if ((added.length || force) && isPhoneOpen() && currentScreen === 'socialhub') render();
+    }).catch(() => {});
+}
 
-function syncEquippedCharm() {
-    const ph = document.getElementById('gp-phone');
-    if (!ph) return;
-    // Старого подвеса за рамкой больше нет: подарки рисуются на обоях home.
-    ph.querySelector('.gp-equipped-charm')?.remove();
+// Репутация: живые статусы генерятся моделью, кэш по тиру (перегенерация
+// только когда репутация перешла в другой тир)
+const _repBusy = new Set();
+function ensureRepLabels(s) {
+    for (const platform of ['twitter', 'instagram']) {
+        const p = s.socialProfiles?.[platform];
+        if (!p) continue;
+        // Ключ кэша: тир + язык интерфейса (сменила язык → статус перегенерится)
+        const tierKey = `${getReputationStatus(p.reputation)}|${lang()}`;
+        if (p.repLabel && p.repTier === tierKey) continue;
+        if (_repBusy.has(platform)) continue;
+        _repBusy.add(platform);
+        generateRepLabel(platform, p.reputation, p.followers, getReputationStatus(p.reputation)).then(label => {
+            if (label) {
+                p.repLabel = label;
+                p.repTier = tierKey;
+                saveMeta();
+                if (isPhoneOpen() && currentScreen === 'socialhub') render();
+            }
+        }).catch(() => {}).finally(() => _repBusy.delete(platform));
+    }
+}
+function repLabelOf(s, platform) {
+    const p = s.socialProfiles?.[platform];
+    if (!p) return '';
+    const tierKey = `${getReputationStatus(p.reputation)}|${lang()}`;
+    return (p.repTier === tierKey && p.repLabel) || getReputationStatus(p.reputation);
 }
 
 function socialImpactToast(platform, post, addedComments = 0, addedFeed = 0) {
@@ -611,8 +657,9 @@ function renderSocialHub(screen) {
     }
     const s = getSystemsView();
     const tasks = s.postingTasks.active || [];
-    const owned = s.charms.owned || [];
-    const equipped = Array.isArray(s.charms.equipped) ? s.charms.equipped : [];
+    notifyAchievements(); // генеративные ачивки: проверка при заходе (сама себя гейтит)
+    ensureRepLabels(s);   // живые статусы репутации (кэш по тиру)
+    const achList = getAchievements();
     const event = s.storyEvents.active;
     const ads = s.advertising || { offers: [], active: null, history: [] };
     const recentEvents = s.storyEvents.recent || [];
@@ -622,8 +669,8 @@ function renderSocialHub(screen) {
         ${event ? `<button class="gp-iconbtn gp-event-pulse" data-open-story title="Сюжетный поворот">${ic('fa-wand-sparkles')}</button>` : ''}
     </div><div class="gp-feed gp-social-hub">
         <div class="gp-profile-grid">
-            <div class="gp-profile-card"><div>${brand('fa-x-twitter')} Twitter</div><b>${compactNum(s.socialProfiles.twitter.followers)}</b><span>подписчиков · ${esc(getReputationStatus(s.socialProfiles.twitter.reputation))}</span></div>
-            <div class="gp-profile-card"><div>${brand('fa-instagram')} Instagram</div><b>${compactNum(s.socialProfiles.instagram.followers)}</b><span>подписчиков · ${esc(getReputationStatus(s.socialProfiles.instagram.reputation))}</span></div>
+            <div class="gp-profile-card"><div>${brand('fa-x-twitter')} Twitter</div><b>${compactNum(s.socialProfiles.twitter.followers)}</b><span>подписчиков · ${esc(repLabelOf(s, 'twitter'))}</span></div>
+            <div class="gp-profile-card"><div>${brand('fa-instagram')} Instagram</div><b>${compactNum(s.socialProfiles.instagram.followers)}</b><span>подписчиков · ${esc(repLabelOf(s, 'instagram'))}</span></div>
         </div>
         <section class="gp-social-section gp-ad-section"><h3>${ic('fa-star')} Рекламные предложения</h3>
             ${ads.active
@@ -645,10 +692,25 @@ function renderSocialHub(screen) {
             ${recentEvents.length ? `<div class="gp-event-history"><small>Архив</small>${recentEvents.slice(0, 8).map(e => `<button data-story-result="${esc(e.id)}" ${e.state === 'declined' ? 'disabled' : ''}><i class="fa-solid ${e.state === 'declined' ? 'fa-ban' : 'fa-check'}"></i><span><b>${esc(e.title)}</b><small>${esc(e.state === 'declined' ? 'отклонён' : 'нажми, чтобы прочитать итог')}</small></span>${e.state === 'declined' ? '' : ic('fa-chevron-right')}</button>`).join('')}</div>` : ''}
         </section>
         <section class="gp-social-section"><h3>${ic('fa-list-check')} Задания на постинг</h3>${tasks.map(t => `<div class="gp-task-card"><div><b>${esc(t.title)}</b><span>${esc(t.text)}</span></div><strong>${Math.min(t.progress, t.goal)}/${t.goal}</strong><i><em style="width:${Math.round(Math.min(1, t.progress / t.goal) * 100)}%"></em></i></div>`).join('')}</section>
-        <section class="gp-social-section gp-gifts-section"><h3>${ic('fa-gift')} Подарки <small>${equipped.length}/3 на экране</small></h3><div class="gp-charms">${Object.entries(CHARM_CATALOG).map(([id, c]) => { const has = owned.includes(id), on = equipped.includes(id); return `<button class="gp-charm${has ? ' gp-charm-owned' : ''}${on ? ' gp-charm-on' : ''}" data-charm="${esc(id)}" ${has ? '' : 'disabled'}>${charmVisualHtml(id, 'gp-charm-preview')}<span>${esc(c.name)}</span><small>${has ? (on ? 'на главном экране' : c.rarity) : 'закрыт'}</small>${on ? `<b class="gp-gift-check">${ic('fa-check')}</b>` : ''}</button>`; }).join('')}</div>${equipped.length ? `<button class="gp-secondary gp-unequip" id="gp-charm-off">Убрать все с экрана</button>` : ''}</section>
+        <section class="gp-social-section gp-gifts-section"><h3>${ic('fa-trophy')} Достижения <small>${achList.length}</small><button class="gp-iconbtn gp-ach-refresh" id="gp-ach-gen" title="Проверить достижения">${ic('fa-rotate')}</button></h3>
+            ${achList.length ? `<div class="gp-ach-list">${achList.map(a => `
+                <div class="gp-ach gp-ach-on" title="${esc(a.desc)}">
+                    <span class="gp-ach-icon">${ic(a.icon || 'fa-trophy')}</span>
+                    <span class="gp-ach-body">
+                        <span class="gp-ach-name">${esc(a.name)}</span>
+                        ${a.desc ? `<span class="gp-ach-desc">${esc(a.desc)}</span>` : ''}
+                    </span>
+                    <span class="gp-ach-check">${ic('fa-check')}</span>
+                </div>`).join('')}
+            </div>` : `<div class="gp-event-empty"><b>Пока нет достижений</b><span>Живи в телефоне — модель сама придумает ачивки за то, что ты реально сделала.</span></div>`}
+        </section>
     </div>`;
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
     screen.querySelector('#gp-open-journal')?.addEventListener('click', () => goto('socialjournal'));
+    screen.querySelector('#gp-ach-gen')?.addEventListener('click', (e) => {
+        e.currentTarget.querySelector('i')?.classList.add('fa-spin');
+        notifyAchievements(true); // force: без кулдауна/сигнатуры
+    });
     screen.querySelectorAll('[data-ad-accept]').forEach(b => b.addEventListener('click', () => { acceptAdOffer(b.getAttribute('data-ad-accept')); toast('Рекламное задание принято', 'fa-star'); render(); }));
     screen.querySelectorAll('[data-ad-decline]').forEach(b => b.addEventListener('click', () => { declineAdOffer(b.getAttribute('data-ad-decline')); render(); }));
     screen.querySelector('#gp-ad-generate')?.addEventListener('click', async () => {
@@ -689,11 +751,6 @@ function renderSocialHub(screen) {
             if (currentScreen === 'socialhub') render();
         }
     });
-    screen.querySelectorAll('[data-charm]').forEach(b => b.addEventListener('click', () => {
-        if (!equipCharm(b.getAttribute('data-charm'))) toast('На экран можно поставить не больше трёх подарков', 'fa-gift');
-        render();
-    }));
-    screen.querySelector('#gp-charm-off')?.addEventListener('click', () => { equipCharm(null); render(); });
 }
 
 function renderStoryEvent(screen) {
@@ -782,11 +839,10 @@ function renderHome(screen) {
     currentScreen = 'home';
     const unread = getTotalUnread();
     const activeStoryEvent = getSystemsView().storyEvents.active;
-    const equippedGifts = (getSystemsView().charms.equipped || []).slice(0, 3);
     const rpDt = getRpDateTime();
     const d = new Date();
-    const DAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
-    const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+    const DAYS = DAYS_I18N[lang()];
+    const MONTHS = MONTHS_I18N[lang()];
 
     // RP-дата/время если доступно, иначе реальные
     const clockH = rpDt?.hours ?? d.getHours();
@@ -802,7 +858,6 @@ function renderHome(screen) {
 
     screen.innerHTML = `
         <div class="gp-home">
-            ${equippedGifts.length ? `<div class="gp-home-gifts">${equippedGifts.map((id, i) => `<div class="gp-home-gift-slot gp-home-gift-${i + 1}" title="${esc(CHARM_CATALOG[id]?.name || '')}">${charmVisualHtml(id, 'gp-home-gift')}</div>`).join('')}</div>` : ''}
             <div class="gp-home-clock">${String(clockH).padStart(2, '0')}:${String(clockM).padStart(2, '0')}</div>
             <div class="gp-home-date">${dateStr}</div>
             <div class="gp-home-grid">
@@ -1081,9 +1136,10 @@ function renderThread(screen) {
         } else if (m.photoDesc) {
             media = `<div class="gp-bubble-img gp-bubble-img-gen" style="${avatarStyle((m.from || t.name) + m.photoDesc)}"><span>${ic('fa-image')}</span><i>${esc(m.photoDesc)}</i></div>`;
         }
-        // В группе подписываем отправителя входящих
+        // В группе подписываем отправителя входящих — КАЖДОМУ свой цвет
+        // (тот же хэш, что у аватара-градиента → цвет ника совпадает с аватаром)
         const senderLabel = t.isGroup && m.dir === 'in' && m.from
-            ? `<div class="gp-bubble-sender">${esc(m.from)}</div>` : '';
+            ? `<div class="gp-bubble-sender" style="color:${senderColor(m.from)}">${esc(m.from)}</div>` : '';
         bubbles += `
         <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}">
             <div class="gp-bubble">${senderLabel}${media}${esc(m.text)}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button></div>
@@ -2956,6 +3012,7 @@ export function setTyping(key) {
 // ═══ Тосты и детект новых входящих ═══
 
 export function toast(text, icon = 'fa-comment-dots', threadKey = null) {
+    text = tr(text); // перевод тостов (точный словарь + regex-правила)
     const el = document.createElement('div');
     el.className = 'gp-toast';
     // Бренд-иконки (twitter/instagram) — семейство fa-brands, остальные fa-solid

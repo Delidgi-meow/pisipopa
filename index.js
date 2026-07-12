@@ -8,9 +8,10 @@ import { eventSource, event_types, saveSettingsDebounced } from '../../../../scr
 import { saveBase64AsFile } from '../../../utils.js';
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper, notifyBankReminders } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper, notifyBankReminders, notifyAchievements } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
 import { harvestBankTags } from './bank.js';
+import { trDom } from './i18n.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -26,12 +27,19 @@ if (!document.getElementById(cssId)) {
 function setupSettingsPanel() {
     const s = getSettings();
     const html = `
-<div class="inline-drawer">
+<div class="inline-drawer" id="gp-settings-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
         <b>Телефон</b>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
+        <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Язык / Language:</span>
+            <select id="gp-set-lang" class="text_pole" style="flex:1">
+                <option value="ru" ${s.lang !== 'en' ? 'selected' : ''}>Русский</option>
+                <option value="en" ${s.lang === 'en' ? 'selected' : ''}>English</option>
+            </select>
+        </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
@@ -107,6 +115,15 @@ function setupSettingsPanel() {
     $('#gp-set-imgprompt-ig').val(s.imgPromptIg || '');
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
     $('#gp-set-css').val(s.customCss || '');
+    // Перевод панели (en) — оригиналы хранятся на нодах, переключение обратимо
+    const translatePanel = () => { try { trDom(document.getElementById('gp-settings-drawer')); } catch (e) { /* ignore */ } };
+    translatePanel();
+    $('#gp-set-lang').on('change', function () {
+        getSettings().lang = this.value === 'en' ? 'en' : 'ru';
+        saveSettingsDebounced();
+        translatePanel();
+        if (isPhoneOpen()) render();
+    });
     $('#gp-set-enabled').on('change', function () {
         getSettings().isEnabled = this.checked;
         saveSettingsDebounced();
@@ -334,6 +351,7 @@ jQuery(async () => {
                 if (n > 0) toast(`Банк: ${n} ${n === 1 ? 'операция' : 'операции'} из ролевой`, 'fa-building-columns');
             } catch (e) { /* ignore */ }
             notifyBankReminders();
+            notifyAchievements();
             updatePhoneInjection();
             applyChatHiding();
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST

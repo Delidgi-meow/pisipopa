@@ -1,4 +1,4 @@
-// Audience, posting tasks, story-event state and cosmetic charms.
+// Audience, posting tasks and story-event state (charms replaced by auto-achievements).
 // Numeric outcomes are deterministic and never delegated to the model.
 
 import { getMeta, saveMeta, extractTemporalContext } from './state.js';
@@ -7,15 +7,6 @@ import { addTransaction } from './bank.js';
 const PLATFORM = {
     twitter: { reach: 0.85, growth: 1.25, base: [60, 20, 20] },
     instagram: { reach: 0.62, growth: 1.0, base: [72, 18, 10] },
-};
-
-export const CHARM_CATALOG = {
-    'speech-cloud': { name: 'Облачко', icon: 'fa-comment', rarity: 'обычный' },
-    'film-roll': { name: 'Плёнка', icon: 'fa-film', rarity: 'обычный' },
-    lightning: { name: 'Молния', icon: 'fa-bolt', rarity: 'обычный' },
-    'neon-star': { name: 'Неоновая звезда', icon: 'fa-star', rarity: 'сюжетный' },
-    'broken-heart': { name: 'Разбитое сердце', icon: 'fa-heart-crack', rarity: 'сюжетный' },
-    key: { name: 'Ключ', icon: 'fa-key', rarity: 'сюжетный' },
 };
 
 const TASK_POOL = [
@@ -75,17 +66,8 @@ export function ensureSocialSystems(social = null) {
     if (!Array.isArray(root.advertising.offers)) root.advertising.offers = [];
     if (!Array.isArray(root.advertising.history)) root.advertising.history = [];
     if (!('active' in root.advertising)) root.advertising.active = null;
-    if (!root.charms || typeof root.charms !== 'object') root.charms = {};
-    if (!Array.isArray(root.charms.owned)) root.charms.owned = [];
-    if (!Array.isArray(root.charms.newlyUnlocked)) root.charms.newlyUnlocked = [];
-    // v2: украшения работают как коллекционные подарки — одновременно можно
-    // показать до трёх на домашнем экране. Мигрируем старое одиночное значение.
-    if (!Array.isArray(root.charms.equipped)) {
-        root.charms.equipped = typeof root.charms.equipped === 'string' ? [root.charms.equipped] : [];
-    }
-    root.charms.equipped = root.charms.equipped
-        .filter((x, i, arr) => CHARM_CATALOG[x] && root.charms.owned.includes(x) && arr.indexOf(x) === i)
-        .slice(0, 3);
+    // Шармы-подарки заменены авто-ачивками (achievements.js); старое поле
+    // charms в метаданных чатов просто игнорируется.
     ensureTasks(root);
     ensureAdOffers(root);
     return root;
@@ -284,41 +266,9 @@ function advanceTasks(root, platform, post, commentCount) {
         root.postingTasks.completed.push({ ...task, completedAt: Date.now() });
         root.postingTasks.active = root.postingTasks.active.filter(t => t.id !== task.id);
         root.postingTasks.setProgress[task.set] = (root.postingTasks.setProgress[task.set] || 0) + 1;
-        const reward = task.set === 'positive' ? 'speech-cloud' : task.set === 'photo' ? 'film-roll' : 'lightning';
-        if (root.postingTasks.setProgress[task.set] >= 4) unlockCharm(root, reward);
     }
     ensureTasks(root);
     return { completed };
-}
-
-export function unlockCharm(rootOrId, maybeId) {
-    const root = typeof rootOrId === 'string' ? ensureSocialSystems() : rootOrId;
-    const charmId = typeof rootOrId === 'string' ? rootOrId : maybeId;
-    if (!CHARM_CATALOG[charmId] || root.charms.owned.includes(charmId)) return false;
-    root.charms.owned.push(charmId);
-    root.charms.newlyUnlocked.push(charmId);
-    if (root.charms.equipped.length < 3) root.charms.equipped.push(charmId);
-    saveMeta();
-    return true;
-}
-
-export function equipCharm(charmId) {
-    const root = ensureSocialSystems();
-    if (charmId === null) {
-        root.charms.equipped = [];
-        saveMeta();
-        return true;
-    }
-    if (!root.charms.owned.includes(charmId)) return false;
-    const index = root.charms.equipped.indexOf(charmId);
-    if (index >= 0) root.charms.equipped.splice(index, 1);
-    else {
-        if (root.charms.equipped.length >= 3) return false;
-        root.charms.equipped.push(charmId);
-    }
-    root.charms.newlyUnlocked = root.charms.newlyUnlocked.filter(x => x !== charmId);
-    saveMeta();
-    return true;
 }
 
 export function eventChance(post) {
@@ -437,8 +387,6 @@ export function applyEventResolution(choice, classification, result) {
 function finishEvent(root, e) {
     root.storyEvents.recent.unshift(e); root.storyEvents.recent = root.storyEvents.recent.slice(0, 8);
     root.storyEvents.active = null; root.storyEvents.cooldownPosts = 3;
-    const category = String(e.stakes).toLowerCase();
-    unlockCharm(root, category.includes('mystery') ? 'key' : category.includes('relationship') ? 'broken-heart' : 'neon-star');
 }
 
 export function markConsequenceIntroduced(consequenceId) {

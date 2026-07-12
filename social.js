@@ -23,6 +23,15 @@ import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext } from './state.js';
+import { lang } from './i18n.js';
+
+// Язык генерируемого UI-контента (ачивки, статусы репутации): следует выбору
+// языка ИНТЕРФЕЙСА, а не языку ролевой (контент лент/смс остаётся на языке РП)
+function uiLangLine() {
+    return lang() === 'en'
+        ? 'LANGUAGE OVERRIDE: write ALL text values in ENGLISH (the user\'s interface language), regardless of the roleplay language.'
+        : 'LANGUAGE: пиши все текстовые значения ПО-РУССКИ.';
+}
 import { ensureSocialSystems, settlePost, validateAndOfferEvent, applyEventResolution, replaceAdOffers } from './social-events.js';
 
 const MAX_TWEETS = 50;
@@ -1134,6 +1143,31 @@ Output STRICT JSON array only:
 [{"brand":"...","title":"...","product":"...","brief":"...","platform":"twitter|instagram","risk":"safe|mixed|controversial","payment":500}]`;
     const parsed = parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"brand":"' }));
     return replaceAdOffers(parsed);
+}
+
+// ── Ачивки: модель придумывает 0-3 достижения за РЕАЛЬНУЮ активность ──
+export async function generateAchievementsLLM(statsBlock, existingNames) {
+    const prompt = `${await taskHeader(`invent playful game-style achievements for ${getUserName()}'s phone based on her REAL activity.`)}
+=== HER ACTUAL PHONE ACTIVITY (hard numbers — the ONLY source of truth) ===
+${statsBlock}
+${existingNames.length ? `\nAlready earned (do NOT repeat or rephrase these): ${existingNames.join('; ')}` : ''}
+
+Invent 0-3 NEW achievements she has just EARNED — each must be backed by the numbers/facts above (never for things that did not happen). Style: witty, personal, like game achievements; reference her roleplay life where fitting.
+Each: "name" 2-4 words (catchy, no emojis), "desc" one short line (what exactly she did), "icon" one FontAwesome solid class from: fa-trophy, fa-star, fa-heart, fa-fire, fa-bolt, fa-gem, fa-crown, fa-camera, fa-comments, fa-money-bill-trend-up, fa-bag-shopping, fa-plane, fa-masks-theater, fa-landmark, fa-user-plus, fa-champagne-glasses, fa-key, fa-ban, fa-image, fa-feather.
+If nothing new is noteworthy — return [].
+${JSON_RULES}
+${uiLangLine()}
+Format: [{"name":"...","desc":"...","icon":"fa-..."}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 700, prefill: '[{"name":"' }));
+}
+
+// ── Статус репутации: короткое живое описание вместо шаблонного тира ──
+export async function generateRepLabel(platform, reputation, followers, fallback) {
+    const prompt = `${await taskHeader(`invent a short vivid "audience status" label for ${getUserName()}'s ${platform} profile screen.`)}
+Her ${platform}: ${followers} followers, reputation score ${reputation}/100 (roughly: "${fallback}").
+Write ONE punchy status label, 2-5 words. Make it flavorful and specific to her vibe/roleplay (like «тихий омут ленты» / "menace of the comment section") and matching the score tone (${reputation}/100). ${uiLangLine()} NO quotes, NO emojis. Output ONLY the label.`;
+    const raw = await socialGen(prompt, { maxTokens: 60 });
+    return String(raw || '').replace(/<!--[\s\S]*?-->/g, '').replace(/["'«»]/g, '').trim().split('\n')[0].slice(0, 42);
 }
 
 export async function generateIgComments(post) {

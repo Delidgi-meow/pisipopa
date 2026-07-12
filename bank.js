@@ -1,12 +1,3 @@
-// ═══════════════════════════════════════════
-// ТЕЛЕФОН — БАНК: баланс, кредиты, обязательные платежи, напоминания, траты
-//
-// Данные per-chat в chat_metadata.glassphone.bank. Синхронизация с ролевой —
-// тег <!--tel:bank:{"amount":-500,"label":"кофе"}--> (плюс = доход, минус =
-// трата); харвест как у соцсетей (дедуп по хэшу). Напоминания об обязательных
-// платежах привязаны к RP-дате (getRpDateTime из Pregnancy-совместимых тегов).
-// ═══════════════════════════════════════════
-
 import { getMeta, saveMeta, getRpDateTime, stripThink } from './state.js';
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -38,7 +29,6 @@ export function getBank() {
     return b;
 }
 
-// «Активен» ли банк — используется, чтобы не инжектить его правила зря
 export function bankActive() {
     const b = getBank();
     return b.balance !== 0 || b.transactions.length > 0 || b.loans.length > 0 || b.recurring.length > 0;
@@ -50,7 +40,6 @@ export function setCurrency(sym) {
     saveMeta();
 }
 
-// ── Форматирование денег ──
 export function fmtMoney(n) {
     const b = getBank();
     const neg = n < 0;
@@ -60,7 +49,6 @@ export function fmtMoney(n) {
     return neg ? `−${body}` : body;
 }
 
-// ── Транзакции (amount: + доход / − трата) ──
 export function addTransaction({ amount, label, category = 'другое', silent = false }) {
     const b = getBank();
     const amt = Math.round(Number(amount) || 0);
@@ -81,12 +69,11 @@ export function deleteTransaction(id) {
     const b = getBank();
     const tx = b.transactions.find(t => t.id === id);
     if (!tx) return;
-    b.balance -= tx.amount; // откат баланса
+    b.balance -= tx.amount;
     b.transactions = b.transactions.filter(t => t.id !== id);
     saveMeta();
 }
 
-// ── Кредиты (аннуитет) ──
 export function takeLoan({ name, amount, months, rate = 0.18, day = 1 }) {
     const b = getBank();
     const principal = Math.round(Number(amount) || 0);
@@ -104,8 +91,7 @@ export function takeLoan({ name, amount, months, rate = 0.18, day = 1 }) {
         opened: Date.now(), paidOff: false, lastPaidMonth: null,
     };
     b.loans.unshift(loan);
-    // деньги приходят на баланс отдельной транзакцией
-    addTransaction({ amount: principal, label: `Кредит «${loan.name}»`, category: 'кредит', silent: true });
+    addTransaction({ amount: principal, label: `Кредит «${loan.name}»`, category: 'кредит', silent: true },);
     saveMeta();
     return loan;
 }
@@ -136,7 +122,6 @@ export function monthlyLoanPayment() {
     return getBank().loans.reduce((s, l) => s + (l.paidOff ? 0 : l.monthly), 0);
 }
 
-// ── Обязательные (регулярные) платежи ──
 export function addRecurring({ name, amount, day, category = 'подписка' }) {
     const b = getBank();
     const rec = {
@@ -180,9 +165,6 @@ export function monthlyObligations() {
     return getBank().recurring.reduce((s, r) => s + r.amount, 0);
 }
 
-// Напоминания: обязательные платежи И кредиты, срок которых в этом RP-месяце
-// наступил и ещё не оплачены. Нормализованный вид:
-// { kind:'bill'|'loan', id, name, amount, day, overdue }
 export function getBankReminders() {
     const b = getBank();
     const day = currentDay();
@@ -200,12 +182,11 @@ export function getBankReminders() {
     return due;
 }
 
-// ── Траты по категориям (для сводки) ──
 export function spendingByCategory(limit = 6) {
     const b = getBank();
     const map = new Map();
     for (const t of b.transactions) {
-        if (t.amount >= 0) continue; // только расходы
+        if (t.amount >= 0) continue;
         map.set(t.category, (map.get(t.category) || 0) + Math.abs(t.amount));
     }
     return [...map.entries()].sort((a, b2) => b2[1] - a[1]).slice(0, limit).map(([category, sum]) => ({ category, sum }));
@@ -220,7 +201,6 @@ export function incomeExpenseTotals() {
     return { income, expense };
 }
 
-// ── Сводка для инжекции в ролевую (короткая строка, только если банк активен) ──
 export function getBankSummaryLine() {
     if (!bankActive()) return '';
     const b = getBank();
@@ -233,19 +213,14 @@ export function getBankSummaryLine() {
     return `- Her bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether she can afford things.`;
 }
 
-// ── Одна компактная строка-правило для директивы (инжектится только если банк активен) ──
 export function bankInjectRule() {
     if (!bankActive()) return '';
     return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers her cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. This INCLUDES bank notification SMS: if you send {{user}} an SMS from a bank about money credited/debited, the tel:bank tag with the same amount is MANDATORY alongside it — the SMS alone does not move money in the app. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
 }
 
-// ── Харвест тегов tel:bank + банковских СМС из чата ──
 const BANK_TAG_RE = /<!--\s*tel:bank:(\{[\s\S]*?\})\s*-->/gi;
 const SMS_TAG_RE = /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/gi;
 
-// «Банковская» смс: отправитель похож на банк, текст содержит сумму и слово-направление.
-// Страховка на случай, когда модель написала смс от банка, но забыла tel:bank тег
-// («смс о списании пришла, а в банке пусто»).
 const BANK_SENDER_RE = /банк|bank|сбер|тинькофф|tinkoff|альфа|втб|райффайзен|газпром|озон|уралсиб|росбанк|совкомбанк|мтс[\s-]?банк|900/i;
 const SPEND_RE = /списан|списание|покупк|оплат|платил|платеж|платёж|перевод\s+(отправлен|выполнен)|снятие|снят[оы]|аренда|штраф|комисси/i;
 const INCOME_RE = /пополнен|пополнение|зачислен|поступлени|перевод\s+от|получен\s+перевод|возврат|зарплат|начислен|кэшбэк|cashback/i;
@@ -306,21 +281,17 @@ export function harvestBankTags() {
         userName = ctx?.name1 || '';
     } catch (e) { return 0; }
     let added = 0;
+    let balanceSynced = 0;
     const seen = new Set(b.seenTags);
     const seenRpBalances = new Set(b.seenRpBalances);
     let migratedLegacyKeys = false;
     for (let msgIndex = 0; msgIndex < chat.length; msgIndex++) {
         const msg = chat[msgIndex];
         if (!msg || !msg.mes) continue;
-        // is_system пропускаем, НО наши смс-призраки (is_system на 1.5с) содержат
-        // tel:sms банка — их тоже сканируем
         if (msg.is_system && !/tel:(bank|sms)/i.test(msg.mes)) continue;
         const text = stripThink(msg.mes);
         const containsBankTag = /<!--\s*tel:bank:/i.test(text);
 
-        // RP-инфоблок намеренно читаем из исходного сообщения: stripThink
-        // правильно скрывает reasoning от тегов телефона, но именно там sims-
-        // пресеты публикуют текущий баланс пользователя.
         if (!msg.is_user && !containsBankTag) {
             const rpBalance = parseRpBalance(msg.mes, userName);
             if (rpBalance) {
@@ -330,12 +301,11 @@ export function harvestBankTags() {
                     seenRpBalances.add(h);
                     b.seenRpBalances.push(h);
                     b.balance = rpBalance.value;
-                    added++;
+                    balanceSynced++;
                 }
             }
         }
 
-        // 1) Явные теги tel:bank (протокол)
         let hasBankTag = false;
         BANK_TAG_RE.lastIndex = 0;
         let m;
@@ -344,9 +314,6 @@ export function harvestBankTags() {
             const legacyH = 'bk' + hash32(m[1]);
             const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
             if (seen.has(h)) continue;
-            // v1.13 and older keyed only by JSON content. Convert those keys in
-            // place without replaying the current history; future identical
-            // transactions then remain valid independent events.
             if (seen.has(legacyH)) {
                 seen.add(h); b.seenTags.push(h); migratedLegacyKeys = true;
                 continue;
@@ -356,15 +323,13 @@ export function harvestBankTags() {
             if (!j || typeof j.amount === 'undefined' || !Number(j.amount)) continue;
             addTransaction({
                 amount: Number(j.amount) || 0,
-                label: j.label || j.text || 'Из ролевой',
-                category: j.category || 'ролевая',
+                label: j.label || j.text || 'Из игры',
+                category: j.category || 'траты из игры',
                 silent: true,
             });
             added++;
         }
 
-        // 2) Смс от банка без тега (страховка). Если в сообщении УЖЕ был tel:bank —
-        // не парсим смс того же сообщения (иначе одна операция задвоится).
         if (!hasBankTag) {
             SMS_TAG_RE.lastIndex = 0;
             while ((m = SMS_TAG_RE.exec(text)) !== null) {
@@ -390,11 +355,10 @@ export function harvestBankTags() {
     }
     if (b.seenTags.length > 400) b.seenTags = b.seenTags.slice(-400);
     if (b.seenRpBalances.length > 120) b.seenRpBalances = b.seenRpBalances.slice(-120);
-    if (added || migratedLegacyKeys) saveMeta();
+    if (added || balanceSynced || migratedLegacyKeys) saveMeta();
     return added;
 }
 
-// Кол-во напоминаний (для бейджа приложения)
 export function bankBadgeCount() {
     return getBankReminders().length;
 }

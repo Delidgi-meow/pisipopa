@@ -1,11 +1,3 @@
-// ═══════════════════════════════════════════
-// ТЕЛЕФОН — PROMPTS: инжекция правил для модели
-//
-// Та же техника, что отработана в Pregnancy v2.6.0:
-// IN_CHAT depth 0 с ролью USER (Клод надёжно выполняет инструкции из последнего
-// user-хода) + IN_PROMPT (system) как backup. Анти-парафраз правила обязательны —
-// модели любят превращать «output this tag» в видимый текст.
-// ═══════════════════════════════════════════
 
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 import { getSettings, getMeta, scanChat, getBlockedSmsKeys, EXT_NAME } from './state.js';
@@ -53,7 +45,7 @@ function buildPrompt() {
         c += `RULES (tags = HTML comments at the very END of the reply, copied VERBATIM, EN keys / RU values, invisible to reader):\n`;
         c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"+7 ..."}-->\n`;
         c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"). Only if they plausibly have her number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
-        c += `3. User message \`[СМС → X] text\` or \`[СМС в чат «X»] text\` = SMS from her phone (NOT spoken; scene paused). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
+        c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from her phone (NOT spoken; scene paused). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
         c += `NEVER write literal tag syntax inside <think>/reasoning — plan in plain words; each tag exactly once, in the final reply. Never paraphrase tags into visible text.\n`;
         let socialC = '';
@@ -85,7 +77,7 @@ function buildPrompt() {
     p += `MMS (character sends a photo): add a "photo" field with a short visual description: <!--tel:sms:{"from":"CharacterName","text":"optional message","photo":"what the photo shows"}-->\n`;
     p += `GROUP CHAT message: add a "chat" field with the group chat name: <!--tel:sms:{"from":"CharacterName","chat":"GroupChatName","text":"..."}-->. In group chats SEVERAL members may text in a row (one tag each) — make it feel like a real group chat.\n\n`;
 
-    p += `[RULE 3 — PHONE-ONLY MODE] A user message shaped like \`[СМС → Name] text\` means {{user}} sent that text FROM HER PHONE. A message shaped like \`[СМС в чат «Name»] text\` means she texted the GROUP CHAT with that name — reply as its members (each with the "chat" field, RULE 2). \`*фото*\` in her SMS means she attached a photo (it may be attached to the message — look at it if you can see images). It is NOT spoken aloud; the character may be anywhere, doing anything. The RP scene is PAUSED — this is a pure phone exchange.\n`;
+    p += `[RULE 3 — PHONE-ONLY MODE] A user message shaped like \`[СМС → Name] text\` or \`[SMS → Name] text\` means {{user}} sent that text FROM HER PHONE. A message shaped like \`[СМС в чат «Name»] text\` or \`[SMS to chat «Name»] text\` means she texted the GROUP CHAT with that name — reply as its members (each with the "chat" field, RULE 2). \`*фото*\` / \`*photo*\` in her SMS means she attached a photo (it may be attached to the message — look at it if you can see images). It is NOT spoken aloud; the character may be anywhere, doing anything. The RP scene is PAUSED — this is a pure phone exchange.\n`;
     p += `Your reply to such a message MUST consist ONLY of hidden tags — ZERO visible prose, no narration, no actions, no scene description, no dialogue outside the tags:\n`;
     p += `- Reply with 1-5 <!--tel:sms:...--> tags (RULE 2 format) in the character's own texting voice: short, informal, realistic pacing; style matches the character.\n`;
     p += `- If the character realistically would NOT reply right now (asleep, busy, offended, phone off, needs time), output exactly this single hidden line instead: <!--tel:silent-->\n`;

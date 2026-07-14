@@ -1,14 +1,8 @@
-// ═══════════════════════════════════════════
-// ТЕЛЕФОН — точка входа
-// Телефон для SillyTavern: смс-переписка с персонажами, контакты «подхватываются»
-// когда персонаж даёт номер. Чат = источник правды, синхронизация абсолютная.
-// ═══════════════════════════════════════════
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { saveBase64AsFile } from '../../../utils.js';
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, applySkin, applyWallpaper, notifyBankReminders, notifyAchievements } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyAchievements } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { trDom } from './i18n.js';
@@ -82,7 +76,6 @@ function setupSettingsPanel() {
         <label class="checkbox_label"><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
         <div class="gp-settings-actions">
             <div class="menu_button" id="gp-imgprompt-toggle">Промпты картинок ▼</div>
-            <div class="menu_button" id="gp-css-toggle">CSS телефона ▼</div>
             <div class="menu_button" id="gp-reset-fab">Сбросить кнопку</div>
         </div>
         <div id="gp-imgprompt-panel" style="display:none;flex-direction:column;gap:3px">
@@ -94,17 +87,7 @@ function setupSettingsPanel() {
         </div>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
         <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Обои:</span>
-            <div class="menu_button" id="gp-wall-pick" style="flex:1;padding:4px 8px">${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</div>
-            <div class="menu_button ${s.wallpaperBlur ? 'gp-btn-on' : ''}" id="gp-wall-blur" title="Размыть обои" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-droplet"></i></div>
-            <div class="menu_button" id="gp-wall-clear" title="Убрать обои" style="flex:0 0 auto;padding:4px 8px;${s.wallpaper ? '' : 'display:none'}"><i class="fa-solid fa-xmark"></i></div>
-            <input type="file" id="gp-wall-file" accept="image/*" style="display:none">
-        </div>
-        <div id="gp-css-panel" style="display:none;flex-direction:column;gap:4px">
-            <textarea id="gp-set-css" class="text_pole" rows="8" style="font-family:monospace;font-size:10px;resize:vertical" placeholder="/* Свой CSS: #gp-phone, .gp-bubble, .gp-tw-card, .gp-ig-card, ... */"></textarea>
-            <button id="gp-css-apply" class="menu_button">Применить</button>
-        </div>
+        <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Обои и свой CSS — в приложении «Оформление» внутри телефона.</small>
         <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:4px;font-weight:700"></small>
     </div>
 </div>`;
@@ -114,7 +97,6 @@ function setupSettingsPanel() {
     $('#gp-set-imgmodel').val(s.imageGenModel || '');
     $('#gp-set-imgprompt-ig').val(s.imgPromptIg || '');
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
-    $('#gp-set-css').val(s.customCss || '');
     // Перевод панели (en) — оригиналы хранятся на нодах, переключение обратимо
     const translatePanel = () => { try { trDom(document.getElementById('gp-settings-drawer')); } catch (e) { /* ignore */ } };
     translatePanel();
@@ -211,18 +193,6 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
         updatePhoneInjection();
     });
-    $('#gp-css-toggle').on('click', function () {
-        const panel = $('#gp-css-panel');
-        const visible = panel.is(':visible');
-        panel.css('display', visible ? 'none' : 'flex');
-        $(this).text(visible ? 'CSS телефона ▼' : 'CSS телефона ▲');
-    });
-    $('#gp-css-apply').on('click', function () {
-        getSettings().customCss = $('#gp-set-css').val() || '';
-        saveSettingsDebounced();
-        applySkin();
-        toast('CSS применён', 'fa-check');
-    });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;
         saveSettingsDebounced();
@@ -282,48 +252,8 @@ function setupSettingsPanel() {
         }
     });
 
-    // ── Обои телефона ──
-    $('#gp-wall-pick').on('click', () => $('#gp-wall-file').trigger('click'));
-    $('#gp-wall-file').on('change', async function () {
-        const f = this.files?.[0];
-        if (!f) return;
-        try {
-            const mod = await import('./social.js');
-            // Обои могут быть большими — сжимаем до 1080px (телефон вертикальный)
-            const dataUrl = await mod.compressImage(f, 1080, 0.85);
-            let src = dataUrl;
-            try {
-                const base64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
-                src = await saveBase64AsFile(base64, 'glassphone', `wallpaper_${Date.now()}`, 'jpeg');
-            } catch (e) { /* dataURL фолбэк */ }
-            getSettings().wallpaper = src;
-            saveSettingsDebounced();
-            applyWallpaper();
-            $('#gp-wall-pick').text('Сменить фото');
-            $('#gp-wall-clear').css('display', 'inline-flex');
-            toast('Обои установлены', 'fa-image');
-        } catch (e) {
-            console.warn('[GlassPhone] wallpaper failed:', e);
-            toast('Не удалось загрузить обои', 'fa-circle-exclamation');
-        } finally {
-            this.value = '';
-        }
-    });
-    $('#gp-wall-clear').on('click', function () {
-        getSettings().wallpaper = '';
-        saveSettingsDebounced();
-        applyWallpaper();
-        $('#gp-wall-pick').text('Загрузить фото');
-        $(this).css('display', 'none');
-        toast('Обои убраны', 'fa-check');
-    });
-    $('#gp-wall-blur').on('click', function () {
-        const on = !getSettings().wallpaperBlur;
-        getSettings().wallpaperBlur = on;
-        saveSettingsDebounced();
-        applyWallpaper();
-        $(this).toggleClass('gp-btn-on', on);
-    });
+    // Обои и свой CSS переехали в приложение «Оформление» внутри телефона
+    // (дублирование в панели расширения убрано по просьбе юзера)
 }
 
 jQuery(async () => {

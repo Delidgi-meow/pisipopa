@@ -1,12 +1,12 @@
 {
-    "display_name": "Phone",
+    "display_name": "Телефон",
     "loading_order": 12,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "MammyCat",
-    "version": "1.16.2",
+    "author": "Delidgi1",
+    "version": "1.19.3",
     "homePage": "",
     "source": "",
     "auto_update": false

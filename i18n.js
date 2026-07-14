@@ -1,12 +1,3 @@
-// ═══════════════════════════════════════════
-// ТЕЛЕФОН — i18n: русский (исходный) / английский
-//
-// Подход: исходные строки в коде остаются русскими (ключи словаря). Перевод
-// делается ПО DOM после рендера (trDom): текст-ноды и атрибуты переводятся по
-// точному совпадению + набору regex-правил для строк с числами. Оригинал
-// хранится на ноде — переключение языка обратимо без перерисовки.
-// Тосты/confirm/prompt переводятся через tr() на входе.
-// ═══════════════════════════════════════════
 
 import { getSettings } from './state.js';
 
@@ -187,6 +178,9 @@ const DICT = {
     'Обязательных платежей нет': 'No recurring bills', 'пора платить': 'due now',
     'Платёж добавлен': 'Bill added', 'Назови платёж': 'Name the bill', 'Оплачено': 'Paid',
     'Пора оплатить': 'Time to pay', 'Просрочен платёж': 'Payment overdue',
+    'Досрочно': 'Pay off early', 'Сумма досрочного платежа': 'Early payment amount',
+    'Кредит погашен полностью': 'Loan fully paid off', 'Досрочный платёж внесён': 'Early payment made',
+    'Курс неизвестен — суммы не тронуты, сменён только символ': 'Unknown rate — amounts untouched, only the symbol changed',
     'Символ валюты (₽ $ € £ ...):': 'Currency symbol (₽ $ € £ ...):',
     'Ручная правка баланса карты (потратила в РП — спиши)': 'Manually edit the card balance (spent in RP — subtract it)',
     // Категории банка/трат
@@ -236,6 +230,12 @@ const DICT = {
     'Текущий API (изолированно, без пресета)': 'Current API (isolated, no preset)',
     'Язык / Language:': 'Language:',
     // Оформление (темы)
+    'Цвет фона': 'Background color', 'Цвет текста': 'Text color', 'Шрифт': 'Font', 'Цвет иконок': 'Icon color', 'Вернуть иконки темы': 'Restore theme icons',
+    'Как в теме': 'Theme default', 'С засечками': 'Serif', 'Моноширинный': 'Monospace',
+    'Округлый': 'Rounded', 'Узкий': 'Condensed',
+    'Вернуть фон темы': 'Restore theme background', 'Вернуть цвет темы': 'Restore theme color',
+    'Свой CSS': 'Custom CSS', 'Применить CSS': 'Apply CSS', 'Полный контроль': 'Full control', 'под обоями': 'under wallpaper',
+    'Обои и свой CSS — в приложении «Оформление» внутри телефона.': 'Wallpaper and custom CSS live in the Appearance app inside the phone.',
     'Акцент': 'Accent', 'Скругление': 'Corner radius', 'Прозрачность': 'Transparency',
     'Размер иконок': 'Icon size', 'Мои пресеты': 'My presets', 'Мой пресет': 'My preset',
     'Название пресета': 'Preset name', 'Сохранить текущую': 'Save current',
@@ -296,6 +296,7 @@ const RULES = [
     [/^Профиль не отвечает: (.+)$/, 'Profile not responding: $1'],
     [/^Ачивка открыта: (.+)$/, 'Achievement unlocked: $1'],
     [/^Реклама\s+(.+)$/, 'Ad · $1'],
+    [/^Суммы конвертированы: (.+)$/, 'Amounts converted: $1'],
     [/^Платёж по кредиту «(.+)»$/, 'Loan payment "$1"'],
     [/^Кредит «(.+)»$/, 'Loan "$1"'],
     [/(\d+)-го числа/g, 'on day $1'],

@@ -1,23 +1,3 @@
-// ═══════════════════════════════════════════
-// SOCIAL — Twitter, Instagram, OnlyFans
-//
-// Ленты хранятся per-chat в chat_metadata.glassphone.social.
-//
-// Генерация изолирована от RP-пресета, три пути (socialGen):
-//  1) профиль подключения (socialProfileId) → ConnectionManagerRequestService,
-//     includePreset:false — сюда можно поставить дешёвую модель
-//  2) есть фото, профиля нет → currentApiVision: прямой мультимодальный запрос
-//     текущим подключением через ChatCompletionService (мимо пресета и инлайнинг-
-//     проверок ST)
-//  3) generateRaw — текущий API без пресета и истории (текст)
-// RP-контекст подмешивается вручную: taskHeader (карточка+персона+лорбук+срез чата).
-//
-// Синхронизация с РП:
-//  • из чата: теги tel:tweet / tel:insta — персонаж постит из ролевой
-//  • в чат: журнал (logSocialToChat) — посты и ветки юзера пишутся скрытыми
-//    строками в историю (с фото в extra.image), модель видит их по месту,
-//    саммарайзер забирает; инжект-сводка при включённом журнале — только кошелёк
-// ═══════════════════════════════════════════
 
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
@@ -82,8 +62,22 @@ export function getUserName() {
     try { return SillyTavern.getContext()?.name1 || 'Ты'; } catch (e) { return 'Ты'; }
 }
 
+// Транслитерация RU→EN: авто-ники всегда английские («Вадим» → @vadim),
+// как в настоящих соцсетях
+const TRANSLIT = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh',
+    'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+    'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'ts',
+    'ч': 'ch', 'ш': 'sh', 'щ': 'sch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+};
+
+export function translit(s) {
+    return String(s || '').toLowerCase().split('').map(ch => TRANSLIT[ch] ?? ch).join('');
+}
+
 export function makeHandle(name) {
-    return '@' + String(name || '').toLowerCase().replace(/\s+/g, '_').replace(/[^a-zа-яё0-9_]/gi, '').slice(0, 15) || '@user';
+    const h = translit(name).replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 15);
+    return '@' + (h || 'user');
 }
 
 // ── Ники (@handle) с per-chat оверрайдами: юзер задаёт свои, чтобы модель не путалась ──

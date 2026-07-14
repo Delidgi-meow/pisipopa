@@ -1,3 +1,4 @@
+
 import { getMeta, saveMeta, scanChat } from './state.js';
 import { generateAchievementsLLM } from './social.js';
 
@@ -16,6 +17,8 @@ export function achievementsCount() { return getAch().list.length; }
 const ICON_RE = /^fa-[a-z0-9-]+$/;
 const bucket = (n, size) => Math.floor((Number(n) || 0) / size);
 
+// Дайджест активности: sig — бакетированная сигнатура (LLM дёргается только
+// при заметном сдвиге), lines — человекочитаемая сводка для промпта.
 function activityDigest() {
     const m = getMeta();
     let threads = new Map();
@@ -70,6 +73,8 @@ Shop: orders ${stats.orders}${stats.orderCats ? ` (categories: ${stats.orderCats
     return { sig, lines };
 }
 
+// Автогенерация: только при заметном сдвиге активности + кулдаун 5 минут.
+// force=true (кнопка ↻) — пропускает обе проверки.
 let _inflight = false;
 export async function maybeGenerateAchievements({ force = false } = {}) {
     const a = getAch();
@@ -101,7 +106,7 @@ export async function maybeGenerateAchievements({ force = false } = {}) {
             added.push(def);
             if (added.length >= 3) break;
         }
-        saveMeta(); 
+        saveMeta(); // sig/lastGenAt персистятся даже без новых ачивок
         return added;
     } catch (e) {
         return [];

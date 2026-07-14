@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════
-// ТЕЛЕФОН — UI: кнопка, корпус, экраны (смс/твиттер/инста/OF), тосты
-// Стиль: liquid glass, иконки FontAwesome, без эмодзи.
-// ═══════════════════════════════════════════
 
 import { sendMessageAsUser, Generate, generateQuietPrompt, saveSettingsDebounced, saveChatConditional } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
@@ -15,7 +11,7 @@ import { updatePhoneInjection } from './prompts.js';
 import {
     getBank, fmtMoney, addTransaction, deleteTransaction, takeLoan, payLoanInstallment, deleteLoan,
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
-    getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency,
+    getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency, convertCurrency,
 } from './bank.js';
 import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat } from './shop.js';
 import {
@@ -345,15 +341,40 @@ function hexRgb(hex) {
     return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
 
+// Шрифты для кастомизации (только системные — без загрузок)
+const THEME_FONTS = {
+    '': '',
+    'serif': 'Georgia, "Times New Roman", serif',
+    'mono': '"Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace',
+    'rounded': '"Comic Sans MS", "Segoe UI", cursive',
+    'condensed': '"Arial Narrow", "Segoe UI", sans-serif',
+};
+
 function normalizedThemeCustom(value = getSettings().themeCustom) {
     const v = value && typeof value === 'object' ? value : {};
+    const hex = (x) => /^#[0-9a-f]{6}$/i.test(x || '') ? x : null;
     return {
-        accentA: /^#[0-9a-f]{6}$/i.test(v.accentA || '') ? v.accentA : null,
-        accentB: /^#[0-9a-f]{6}$/i.test(v.accentB || '') ? v.accentB : null,
+        accentA: hex(v.accentA),
+        accentB: hex(v.accentB),
+        bg: hex(v.bg),           // цвет фона телефона (null = фон темы)
+        text: hex(v.text),       // цвет текста (null = цвет темы)
+        iconA: hex(v.iconA),     // градиент иконок приложений (null = как в теме)
+        iconB: hex(v.iconB),
+        font: (v.font in THEME_FONTS) ? v.font : '',
         radius: Math.max(2, Math.min(30, Number(v.radius) || 18)),
         transparency: Math.max(3, Math.min(28, Number(v.transparency) || 10)),
         iconScale: Math.max(80, Math.min(115, Number(v.iconScale) || 100)),
     };
+}
+
+// Затемнить/осветлить hex на delta (-255..255) — для градиента из одного цвета фона
+function shadeHex(hex, delta) {
+    const m = String(hex || '').match(/^#([0-9a-f]{6})$/i);
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const cl = (x) => Math.max(0, Math.min(255, x + delta));
+    return '#' + [cl((n >> 16) & 255), cl((n >> 8) & 255), cl(n & 255)]
+        .map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
 export function applySkin() {
@@ -386,6 +407,41 @@ export function applySkin() {
         ph.style.setProperty('--gp-glass-strong', lcd
             ? `rgba(255,255,230,${Math.min(.55, alpha + .22)})`
             : light ? `rgba(255,255,255,${Math.min(.96, alpha + .68)})` : `rgba(255,255,255,${Math.min(.4, alpha + .06)})`);
+
+        // ── Глубокая кастомизация: фон / цвет текста / шрифт ──
+        // Фон: свой цвет ПЕРЕКРЫВАЕТ фон темы (мягкий градиент из одного цвета)
+        if (c.bg) {
+            ph.style.background = `linear-gradient(165deg, ${shadeHex(c.bg, 22)}, ${c.bg} 45%, ${shadeHex(c.bg, -26)})`;
+        } else {
+            ph.style.background = '';
+        }
+        // Цвет текста: основной + приглушённый (55% прозрачности того же цвета)
+        if (c.text) {
+            ph.style.setProperty('--gp-text', c.text);
+            ph.style.setProperty('--gp-text-dim', `rgba(${hexRgb(c.text)}, 0.55)`);
+            ph.style.color = c.text;
+        } else {
+            ph.style.removeProperty('--gp-text');
+            ph.style.removeProperty('--gp-text-dim');
+            ph.style.color = '';
+        }
+        // Шрифт всего телефона
+        ph.style.fontFamily = THEME_FONTS[c.font] || '';
+        // Маркер-классы кастомизации: темы хардкодят цвета пузырей/кнопок в своих
+        // классах — эти классы дают !important-оверрайды через переменные,
+        // чтобы выбранный акцент/цвет текста РЕАЛЬНО перекрашивал интерфейс
+        ph.classList.toggle('gp-custom-accent', !!(c.accentA || c.accentB));
+        ph.classList.toggle('gp-custom-text', !!c.text);
+        // Свои цвета иконок приложений (перекрывают тему)
+        if (c.iconA || c.iconB) {
+            ph.style.setProperty('--gp-icon-a', c.iconA || c.iconB);
+            ph.style.setProperty('--gp-icon-b', c.iconB || c.iconA);
+            ph.classList.add('gp-custom-icons');
+        } else {
+            ph.style.removeProperty('--gp-icon-a');
+            ph.style.removeProperty('--gp-icon-b');
+            ph.classList.remove('gp-custom-icons');
+        }
     }
     // Кастомный CSS юзера
     let styleEl = document.getElementById('gp-custom-css');
@@ -902,14 +958,19 @@ function renderHome(screen) {
 }
 
 // ── Экран «Оформление» ──
+// Режим «Свой CSS» — последний слайд карусели тем (редактор показывается
+// ТОЛЬКО когда выбран этот слайд, у обычных тем его нет)
+let _appearanceCssMode = false;
+
 function renderAppearance(screen) {
     currentScreen = 'appearance';
     const s = getSettings();
     const skin = LEGACY_SKINS[s.skin] || (SKINS.includes(s.skin) ? s.skin : 'indigo');
     const custom = normalizedThemeCustom();
     const presets = Array.isArray(s.themePresets) ? s.themePresets : [];
+    const cssMode = _appearanceCssMode;
     const cards = THEME_INFO.map(t => `
-        <button class="gp-theme-card${t.id === skin ? ' gp-active' : ''}" data-skin="${t.id}" type="button">
+        <button class="gp-theme-card${(!cssMode && t.id === skin) ? ' gp-active' : ''}" data-skin="${t.id}" type="button">
             <span class="gp-theme-preview gp-preview-${t.id}">
                 <span class="gp-preview-island"></span>
                 <span class="gp-preview-lines"><i></i><i></i><i></i></span>
@@ -917,13 +978,32 @@ function renderAppearance(screen) {
             </span>
             <strong>${esc(t.name)}</strong>
             <small>${esc(t.note)}</small>
-            <b>${t.id === skin ? 'АКТИВНА' : 'ВЫБРАТЬ'}</b>
-        </button>`).join('');
-    const dots = THEME_INFO.map(t => `<button class="gp-theme-dot${t.id === skin ? ' gp-active' : ''}" data-skin="${t.id}" aria-label="${esc(t.name)}"></button>`).join('');
+            <b>${(!cssMode && t.id === skin) ? 'АКТИВНА' : 'ВЫБРАТЬ'}</b>
+        </button>`).join('')
+        // Последний слайд — «Свой CSS»: полный контроль руками
+        + `
+        <button class="gp-theme-card gp-theme-card-css${cssMode ? ' gp-active' : ''}" id="gp-css-card" type="button">
+            <span class="gp-theme-preview gp-preview-csscard">
+                <span class="gp-preview-code">&lt;/&gt;</span>
+            </span>
+            <strong>Свой CSS</strong>
+            <small>Полный контроль</small>
+            <b>${cssMode ? 'АКТИВНА' : 'ВЫБРАТЬ'}</b>
+        </button>`;
+    const dots = THEME_INFO.map(t => `<button class="gp-theme-dot${(!cssMode && t.id === skin) ? ' gp-active' : ''}" data-skin="${t.id}" aria-label="${esc(t.name)}"></button>`).join('')
+        + `<button class="gp-theme-dot${cssMode ? ' gp-active' : ''}" id="gp-css-dot" aria-label="Свой CSS"></button>`;
     const chips = presets.length ? presets.map(p => `
         <button class="gp-preset-chip" data-preset="${esc(p.id)}" type="button">
             <span>${esc(p.name || 'Мой пресет')}</span><i class="fa-solid fa-xmark" data-delete-preset="${esc(p.id)}"></i>
         </button>`).join('') : '<div class="gp-presets-empty">Здесь появятся ваши варианты оформления</div>';
+
+    // CSS-режим: под каруселью ТОЛЬКО редактор своего CSS
+    const cssEditorHtml = `
+            <section class="gp-theme-section">
+                <h3>Свой CSS</h3>
+                <textarea id="gp-app-css" class="gp-theme-css" rows="10" spellcheck="false" placeholder="/* #gp-phone, .gp-bubble, .gp-tw-card, .gp-app-icon ... */"></textarea>
+                <button class="gp-save-preset" id="gp-app-css-apply" type="button">${ic('fa-check')} Применить CSS</button>
+            </section>`;
 
     screen.innerHTML = `
         <div class="gp-header gp-appearance-header">
@@ -934,7 +1014,7 @@ function renderAppearance(screen) {
         <div class="gp-appearance-scroll">
             <div class="gp-theme-carousel" id="gp-theme-carousel">${cards}</div>
             <div class="gp-theme-dots">${dots}</div>
-
+            ${cssMode ? cssEditorHtml : `
             <section class="gp-theme-section">
                 <h3>Мои пресеты</h3>
                 <div class="gp-presets">${chips}</div>
@@ -950,6 +1030,38 @@ function renderAppearance(screen) {
                         <input id="gp-accent-b" type="color" value="${custom.accentB || (THEME_INFO.find(x => x.id === skin)?.colors[1] || '#9a6aff')}">
                     </span>
                 </label>
+                <label class="gp-theme-control gp-color-control" ${s.wallpaper ? 'style="opacity:.45"' : ''}>
+                    <span>Цвет фона${s.wallpaper ? ' <output class="gp-ctl-note">под обоями</output>' : ''}</span>
+                    <span class="gp-color-pickers">
+                        <input id="gp-theme-bg" type="color" value="${custom.bg || '#1a2430'}">
+                        <button class="gp-color-clear" id="gp-theme-bg-clear" title="Вернуть фон темы" type="button">${ic('fa-xmark')}</button>
+                    </span>
+                </label>
+                <label class="gp-theme-control gp-color-control">
+                    <span>Цвет текста</span>
+                    <span class="gp-color-pickers">
+                        <input id="gp-theme-text" type="color" value="${custom.text || '#eef2f8'}">
+                        <button class="gp-color-clear" id="gp-theme-text-clear" title="Вернуть цвет темы" type="button">${ic('fa-xmark')}</button>
+                    </span>
+                </label>
+                <label class="gp-theme-control gp-color-control">
+                    <span>Цвет иконок</span>
+                    <span class="gp-color-pickers">
+                        <input id="gp-theme-icon-a" type="color" value="${custom.iconA || custom.accentA || (THEME_INFO.find(x => x.id === skin)?.colors[0] || '#6a8dff')}">
+                        <input id="gp-theme-icon-b" type="color" value="${custom.iconB || custom.accentB || (THEME_INFO.find(x => x.id === skin)?.colors[1] || '#9a6aff')}">
+                        <button class="gp-color-clear" id="gp-theme-icons-clear" title="Вернуть иконки темы" type="button">${ic('fa-xmark')}</button>
+                    </span>
+                </label>
+                <label class="gp-theme-control">
+                    <span>Шрифт</span>
+                    <select id="gp-theme-font" class="gp-theme-select">
+                        <option value="" ${!custom.font ? 'selected' : ''}>Как в теме</option>
+                        <option value="serif" ${custom.font === 'serif' ? 'selected' : ''}>С засечками</option>
+                        <option value="mono" ${custom.font === 'mono' ? 'selected' : ''}>Моноширинный</option>
+                        <option value="rounded" ${custom.font === 'rounded' ? 'selected' : ''}>Округлый</option>
+                        <option value="condensed" ${custom.font === 'condensed' ? 'selected' : ''}>Узкий</option>
+                    </select>
+                </label>
                 <label class="gp-theme-control">
                     <span>Скругление <output id="gp-radius-out">${custom.radius}px</output></span>
                     <input id="gp-theme-radius" type="range" min="2" max="30" value="${custom.radius}">
@@ -963,6 +1075,16 @@ function renderAppearance(screen) {
                     <input id="gp-theme-icons" type="range" min="80" max="115" value="${custom.iconScale}">
                 </label>
             </section>
+
+            <section class="gp-theme-section">
+                <h3>Обои</h3>
+                <div class="gp-theme-wall-row">
+                    <button class="gp-save-preset" id="gp-app-wall-pick" type="button">${ic('fa-image')} ${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</button>
+                    <button class="gp-iconbtn ${s.wallpaperBlur ? 'gp-btn-on' : ''}" id="gp-app-wall-blur" title="Размыть обои" type="button">${ic('fa-droplet')}</button>
+                    ${s.wallpaper ? `<button class="gp-iconbtn gp-danger" id="gp-app-wall-clear" title="Убрать обои" type="button">${ic('fa-xmark')}</button>` : ''}
+                    <input type="file" id="gp-app-wall-file" accept="image/*" style="display:none">
+                </div>
+            </section>`}
         </div>`;
 
     screen.querySelector('#gp-home-btn')?.addEventListener('click', () => goto('home'));
@@ -972,6 +1094,7 @@ function renderAppearance(screen) {
 
     const chooseSkin = (nextSkin) => {
         if (!SKINS.includes(nextSkin)) return;
+        _appearanceCssMode = false; // выбор обычной темы выходит из CSS-режима
         getSettings().skin = nextSkin;
         saveSettingsDebounced();
         applySkin();
@@ -980,6 +1103,10 @@ function renderAppearance(screen) {
         renderAppearance(screen);
     };
     screen.querySelectorAll('[data-skin]').forEach(el => el.addEventListener('click', () => chooseSkin(el.dataset.skin)));
+    // Последний слайд «Свой CSS»: тема не меняется, снизу открывается редактор
+    const enterCssMode = () => { _appearanceCssMode = true; renderAppearance(screen); };
+    screen.querySelector('#gp-css-card')?.addEventListener('click', enterCssMode);
+    screen.querySelector('#gp-css-dot')?.addEventListener('click', enterCssMode);
 
     const updateCustom = (patch, rerender = false) => {
         const st = getSettings();
@@ -1000,9 +1127,63 @@ function renderAppearance(screen) {
     bindRange('#gp-theme-icons', 'iconScale', '#gp-icons-out', '%');
     screen.querySelector('#gp-accent-a')?.addEventListener('input', e => updateCustom({ accentA: e.target.value }));
     screen.querySelector('#gp-accent-b')?.addEventListener('input', e => updateCustom({ accentB: e.target.value }));
+    screen.querySelector('#gp-theme-bg')?.addEventListener('input', e => updateCustom({ bg: e.target.value }));
+    screen.querySelector('#gp-theme-bg-clear')?.addEventListener('click', () => updateCustom({ bg: null }, true));
+    screen.querySelector('#gp-theme-text')?.addEventListener('input', e => updateCustom({ text: e.target.value }));
+    screen.querySelector('#gp-theme-text-clear')?.addEventListener('click', () => updateCustom({ text: null }, true));
+    screen.querySelector('#gp-theme-icon-a')?.addEventListener('input', e => updateCustom({ iconA: e.target.value }));
+    screen.querySelector('#gp-theme-icon-b')?.addEventListener('input', e => updateCustom({ iconB: e.target.value }));
+    screen.querySelector('#gp-theme-icons-clear')?.addEventListener('click', () => updateCustom({ iconA: null, iconB: null }, true));
+    screen.querySelector('#gp-theme-font')?.addEventListener('change', e => updateCustom({ font: e.target.value }));
+
+    // ── Обои (перенесены из панели расширения) ──
+    const wallFile = screen.querySelector('#gp-app-wall-file');
+    screen.querySelector('#gp-app-wall-pick')?.addEventListener('click', () => wallFile?.click());
+    wallFile?.addEventListener('change', async function () {
+        const f = this.files?.[0];
+        if (!f) return;
+        try {
+            const dataUrl = await compressImage(f, 1080, 0.85);
+            let src = dataUrl;
+            try {
+                const base64 = dataUrl.replace(/^data:image\/[a-z]+;base64,/i, '');
+                src = await saveBase64AsFile(base64, 'glassphone', `wallpaper_${Date.now()}`, 'jpeg');
+            } catch (e) { /* dataURL фолбэк */ }
+            getSettings().wallpaper = src;
+            saveSettingsDebounced();
+            applyWallpaper();
+            renderAppearance(screen);
+            toast('Обои установлены', 'fa-image');
+        } catch (e) {
+            toast('Не удалось загрузить обои', 'fa-circle-exclamation');
+        } finally { this.value = ''; }
+    });
+    screen.querySelector('#gp-app-wall-blur')?.addEventListener('click', () => {
+        getSettings().wallpaperBlur = !getSettings().wallpaperBlur;
+        saveSettingsDebounced();
+        applyWallpaper();
+        renderAppearance(screen);
+    });
+    screen.querySelector('#gp-app-wall-clear')?.addEventListener('click', () => {
+        getSettings().wallpaper = '';
+        saveSettingsDebounced();
+        applyWallpaper();
+        renderAppearance(screen);
+        toast('Обои убраны', 'fa-check');
+    });
+
+    // ── Свой CSS (перенесён из панели расширения) ──
+    const cssArea = screen.querySelector('#gp-app-css');
+    if (cssArea) cssArea.value = s.customCss || '';
+    screen.querySelector('#gp-app-css-apply')?.addEventListener('click', () => {
+        getSettings().customCss = cssArea?.value || '';
+        saveSettingsDebounced();
+        applySkin();
+        toast('CSS применён', 'fa-check');
+    });
 
     screen.querySelector('#gp-theme-reset')?.addEventListener('click', () => {
-        getSettings().themeCustom = { accentA: null, accentB: null, radius: 18, transparency: 10, iconScale: 100 };
+        getSettings().themeCustom = { accentA: null, accentB: null, bg: null, text: null, iconA: null, iconB: null, font: '', radius: 18, transparency: 10, iconScale: 100 };
         saveSettingsDebounced();
         applySkin();
         renderAppearance(screen);
@@ -1039,6 +1220,10 @@ function renderAppearance(screen) {
         saveSettingsDebounced();
         renderAppearance(screen);
     }));
+
+    // Экран перерисовывает СЕБЯ (мимо render()) — перевод надо накатить тут,
+    // иначе после клика/пролистывания текст возвращался к русскому
+    try { trDom(screen); } catch (e) { /* ignore */ }
 }
 
 // ── Экран «Сообщения» ──
@@ -1375,6 +1560,13 @@ function renderAdd(screen) {
     screen.querySelector('#gp-back')?.addEventListener('click', () => {
         currentScreen = 'list';
         render();
+    });
+    // Живой предпросмотр авто-ника: транслит из имени («Вадим» → @vadim)
+    const nameInp = screen.querySelector('#gp-add-name');
+    const handleInp = screen.querySelector('#gp-add-handle');
+    nameInp?.addEventListener('input', () => {
+        if (!handleInp) return;
+        handleInp.placeholder = nameInp.value.trim() ? makeHandle(nameInp.value) : tr('Пусто = авто из имени');
     });
     screen.querySelector('#gp-add-save')?.addEventListener('click', () => {
         const name = screen.querySelector('#gp-add-name')?.value.trim();
@@ -2381,10 +2573,6 @@ function renderOfNew(screen) {
     });
 }
 
-// ═══════════════════════════════════════════
-// БАНК
-// ═══════════════════════════════════════════
-
 let _bankTxSign = -1; // -1 трата, +1 доход (для формы)
 
 const BANK_CATS = ['еда', 'транспорт', 'жильё', 'подписка', 'одежда', 'развлечения', 'красота', 'здоровье', 'подарок', 'зарплата', 'перевод', 'другое'];
@@ -2417,7 +2605,7 @@ function renderBank(screen) {
     setHtmlKeepScroll(screen, '.gp-bank-scroll', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
-            <div class="gp-title gp-title-app gp-bank-title">${ic('fa-building-columns')} Банк</div>
+            <div class="gp-title gp-title-app gp-bank-title">Банк</div>
             <button class="gp-iconbtn" id="gp-bank-cur" title="Валюта">${esc(b.currency)}</button>
         </div>
         <div class="gp-bank-scroll">
@@ -2425,8 +2613,8 @@ function renderBank(screen) {
                 <div class="gp-bank-card-label">Баланс</div>
                 <div class="gp-bank-balance" id="gp-bank-balance">${esc(fmtMoney(b.balance))}</div>
                 <div class="gp-bank-io">
-                    <span class="gp-bank-in">${ic('fa-arrow-down')} ${esc(fmtMoney(income))}</span>
-                    <span class="gp-bank-out">${ic('fa-arrow-up')} ${esc(fmtMoney(expense))}</span>
+                    <span class="gp-bank-in">+${esc(fmtMoney(income))}</span>
+                    <span class="gp-bank-out">−${esc(fmtMoney(expense))}</span>
                 </div>
             </div>
             ${remBanner}
@@ -2471,7 +2659,12 @@ function renderBank(screen) {
     screen.querySelector('#gp-bank-recs')?.addEventListener('click', () => goto('bankrec'));
     screen.querySelector('#gp-bank-cur')?.addEventListener('click', () => {
         const cur = prompt('Символ валюты (₽ $ € £ ...):', b.currency);
-        if (cur && cur.trim()) { setCurrency(cur.trim()); render(); }
+        if (!cur || !cur.trim()) return;
+        // Смена валюты конвертирует ВСЕ суммы по примерному курсу
+        const res = convertCurrency(cur.trim());
+        render();
+        if (res.converted) toast(`Суммы конвертированы: ${res.from} → ${res.to}`, 'fa-arrow-right-arrow-left');
+        else if (res.from !== res.to) toast('Курс неизвестен — суммы не тронуты, сменён только символ', 'fa-circle-exclamation');
     });
     screen.querySelectorAll('[data-del-tx]').forEach(btn => btn.addEventListener('click', () => {
         deleteTransaction(btn.getAttribute('data-del-tx'));
@@ -2521,7 +2714,7 @@ function renderBankLoan(screen) {
     setHtmlKeepScroll(screen, '.gp-bank-scroll', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
-            <div class="gp-title gp-title-app gp-bank-title">${ic('fa-landmark')} Кредиты</div>
+            <div class="gp-title gp-title-app gp-bank-title">Кредиты</div>
         </div>
         <div class="gp-bank-scroll">
             <div class="gp-bank-section">
@@ -2535,7 +2728,7 @@ function renderBankLoan(screen) {
                         <label class="gp-field" style="flex:1"><span>Число платежа</span><input type="number" id="gp-loan-day" inputmode="numeric" min="1" max="31" value="10"></label>
                     </div>
                     <div class="gp-add-hint" id="gp-loan-preview"></div>
-                    <button class="gp-primary" id="gp-loan-take">${ic('fa-money-bill-wave')} Оформить</button>
+                    <button class="gp-primary" id="gp-loan-take">Оформить</button>
                 </div>
             </div>
             <div class="gp-bank-section">
@@ -2551,7 +2744,10 @@ function renderBankLoan(screen) {
                             <div class="gp-bank-loan-info">
                                 ${l.paidOff ? `<span class="gp-pos">Погашен</span>` : `Осталось <b>${esc(fmtMoney(l.remaining))}</b> · ${esc(fmtMoney(l.monthly))}/мес${l.day ? `, ${l.day}-го числа` : ''}`}
                             </div>
-                            ${l.paidOff ? '' : `<button class="gp-bank-pay" data-pay-loan="${esc(l.id)}">${ic('fa-check')} Внести ${esc(fmtMoney(Math.min(l.remaining, l.monthly)))}</button>`}
+                            ${l.paidOff ? '' : `<div class="gp-bank-loan-btns">
+                                <button class="gp-bank-pay" data-pay-loan="${esc(l.id)}">Внести ${esc(fmtMoney(Math.min(l.remaining, l.monthly)))}</button>
+                                <button class="gp-bank-pay gp-bank-early" data-early-loan="${esc(l.id)}" title="Досрочное погашение">Досрочно</button>
+                            </div>`}
                         </div>`).join('')}
             </div>
         </div>`);
@@ -2587,6 +2783,18 @@ function renderBankLoan(screen) {
         payLoanInstallment(btn.getAttribute('data-pay-loan'));
         updatePhoneInjection(); render();
     }));
+    // Досрочное погашение: любая сумма вплоть до полного остатка
+    screen.querySelectorAll('[data-early-loan]').forEach(btn => btn.addEventListener('click', () => {
+        const loan = getBank().loans.find(l => l.id === btn.getAttribute('data-early-loan'));
+        if (!loan || loan.paidOff) return;
+        const raw = window.prompt(`${tr('Сумма досрочного платежа')} (${tr('Осталось')} ${fmtMoney(loan.remaining)}):`, String(loan.remaining));
+        if (raw === null) return;
+        const amt = Math.abs(parseInt(String(raw).replace(/\s/g, '')) || 0);
+        if (!amt) { toast('Укажи сумму', 'fa-circle-exclamation'); return; }
+        payLoanInstallment(loan.id, amt);
+        updatePhoneInjection(); render();
+        toast(loan.paidOff ? 'Кредит погашен полностью' : 'Досрочный платёж внесён', loan.paidOff ? 'fa-handshake' : 'fa-bolt');
+    }));
     screen.querySelectorAll('[data-del-loan]').forEach(btn => btn.addEventListener('click', () => {
         if (confirm('Удалить кредит из списка? (баланс не изменится)')) { deleteLoan(btn.getAttribute('data-del-loan')); render(); }
     }));
@@ -2599,7 +2807,7 @@ function renderBankRec(screen) {
     setHtmlKeepScroll(screen, '.gp-bank-scroll', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
-            <div class="gp-title gp-title-app gp-bank-title">${ic('fa-file-invoice-dollar')} Обязательные платежи</div>
+            <div class="gp-title gp-title-app gp-bank-title">Обязательные платежи</div>
         </div>
         <div class="gp-bank-scroll">
             <div class="gp-bank-section">
@@ -2625,7 +2833,7 @@ function renderBankRec(screen) {
                                 <span class="gp-bank-tx-label">${esc(r.name)}</span>
                                 <span class="gp-bank-tx-cat">${esc(fmtMoney(r.amount))} · ${r.day}-го числа${rem.includes(r.id) ? ' · пора платить' : ''}</span>
                             </span>
-                            <button class="gp-bank-pay gp-bank-pay-sm" data-pay-rec="${esc(r.id)}" title="Оплатить">${ic('fa-check')}</button>
+                            <button class="gp-bank-pay gp-bank-pay-sm" data-pay-rec="${esc(r.id)}" title="Оплатить">Оплатить</button>
                             <button class="gp-bank-tx-del" data-del-rec="${esc(r.id)}" title="Удалить">${ic('fa-xmark')}</button>
                         </div>`).join('')}
             </div>
@@ -2655,10 +2863,6 @@ function renderBankRec(screen) {
     }));
     updateFabBadge();
 }
-
-// ═══════════════════════════════════════════
-// МАГАЗИН
-// ═══════════════════════════════════════════
 
 let currentShopCat = null;
 const _shopBusy = new Set(); // категории в процессе генерации
@@ -2911,8 +3115,13 @@ async function doSend(key) {
     const marker = isGroup
         ? `<!--tel:out:${JSON.stringify({ to: `группа:${name}` })}-->`
         : `<!--tel:out:${JSON.stringify({ to: name })}-->`;
-    const visible = isGroup ? `[СМС в чат «${name}»]` : `[СМС → ${name}]`;
-    const mes = `${marker}\n${visible} ${draftImg ? '*фото* ' : ''}${text}`;
+    // Видимый формат по языку интерфейса ([SMS → X] на англ); сканер понимает оба
+    const en = lang() === 'en';
+    const visible = isGroup
+        ? (en ? `[SMS to chat «${name}»]` : `[СМС в чат «${name}»]`)
+        : (en ? `[SMS → ${name}]` : `[СМС → ${name}]`);
+    const photoTok = en ? '*photo*' : '*фото*';
+    const mes = `${marker}\n${visible} ${draftImg ? photoTok + ' ' : ''}${text}`;
 
     try {
         await sendMessageAsUser(mes);
@@ -2955,7 +3164,7 @@ async function doSend(key) {
                     });
                     if (combo) {
                         if (combo.desc) {
-                            lastMsg.mes = lastMsg.mes.replace('*фото*', `*фото: ${combo.desc}*`);
+                            lastMsg.mes = lastMsg.mes.replace(photoTok, `${photoTok.slice(0, -1)}: ${combo.desc}*`);
                             await saveChatConditional();
                         }
                         const botMes = combo.replies.length

@@ -1,3 +1,4 @@
+
 import { getMeta, saveMeta, getRpDateTime, stripThink } from './state.js';
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -29,6 +30,7 @@ export function getBank() {
     return b;
 }
 
+// «Активен» ли банк — используется, чтобы не инжектить его правила зря
 export function bankActive() {
     const b = getBank();
     return b.balance !== 0 || b.transactions.length > 0 || b.loans.length > 0 || b.recurring.length > 0;
@@ -40,6 +42,58 @@ export function setCurrency(sym) {
     saveMeta();
 }
 
+// ── Смена валюты С КОНВЕРТАЦИЕЙ сумм ──
+// Примерные статичные курсы к рублю (для ролевой точность не критична)
+const CURRENCY_RATES = { '₽': 1, '$': 90, '€': 98, '£': 114, '¥': 0.6 };
+function normCurrency(sym) {
+    const s = String(sym || '').trim().toLowerCase();
+    if (/^(₽|р|руб|rub)/.test(s)) return '₽';
+    if (/^(\$|usd|дол)/.test(s)) return '$';
+    if (/^(€|eur|евро)/.test(s)) return '€';
+    if (/^(£|gbp|фунт)/.test(s)) return '£';
+    if (/^(¥|yen|jpy|иен)/.test(s)) return '¥';
+    return String(sym || '₽').trim().slice(0, 3) || '₽';
+}
+
+// Меняет валюту и АВТОМАТИЧЕСКИ конвертирует все суммы (баланс, операции,
+// кредиты, обязательные платежи, каталоги/заказы магазина). Возвращает
+// {converted, from, to}; converted=false — курс неизвестен, суммы не тронуты.
+export function convertCurrency(newSymRaw) {
+    const b = getBank();
+    const from = normCurrency(b.currency);
+    const to = normCurrency(newSymRaw);
+    if (from === to) { b.currency = to; saveMeta(); return { converted: false, from, to }; }
+    const rf = CURRENCY_RATES[from], rt = CURRENCY_RATES[to];
+    b.currency = to;
+    if (!rf || !rt) { saveMeta(); return { converted: false, from, to }; }
+    const factor = rf / rt;
+    const cv = (x) => Math.round((Number(x) || 0) * factor);
+    b.balance = cv(b.balance);
+    for (const t of b.transactions) t.amount = cv(t.amount) || (t.amount > 0 ? 1 : -1);
+    for (const l of b.loans) {
+        l.principal = Math.max(1, cv(l.principal));
+        l.remaining = l.paidOff ? 0 : Math.max(0, cv(l.remaining));
+        l.monthly = Math.max(1, cv(l.monthly));
+    }
+    for (const r of b.recurring) r.amount = Math.max(1, cv(r.amount));
+    // Магазин: кэшированные каталоги и история заказов — в новую валюту
+    try {
+        const m = getMeta();
+        const sh = m.shop;
+        if (sh) {
+            for (const cat of Object.values(sh.cats || {})) {
+                for (const st of (cat.stores || [])) {
+                    for (const it of (st.items || [])) it.price = Math.max(1, cv(it.price));
+                }
+            }
+            for (const o of (sh.orders || [])) o.price = Math.max(1, cv(o.price));
+        }
+    } catch (e) { /* ignore */ }
+    saveMeta();
+    return { converted: true, from, to };
+}
+
+// ── Форматирование денег ──
 export function fmtMoney(n) {
     const b = getBank();
     const neg = n < 0;
@@ -49,6 +103,7 @@ export function fmtMoney(n) {
     return neg ? `−${body}` : body;
 }
 
+// ── Транзакции (amount: + доход / − трата) ──
 export function addTransaction({ amount, label, category = 'другое', silent = false }) {
     const b = getBank();
     const amt = Math.round(Number(amount) || 0);
@@ -69,11 +124,12 @@ export function deleteTransaction(id) {
     const b = getBank();
     const tx = b.transactions.find(t => t.id === id);
     if (!tx) return;
-    b.balance -= tx.amount;
+    b.balance -= tx.amount; // откат баланса
     b.transactions = b.transactions.filter(t => t.id !== id);
     saveMeta();
 }
 
+// ── Кредиты (аннуитет) ──
 export function takeLoan({ name, amount, months, rate = 0.18, day = 1 }) {
     const b = getBank();
     const principal = Math.round(Number(amount) || 0);
@@ -91,7 +147,8 @@ export function takeLoan({ name, amount, months, rate = 0.18, day = 1 }) {
         opened: Date.now(), paidOff: false, lastPaidMonth: null,
     };
     b.loans.unshift(loan);
-    addTransaction({ amount: principal, label: `Кредит «${loan.name}»`, category: 'кредит', silent: true },);
+    // деньги приходят на баланс отдельной транзакцией
+    addTransaction({ amount: principal, label: `Кредит «${loan.name}»`, category: 'кредит', silent: true });
     saveMeta();
     return loan;
 }
@@ -122,6 +179,7 @@ export function monthlyLoanPayment() {
     return getBank().loans.reduce((s, l) => s + (l.paidOff ? 0 : l.monthly), 0);
 }
 
+// ── Обязательные (регулярные) платежи ──
 export function addRecurring({ name, amount, day, category = 'подписка' }) {
     const b = getBank();
     const rec = {
@@ -165,6 +223,9 @@ export function monthlyObligations() {
     return getBank().recurring.reduce((s, r) => s + r.amount, 0);
 }
 
+// Напоминания: обязательные платежи И кредиты, срок которых в этом RP-месяце
+// наступил и ещё не оплачены. Нормализованный вид:
+// { kind:'bill'|'loan', id, name, amount, day, overdue }
 export function getBankReminders() {
     const b = getBank();
     const day = currentDay();
@@ -182,11 +243,12 @@ export function getBankReminders() {
     return due;
 }
 
+// ── Траты по категориям (для сводки) ──
 export function spendingByCategory(limit = 6) {
     const b = getBank();
     const map = new Map();
     for (const t of b.transactions) {
-        if (t.amount >= 0) continue;
+        if (t.amount >= 0) continue; // только расходы
         map.set(t.category, (map.get(t.category) || 0) + Math.abs(t.amount));
     }
     return [...map.entries()].sort((a, b2) => b2[1] - a[1]).slice(0, limit).map(([category, sum]) => ({ category, sum }));
@@ -201,6 +263,7 @@ export function incomeExpenseTotals() {
     return { income, expense };
 }
 
+// ── Сводка для инжекции в ролевую (короткая строка, только если банк активен) ──
 export function getBankSummaryLine() {
     if (!bankActive()) return '';
     const b = getBank();
@@ -213,18 +276,25 @@ export function getBankSummaryLine() {
     return `- Her bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether she can afford things.`;
 }
 
+// ── Одна компактная строка-правило для директивы (инжектится только если банк активен) ──
 export function bankInjectRule() {
     if (!bankActive()) return '';
     return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers her cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. This INCLUDES bank notification SMS: if you send {{user}} an SMS from a bank about money credited/debited, the tel:bank tag with the same amount is MANDATORY alongside it — the SMS alone does not move money in the app. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
 }
 
+// ── Харвест тегов tel:bank + банковских СМС из чата ──
 const BANK_TAG_RE = /<!--\s*tel:bank:(\{[\s\S]*?\})\s*-->/gi;
 const SMS_TAG_RE = /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/gi;
 
-const BANK_SENDER_RE = /банк|bank|сбер|тинькофф|tinkoff|альфа|втб|райффайзен|газпром|озон|уралсиб|росбанк|совкомбанк|мтс[\s-]?банк|900/i;
-const SPEND_RE = /списан|списание|покупк|оплат|платил|платеж|платёж|перевод\s+(отправлен|выполнен)|снятие|снят[оы]|аренда|штраф|комисси/i;
-const INCOME_RE = /пополнен|пополнение|зачислен|поступлени|перевод\s+от|получен\s+перевод|возврат|зарплат|начислен|кэшбэк|cashback/i;
-const AMOUNT_RE = /(\d[\d\s]{0,12}(?:[.,]\d{1,2})?)\s*(?:₽|руб|р\.|р\b|\$|€|£|usd|eur)/i;
+// «Банковская» смс: отправитель похож на банк, текст содержит сумму и слово-направление.
+// Страховка на случай, когда модель написала смс от банка, но забыла tel:bank тег
+// («смс о списании пришла, а в банке пусто»).
+// ДВУЯЗЫЧНЫЕ (RU/EN): банковские смс в английских ролевых тоже двигают баланс
+const BANK_SENDER_RE = /банк|bank|сбер|тинькофф|tinkoff|альфа|втб|райффайзен|газпром|озон|уралсиб|росбанк|совкомбанк|мтс[\s-]?банк|900|chase|wells\s?fargo|citibank|barclays|hsbc|revolut|monzo|n26|paypal/i;
+const SPEND_RE = /списан|списание|покупк|оплат|платил|платеж|платёж|перевод\s+(отправлен|выполнен)|снятие|снят[оы]|аренда|штраф|комисси|debit(?:ed)?|charged|purchase|payment\s+(?:of|to|sent)|withdraw(?:al|n)?|spent|sent\s+to|\bfee\b/i;
+const INCOME_RE = /пополнен|пополнение|зачислен|поступлени|перевод\s+от(?![а-яё])|получен\s+перевод|возврат|зарплат|начислен|кэшбэк|cashback|credit(?:ed)?|deposit(?:ed)?|received|refund(?:ed)?|salary|payout|incoming\s+transfer|transfer\s+from|paid\s+(?:to\s+you|in)\b/i;
+// Сумма: «1 500 ₽ / 500 руб / 12.50$» ИЛИ валюта-префикс «$500 / €1,200.50»
+const AMOUNT_RE = /(\d[\d\s]{0,12}(?:[.,]\d{1,2})?)\s*(?:₽|руб|р\.|р\b|\$|€|£|usd|eur|dollars?|euros?|pounds?|rubles?)|(?:[$€£])\s?(\d[\d\s,]{0,12}(?:\.\d{1,2})?)/i;
 
 function reEscape(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -239,11 +309,14 @@ function parseRpBalance(raw, userName) {
     if (!name || !raw) return null;
     const text = String(raw).replace(/&nbsp;/gi, ' ').replace(/[\u00a0\u202f]/g, ' ');
     const n = reEscape(name);
-    const amount = '([+-]?\\d(?:[\\d ]{0,18}\\d)?)\\s*(?:₽|руб(?:лей|ля)?|р\\b)?';
+    const amount = '([+-]?\\d(?:[\\d ]{0,18}\\d)?)\\s*(?:₽|руб(?:лей|ля)?|р\\b|\\$|€|£)?';
+    // Слово-маркер денег двуязычное: деньги / money / balance / cash
+    const moneyWord = '(?:деньги|money|balance|cash)';
     const patterns = [
-        new RegExp(`(?:💰|💵|деньги\\s*[:—-]?)\\s*${n}\\s*:\\s*${amount}`, 'i'),
-        new RegExp(`${n}\\s*:\\s*(?:💰|💵|деньги\\s*[:—-]?)\\s*${amount}`, 'i'),
-        new RegExp(`${n}[\\s\\S]{0,320}?\\bденьги\\s*[:—-]?\\s*${amount}`, 'i'),
+        new RegExp(`(?:💰|💵|${moneyWord}\\s*[:—-]?)\\s*${n}\\s*:\\s*${amount}`, 'i'),
+        new RegExp(`${n}\\s*:\\s*(?:💰|💵|${moneyWord}\\s*[:—-]?)\\s*${amount}`, 'i'),
+        // (?:^|не-буква) вместо lookbehind — старые Safari кидают SyntaxError на (?<!)
+        new RegExp(`${n}[\\s\\S]{0,320}?(?:^|[^а-яёa-z])${moneyWord}\\s*[:—-]?\\s*${amount}`, 'i'),
     ];
     for (const pattern of patterns) {
         const match = text.match(pattern);
@@ -260,11 +333,16 @@ function parseBankSms(smsJson) {
     if (!BANK_SENDER_RE.test(from) && !BANK_SENDER_RE.test(text.slice(0, 40))) return null;
     const am = text.match(AMOUNT_RE);
     if (!am) return null;
-    const amount = Math.round(parseFloat(am[1].replace(/\s/g, '').replace(',', '.')) || 0);
+    // am[1] — суффиксная валюта (1 500 ₽), am[2] — префиксная ($500);
+    // запятая-разделитель тысяч ($1,200.50) убирается, десятичная , → .
+    const rawNum = (am[1] || am[2] || '').replace(/\s/g, '');
+    const amount = Math.round(parseFloat(rawNum.replace(/,(?=\d{3}(\D|$))/g, '').replace(',', '.')) || 0);
     if (!amount) return null;
+    // Сначала ДОХОД: «Salary paid» / «Payment received» — это приход,
+    // хотя слова paid/payment есть и в расходном списке
     let sign = 0;
-    if (SPEND_RE.test(text)) sign = -1;
-    else if (INCOME_RE.test(text)) sign = 1;
+    if (INCOME_RE.test(text)) sign = 1;
+    else if (SPEND_RE.test(text)) sign = -1;
     if (!sign) return null;
     // Метка: кусок текста без суммы, коротко
     const label = text.replace(AMOUNT_RE, '').replace(/\s+/g, ' ').trim().slice(0, 50) || (sign < 0 ? 'Списание (смс банка)' : 'Пополнение (смс банка)');
@@ -285,13 +363,38 @@ export function harvestBankTags() {
     const seen = new Set(b.seenTags);
     const seenRpBalances = new Set(b.seenRpBalances);
     let migratedLegacyKeys = false;
+
+    // Пре-скан: суммы всех tel:bank тегов по индексам сообщений. Модель часто
+    // оформляет ОДИН перевод дважды — тегом в RP-сообщении и банковской смс в
+    // соседнем (призрак-ответ). Смс-эвристика пропускает сумму, если рядом
+    // (±8 сообщений) уже есть tel:bank с той же суммой — иначе дубль операции.
+    const bankAmts = [];
+    for (let i = 0; i < chat.length; i++) {
+        const mm = chat[i];
+        if (!mm || !mm.mes || !/tel:bank/i.test(mm.mes)) continue;
+        const tt = stripThink(mm.mes);
+        BANK_TAG_RE.lastIndex = 0;
+        let bm;
+        while ((bm = BANK_TAG_RE.exec(tt)) !== null) {
+            const j = safeJson(bm[1]);
+            const a = Math.abs(Math.round(Number(j?.amount) || 0));
+            if (a) bankAmts.push({ i, a });
+        }
+    }
+    const nearBankAmt = (i, a) => bankAmts.some(x => x.a === a && Math.abs(x.i - i) <= 8);
+
     for (let msgIndex = 0; msgIndex < chat.length; msgIndex++) {
         const msg = chat[msgIndex];
         if (!msg || !msg.mes) continue;
+        // is_system пропускаем, НО наши смс-призраки (is_system на 1.5с) содержат
+        // tel:sms банка — их тоже сканируем
         if (msg.is_system && !/tel:(bank|sms)/i.test(msg.mes)) continue;
         const text = stripThink(msg.mes);
         const containsBankTag = /<!--\s*tel:bank:/i.test(text);
 
+        // RP-инфоблок намеренно читаем из исходного сообщения: stripThink
+        // правильно скрывает reasoning от тегов телефона, но именно там sims-
+        // пресеты публикуют текущий баланс пользователя.
         if (!msg.is_user && !containsBankTag) {
             const rpBalance = parseRpBalance(msg.mes, userName);
             if (rpBalance) {
@@ -301,11 +404,15 @@ export function harvestBankTags() {
                     seenRpBalances.add(h);
                     b.seenRpBalances.push(h);
                     b.balance = rpBalance.value;
+                    // ТИХАЯ синхронизация: это не операция, а сверка абсолютного
+                    // баланса из инфоблока — тост не нужен (задалбливал). В added
+                    // не считаем; отдельный счётчик только для saveMeta.
                     balanceSynced++;
                 }
             }
         }
 
+        // 1) Явные теги tel:bank (протокол)
         let hasBankTag = false;
         BANK_TAG_RE.lastIndex = 0;
         let m;
@@ -314,6 +421,9 @@ export function harvestBankTags() {
             const legacyH = 'bk' + hash32(m[1]);
             const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
             if (seen.has(h)) continue;
+            // v1.13 and older keyed only by JSON content. Convert those keys in
+            // place without replaying the current history; future identical
+            // transactions then remain valid independent events.
             if (seen.has(legacyH)) {
                 seen.add(h); b.seenTags.push(h); migratedLegacyKeys = true;
                 continue;
@@ -323,13 +433,15 @@ export function harvestBankTags() {
             if (!j || typeof j.amount === 'undefined' || !Number(j.amount)) continue;
             addTransaction({
                 amount: Number(j.amount) || 0,
-                label: j.label || j.text || 'Из игры',
-                category: j.category || 'траты из игры',
+                label: j.label || j.text || 'Из ролевой',
+                category: j.category || 'ролевая',
                 silent: true,
             });
             added++;
         }
 
+        // 2) Смс от банка без тега (страховка). Если в сообщении УЖЕ был tel:bank —
+        // не парсим смс того же сообщения (иначе одна операция задвоится).
         if (!hasBankTag) {
             SMS_TAG_RE.lastIndex = 0;
             while ((m = SMS_TAG_RE.exec(text)) !== null) {
@@ -344,6 +456,13 @@ export function harvestBankTags() {
                 if (!j) continue;
                 const tx = parseBankSms(j);
                 if (!tx) continue;
+                // Кросс-сообщенческий анти-дубль: та же сумма уже оформлена
+                // тегом tel:bank поблизости → смс лишь уведомление, помечаем
+                // обработанной и НЕ добавляем операцию
+                if (nearBankAmt(msgIndex, Math.abs(tx.amount))) {
+                    seen.add(h); b.seenTags.push(h);
+                    continue;
+                }
                 seen.add(h); b.seenTags.push(h);
                 addTransaction({ ...tx, silent: true });
                 added++;
@@ -356,9 +475,12 @@ export function harvestBankTags() {
     if (b.seenTags.length > 400) b.seenTags = b.seenTags.slice(-400);
     if (b.seenRpBalances.length > 120) b.seenRpBalances = b.seenRpBalances.slice(-120);
     if (added || balanceSynced || migratedLegacyKeys) saveMeta();
+    // Наружу — только НАСТОЯЩИЕ операции (тост «N операций из ролевой»);
+    // тихая сверка баланса из инфоблока уведомление не дёргает.
     return added;
 }
 
+// Кол-во напоминаний (для бейджа приложения)
 export function bankBadgeCount() {
     return getBankReminders().length;
 }

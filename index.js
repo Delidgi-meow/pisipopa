@@ -21,74 +21,66 @@ if (!document.getElementById(cssId)) {
 function setupSettingsPanel() {
     const s = getSettings();
     const html = `
-<div class="inline-drawer" id="gp-settings-drawer">
-    <div class="inline-drawer-toggle inline-drawer-header">
-        <b>Телефон</b>
+<div class="inline-drawer gp-settings-panel" id="gp-settings-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header gp-settings-header">
+        <div class="gp-settings-title">
+            <span class="gp-settings-status-dot" aria-hidden="true"></span>
+            <span><b>Телефон</b><small id="gp-settings-status"></small></span>
+        </div>
+        <select id="gp-set-lang" class="text_pole gp-settings-language" aria-label="Язык / Language">
+            <option value="ru" ${s.lang !== 'en' ? 'selected' : ''}>Русский</option>
+            <option value="en" ${s.lang === 'en' ? 'selected' : ''}>English</option>
+        </select>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
-    <div class="inline-drawer-content">
-        <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Язык / Language:</span>
-            <select id="gp-set-lang" class="text_pole" style="flex:1">
-                <option value="ru" ${s.lang !== 'en' ? 'selected' : ''}>Русский</option>
-                <option value="en" ${s.lang === 'en' ? 'selected' : ''}>English</option>
-            </select>
+    <div class="inline-drawer-content gp-settings-body">
+        <div class="gp-settings-quick">
+            <label><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
+            <label><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
+            <label><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
         </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
-        <div class="gp-inject-depth-setting" style="display:flex;gap:6px;align-items:center;margin:5px 0 7px;padding:7px 8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.04)">
-            <i class="fa-solid fa-layer-group" style="opacity:.7"></i>
-            <label for="gp-set-depth" style="font-size:10px;font-weight:700;white-space:nowrap">Глубина инжекта</label>
-            <input type="number" id="gp-set-depth" class="text_pole" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}" style="width:62px;flex:0 0 auto">
-            <span style="font-size:8px;opacity:.6;line-height:1.2">0 — перед последним ходом</span>
-        </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Профиль для соцсетей:</span>
-            <select id="gp-set-profile" class="text_pole" style="flex:1"></select>
-            <div class="menu_button" id="gp-profile-test" title="Проверить профиль (маленький запрос)" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-plug-circle-check"></i></div>
-        </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Контекст соцсетей:</span>
-            <select id="gp-set-ctxmode" class="text_pole" style="flex:1">
-                <option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option>
-                <option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option>
-            </select>
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Макс. длина ответа:</span>
-            <input type="number" id="gp-set-maxtokens" class="text_pole" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}" style="width:70px;flex:0 0 auto">
-            <span style="font-size:8px;opacity:0.4">0 = авто</span>
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Твой ник (@):</span>
-            <input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени" style="flex:1">
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
-            <span style="font-size:9px;opacity:0.5;white-space:nowrap">Модель картинок:</span>
-            <input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" placeholder="авто" style="flex:1">
-            <datalist id="gp-imgmodels"></datalist>
-            <div class="menu_button" id="gp-imgmodel-refresh" title="Загрузить список моделей" style="flex:0 0 auto;padding:4px 8px"><i class="fa-solid fa-rotate"></i></div>
-        </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
-        <div class="gp-settings-actions">
-            <div class="menu_button" id="gp-imgprompt-toggle">Промпты картинок ▼</div>
-            <div class="menu_button" id="gp-reset-fab">Сбросить кнопку</div>
-        </div>
-        <div id="gp-imgprompt-panel" style="display:none;flex-direction:column;gap:3px">
-            <span style="font-size:9px;opacity:0.5">Instagram (стиль/кадр — описание поста и запрет на главперсонажей дописываются сами):</span>
-            <textarea id="gp-set-imgprompt-ig" class="text_pole" rows="2" style="font-size:11px;resize:vertical"></textarea>
-            <span style="font-size:9px;opacity:0.5">OnlyFans:</span>
-            <textarea id="gp-set-imgprompt-of" class="text_pole" rows="2" style="font-size:11px;resize:vertical"></textarea>
-            <button id="gp-imgprompt-apply" class="menu_button">Применить</button>
-        </div>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
-        <label class="checkbox_label"><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
-        <small style="opacity:0.4;font-size:9px;display:block;margin-top:4px">Обои и свой CSS — в приложении «Оформление» внутри телефона.</small>
-        <small id="gp-version-label" style="opacity:0.55;font-size:10px;display:block;margin-top:4px;font-weight:700"></small>
+
+        <details class="gp-settings-group" open>
+            <summary><i class="fa-solid fa-layer-group"></i><span><b>Модель и контекст</b><small>Профиль, история и параметры ответа</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
+            <div class="gp-settings-group-body gp-settings-grid">
+                <label class="gp-settings-field"><span>Глубина инжекта</span><input type="number" id="gp-set-depth" class="text_pole gp-settings-number" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}"><small>0 — перед последним ходом</small></label>
+                <label class="gp-settings-field"><span>Макс. длина ответа</span><input type="number" id="gp-set-maxtokens" class="text_pole gp-settings-number" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}"><small>0 = авто</small></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Профиль для соцсетей</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span></label>
+                <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option></select></label>
+                <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
+                <div class="gp-settings-checks gp-settings-wide">
+                    <label><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
+                    <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
+                </div>
+            </div>
+        </details>
+
+        <details class="gp-settings-group">
+            <summary><i class="fa-solid fa-image"></i><span><b>Изображения</b><small>Модель, формат и промпты</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
+            <div class="gp-settings-group-body gp-settings-grid">
+                <label class="gp-settings-field gp-settings-wide"><span>Модель картинок</span><span class="gp-settings-control-row"><input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" placeholder="авто"><datalist id="gp-imgmodels"></datalist><button class="menu_button gp-settings-icon-button" id="gp-imgmodel-refresh" type="button" title="Загрузить список моделей" aria-label="Загрузить список моделей"><i class="fa-solid fa-rotate"></i></button></span></label>
+                <div class="gp-settings-checks gp-settings-wide">
+                    <label><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
+                    <label><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
+                </div>
+                <label class="gp-settings-field"><span>Публичные посты</span><textarea id="gp-set-imgprompt-ig" class="text_pole" rows="3"></textarea></label>
+                <label class="gp-settings-field"><span>Закрытые посты</span><textarea id="gp-set-imgprompt-of" class="text_pole" rows="3"></textarea></label>
+                <div class="gp-settings-wide gp-settings-align-end"><button id="gp-imgprompt-apply" type="button" class="menu_button">Применить</button></div>
+            </div>
+        </details>
+
+        <details class="gp-settings-group">
+            <summary><i class="fa-solid fa-sliders"></i><span><b>Поведение</b><small>Журнал, инжект и плавающая кнопка</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
+            <div class="gp-settings-group-body">
+                <div class="gp-settings-checks">
+                    <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
+                    <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
+                </div>
+                <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
+            </div>
+        </details>
+
+        <div class="gp-settings-footer"><small>Обои и свой CSS — в приложении «Оформление» внутри телефона.</small><small id="gp-version-label"></small></div>
     </div>
 </div>`;
     $('#extensions_settings2').append(html);
@@ -99,11 +91,22 @@ function setupSettingsPanel() {
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
     // Перевод панели (en) — оригиналы хранятся на нодах, переключение обратимо
     const translatePanel = () => { try { trDom(document.getElementById('gp-settings-drawer')); } catch (e) { /* ignore */ } };
+    const updatePanelStatus = () => {
+        const enabled = getSettings().isEnabled;
+        const status = document.getElementById('gp-settings-status');
+        document.getElementById('gp-settings-drawer')?.classList.toggle('gp-settings-disabled', !enabled);
+        if (status) status.textContent = getSettings().lang === 'en'
+            ? (enabled ? 'Enabled' : 'Disabled')
+            : (enabled ? 'Включён' : 'Выключен');
+    };
+    $('#gp-set-lang').on('click mousedown', event => event.stopPropagation());
     translatePanel();
+    updatePanelStatus();
     $('#gp-set-lang').on('change', function () {
         getSettings().lang = this.value === 'en' ? 'en' : 'ru';
         saveSettingsDebounced();
         translatePanel();
+        updatePanelStatus();
         if (isPhoneOpen()) render();
     });
     $('#gp-set-enabled').on('change', function () {
@@ -111,6 +114,7 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
         updatePhoneInjection();
         updateFabBadge();
+        updatePanelStatus();
     });
     $('#gp-set-fab').on('change', function () {
         getSettings().showFab = this.checked;
@@ -171,12 +175,6 @@ function setupSettingsPanel() {
     $('#gp-set-tagmode').on('change', function () {
         getSettings().imgTagMode = this.checked;
         saveSettingsDebounced();
-    });
-    $('#gp-imgprompt-toggle').on('click', function () {
-        const panel = $('#gp-imgprompt-panel');
-        const visible = panel.is(':visible');
-        panel.css('display', visible ? 'none' : 'flex');
-        $(this).text(visible ? 'Промпты картинок ▼' : 'Промпты картинок ▲');
     });
     $('#gp-imgprompt-apply').on('click', function () {
         getSettings().imgPromptIg = $('#gp-set-imgprompt-ig').val() || '';

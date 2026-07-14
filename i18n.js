@@ -229,6 +229,12 @@ const DICT = {
     'Профиль не выбран (стоит «Текущий API»)': 'No profile selected ("Current API" is set)',
     'Текущий API (изолированно, без пресета)': 'Current API (isolated, no preset)',
     'Язык / Language:': 'Language:',
+    'Модель и контекст': 'Model and context', 'Профиль, история и параметры ответа': 'Profile, history and response settings',
+    'Изображения': 'Images', 'Модель, формат и промпты': 'Model, format and prompts',
+    'Поведение': 'Behavior', 'Журнал, инжект и плавающая кнопка': 'Log, injection and floating button',
+    'Макс. длина ответа': 'Max response length', 'Профиль для соцсетей': 'Social profile',
+    'Контекст соцсетей': 'Social context', 'Твой ник (@)': 'Your handle (@)', 'Модель картинок': 'Image model',
+    'Публичные посты': 'Public posts', 'Закрытые посты': 'Private posts',
     // Оформление (темы)
     'Цвет фона': 'Background color', 'Цвет текста': 'Text color', 'Шрифт': 'Font', 'Цвет иконок': 'Icon color', 'Вернуть иконки темы': 'Restore theme icons',
     'Как в теме': 'Theme default', 'С засечками': 'Serif', 'Моноширинный': 'Monospace',

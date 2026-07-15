@@ -499,17 +499,16 @@
 }
 
 /* ═══ Голосовые сообщения ═══ */
-.gp-bubble-voice { min-width: 190px; }
+.gp-bubble-voice { min-width: 172px; white-space: normal; }
 .gp-voice {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 2px 0;
+    gap: 8px;
 }
 .gp-voice-play {
     flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     border: none;
     cursor: pointer;
@@ -531,9 +530,10 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    height: 26px;
+    height: 20px;
     flex: 1;
-    min-width: 110px;
+    min-width: 96px;
+    max-width: 150px;
     overflow: hidden;
 }
 .gp-voice-wave span {
@@ -571,11 +571,12 @@
 }
 /* расшифровка под дорожкой */
 .gp-voice-tr {
-    margin-top: 7px;
-    padding-top: 7px;
+    margin-top: 6px;
+    padding-top: 6px;
     border-top: 1px solid rgba(255,255,255,0.22);
     font-size: 12.5px;
     line-height: 1.4;
+    white-space: pre-wrap;
 }
 .gp-in .gp-voice-tr { border-top-color: var(--gp-border-soft); }
 /* кнопка микрофона во «взведённом» состоянии */

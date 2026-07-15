@@ -1308,13 +1308,9 @@ function voiceBubbleHtml(m) {
     const dur = voiceDurationSec(m.text);
     const bars = voiceBars((m.from || '') + m.text)
         .map(h => `<span style="height:${h}%"></span>`).join('');
-    return `
-        <div class="gp-voice" style="--gp-voice-dur:${dur}s">
-            <button class="gp-voice-play" data-voiceplay aria-label="Воспроизвести">${ic('fa-play')}</button>
-            <div class="gp-voice-wave">${bars}</div>
-            <span class="gp-voice-dur">${fmtVoiceDur(dur)}</span>
-        </div>
-        ${m.text ? `<div class="gp-voice-tr">${esc(m.text)}</div>` : ''}`;
+    // ВАЖНО: одной строкой, без переносов — .gp-bubble имеет white-space:pre-wrap,
+    // и литеральные \n из шаблона рендерятся пустыми строками (жирный пузырь)
+    return `<div class="gp-voice" style="--gp-voice-dur:${dur}s"><button class="gp-voice-play" data-voiceplay aria-label="Воспроизвести">${ic('fa-play')}</button><div class="gp-voice-wave">${bars}</div><span class="gp-voice-dur">${fmtVoiceDur(dur)}</span></div>${m.text ? `<div class="gp-voice-tr">${esc(m.text)}</div>` : ''}`;
 }
 
 function renderThread(screen) {

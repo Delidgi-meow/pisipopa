@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.19.3';
+export const GP_VERSION = '1.20.5';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -30,6 +30,8 @@ const defaultSettings = () => ({
     // 'rich' — карточка бота + персона + триггернутый лорбук + история чата (дефолт)
     // 'lite' — только короткий срез чата (максимальная изоляция)
     socialContextMode: 'rich',
+    // Спам/мошенники: редкие скам-смс с незнакомых номеров (кулдаун ~35 мин)
+    scamEnabled: true,
     // Картинко-расширение: '' = АВТООПРЕДЕЛЕНИЕ (ищем среди установленных
     // third-party расширений novarakk-подобное — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
@@ -367,10 +369,12 @@ const LOG_RE = /<!--\s*tel:log\s*-->/i;
 // Любой наш тег (для детекта смс-only сообщений)
 const ANY_TEL_RE = /<!--\s*tel:(sms|contact|out|silent|log)/i;
 // Видимый формат исходящей смс (парсим как fallback, если JSON битый)
-// Видимый формат двуязычный: [СМС → X] / [SMS → X] (телефон пишет по языку UI)
-const OUT_VISIBLE_RE = /\[(?:СМС|SMS)\s*→\s*([^\]]+)\]\s*([\s\S]*)/i;
+// Видимый формат двуязычный: [СМС → X] / [SMS → X] (телефон пишет по языку UI);
+// [Голосовое → X] / [Voice → X] — голосовое сообщение (текст = расшифровка)
+const OUT_VISIBLE_RE = /\[(СМС|SMS|Голосовое|Voice)\s*→\s*([^\]]+)\]\s*([\s\S]*)/i;
 // Видимый формат групповой исходящей смс: [СМС в чат «Название»] текст
-const OUT_VISIBLE_GROUP_RE = /\[(?:СМС\s+в\s+чат|SMS\s+to\s+chat)\s*[«"]([^»"]+)[»"]\]\s*([\s\S]*)/i
+const OUT_VISIBLE_GROUP_RE = /\[(СМС|SMS|Голосовое|Voice)\s+(?:в\s+чат|to\s+chat)\s*[«"]([^»"]+)[»"]\]\s*([\s\S]*)/i;
+const VOICE_KIND_RE = /^(голосовое|voice)$/i;
 
 // Смс попадают в телефон ТОЛЬКО из явных tel:sms тегов — это наш протокол,
 // модель ставит их осознанно. Эвристики «чей телефон» и бэктик-парсер прозы
@@ -755,8 +759,9 @@ export function scanChat() {
                 const stripped = text.replace(OUT_RE, '').trim();
                 const vis = stripped.match(OUT_VISIBLE_RE);
                 const visGroup = !vis ? stripped.match(OUT_VISIBLE_GROUP_RE) : null;
-                let to = j.to || (vis ? vis[1].trim() : null);
-                const body = vis ? vis[2].trim() : (visGroup ? visGroup[2].trim() : (j.text || ''));
+                let to = j.to || (vis ? vis[2].trim() : null);
+                const body = vis ? vis[3].trim() : (visGroup ? visGroup[3].trim() : (j.text || ''));
+                const isVoice = !!j.voice || VOICE_KIND_RE.test(vis?.[1] || visGroup?.[1] || '');
                 // Групповой чат: to = "группа:Название" (или поле group)
                 const groupName = j.group || (typeof to === 'string' && to.match(/^группа:\s*(.+)$/i)?.[1]) || null;
                 // В пузыре телефона токен «*фото...*» не показываем — там миниатюра;
@@ -764,6 +769,7 @@ export function scanChat() {
                 const displayBody = body.replace(/\*(?:фото|photo):[^*]*\*\s*/i, '').replace(/\*(?:фото|photo)\*\s*/i, '').trim();
                 const tagStart = text.indexOf(om[0]);
                 const entry = { dir: 'out', text: displayBody, idx: i, time, tagStart, tagEnd: tagStart + om[0].length };
+                if (isVoice) entry.voice = true;
                 // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.media (ST-нативно)
                 if (j.img) entry.img = j.img;
                 else {
@@ -814,6 +820,8 @@ export function scanChat() {
                 };
                 // ММС от персонажа: описание фото → стеклянная заглушка в пузыре
                 if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
+                // Голосовое: text = расшифровка, в пузыре рисуем дорожку
+                if (j.voice) entry.voice = true;
                 if (j.chat) {
                     // Сообщение в групповой чат
                     pushMsg(`group:${keyOf(j.chat)}`, entry, String(j.chat));

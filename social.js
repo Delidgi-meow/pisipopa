@@ -1123,6 +1123,30 @@ Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc"
     return parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"store":"' }));
 }
 
+// ── Спам/мошенники: одно скам-смс под сеттинг ──
+export async function generateScamSms() {
+    const prompt = `${await taskHeader(`invent ONE scam/spam SMS that ${getUserName()} just received from an unknown number.`)}
+Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
+${JSON_RULES}
+Format: [{"from":"sender: short name or number like +7 9XX XXX-XX-XX","text":"the scam message, max 280 chars"}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 400, prefill: '[{"from":"' }));
+    const it = Array.isArray(arr) ? arr[0] : null;
+    if (!it || !it.from || !it.text) return null;
+    return { from: String(it.from).slice(0, 40), text: String(it.text).slice(0, 300) };
+}
+
+// ── Новости: лента города/мира под лорбук и сюжет ──
+export async function generateNewsFeed(existingTitles = []) {
+    const prompt = `${await taskHeader(`generate a news feed for the news app on ${getUserName()}'s phone.`)}
+Invent 7-10 news items for the CITY/WORLD of the roleplay: local incidents, society gossip, economy, oddities, weather warnings, culture. 1-2 items MAY obliquely echo recent roleplay events (from an outsider's/press point of view, no private details the press couldn't know). The rest — living world background.
+${existingTitles.length ? `Do not repeat these existing headlines: ${existingTitles.join('; ')}` : ''}
+"tag" — short category (происшествия/светская хроника/экономика/культура/странное...). "title" max 80 chars, "text" 1-3 sentences. Same language as the excerpt. NO emojis.
+${JSON_RULES}
+Format: [{"tag":"категория","title":"заголовок","text":"текст новости"}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 2048, prefill: '[{"tag":"' }));
+}
+
+
 export async function generateAdvertisingOffers() {
     const s = getSocial();
     if (s.advertising.active) return [];
@@ -1139,21 +1163,6 @@ Output STRICT JSON array only:
     return replaceAdOffers(parsed);
 }
 
-// ── Ачивки: модель придумывает 0-3 достижения за РЕАЛЬНУЮ активность ──
-export async function generateAchievementsLLM(statsBlock, existingNames) {
-    const prompt = `${await taskHeader(`invent playful game-style achievements for ${getUserName()}'s phone based on her REAL activity.`)}
-=== HER ACTUAL PHONE ACTIVITY (hard numbers — the ONLY source of truth) ===
-${statsBlock}
-${existingNames.length ? `\nAlready earned (do NOT repeat or rephrase these): ${existingNames.join('; ')}` : ''}
-
-Invent 0-3 NEW achievements she has just EARNED — each must be backed by the numbers/facts above (never for things that did not happen). Style: witty, personal, like game achievements; reference her roleplay life where fitting.
-Each: "name" 2-4 words (catchy, no emojis), "desc" one short line (what exactly she did), "icon" one FontAwesome solid class from: fa-trophy, fa-star, fa-heart, fa-fire, fa-bolt, fa-gem, fa-crown, fa-camera, fa-comments, fa-money-bill-trend-up, fa-bag-shopping, fa-plane, fa-masks-theater, fa-landmark, fa-user-plus, fa-champagne-glasses, fa-key, fa-ban, fa-image, fa-feather.
-If nothing new is noteworthy — return [].
-${JSON_RULES}
-${uiLangLine()}
-Format: [{"name":"...","desc":"...","icon":"fa-..."}]`;
-    return parseJsonArray(await socialGen(prompt, { maxTokens: 700, prefill: '[{"name":"' }));
-}
 
 // ── Статус репутации: короткое живое описание вместо шаблонного тира ──
 export async function generateRepLabel(platform, reputation, followers, fallback) {

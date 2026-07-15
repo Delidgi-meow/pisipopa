@@ -273,7 +273,7 @@ export function getBankSummaryLine() {
     const oblig = monthlyObligations();
     if (oblig > 0) parts.push(`fixed monthly bills ${fmtMoney(oblig)}`);
     if (b.balance < 0) parts.push('she is in overdraft / broke');
-    return `- Her bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether she can afford things.`;
+    return `- Her bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether she can afford things. If you maintain a money/balance tracker in an infoblock, do NOT copy this number into it — change your tracker ONLY by story events (the app reconciles the two by itself; this number already includes phone-app income the story hasn't shown).`;
 }
 
 // ── Одна компактная строка-правило для директивы (инжектится только если банк активен) ──
@@ -363,6 +363,8 @@ export function harvestBankTags() {
     const seen = new Set(b.seenTags);
     const seenRpBalances = new Set(b.seenRpBalances);
     let migratedLegacyKeys = false;
+    // База для дельта-синка инфоблока: последнее известное значение
+    let rpBaseline = Number.isFinite(b.lastRpBalance) ? b.lastRpBalance : null;
 
     // Пре-скан: суммы всех tel:bank тегов по индексам сообщений. Модель часто
     // оформляет ОДИН перевод дважды — тегом в RP-сообщении и банковской смс в
@@ -395,6 +397,10 @@ export function harvestBankTags() {
         // RP-инфоблок намеренно читаем из исходного сообщения: stripThink
         // правильно скрывает reasoning от тегов телефона, но именно там sims-
         // пресеты публикуют текущий баланс пользователя.
+        // ВАЖНО: применяем ДЕЛЬТУ инфоблока, а не абсолют. Инфоблок пресета не
+        // знает о телефонных операциях (казино/магазин) — абсолютная сверка
+        // ЗАТИРАЛА выигрыши. Дельта = деньги, изменившиеся В РОЛЕВОЙ; телефонные
+        // операции живут поверх. Первая встреченная величина — инициализация.
         if (!msg.is_user && !containsBankTag) {
             const rpBalance = parseRpBalance(msg.mes, userName);
             if (rpBalance) {
@@ -403,12 +409,18 @@ export function harvestBankTags() {
                 if (!seenRpBalances.has(h)) {
                     seenRpBalances.add(h);
                     b.seenRpBalances.push(h);
-                    b.balance = rpBalance.value;
-                    // ТИХАЯ синхронизация: это не операция, а сверка абсолютного
-                    // баланса из инфоблока — тост не нужен (задалбливал). В added
-                    // не считаем; отдельный счётчик только для saveMeta.
+                    if (rpBaseline === null) {
+                        // самый первый инфоблок за всю историю — абсолютная инициализация
+                        b.balance = rpBalance.value;
+                    } else {
+                        const delta = rpBalance.value - rpBaseline;
+                        if (delta) b.balance += delta;
+                    }
                     balanceSynced++;
                 }
+                // База — ПОСЛЕДНЕЕ виденное значение инфоблока (и для уже
+                // обработанных: миграция со старой абсолютной схемы)
+                rpBaseline = rpBalance.value;
             }
         }
 
@@ -474,6 +486,12 @@ export function harvestBankTags() {
     }
     if (b.seenTags.length > 400) b.seenTags = b.seenTags.slice(-400);
     if (b.seenRpBalances.length > 120) b.seenRpBalances = b.seenRpBalances.slice(-120);
+    // Персистим базу дельта-синка (в т.ч. миграция со старой абсолютной схемы:
+    // уже-обработанные значения инфоблока становятся базой без применения)
+    if (rpBaseline !== null && b.lastRpBalance !== rpBaseline) {
+        b.lastRpBalance = rpBaseline;
+        balanceSynced++;
+    }
     if (added || balanceSynced || migratedLegacyKeys) saveMeta();
     // Наружу — только НАСТОЯЩИЕ операции (тост «N операций из ролевой»);
     // тихая сверка баланса из инфоблока уведомление не дёргает.

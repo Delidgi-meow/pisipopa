@@ -2,9 +2,10 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyAchievements } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
 import { harvestBankTags } from './bank.js';
+import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
 
 // ── CSS ──
@@ -50,6 +51,7 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
                 <div class="gp-settings-checks gp-settings-wide">
                     <label><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
+                    <label><input type="checkbox" id="gp-set-scam" ${s.scamEnabled !== false ? 'checked' : ''}><span>Спам и мошенники в смс</span></label>
                     <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
                 </div>
             </div>
@@ -132,6 +134,10 @@ function setupSettingsPanel() {
         getSettings().injectDepth = value;
         saveSettingsDebounced();
         updatePhoneInjection();
+    });
+    $('#gp-set-scam').on('change', function () {
+        getSettings().scamEnabled = this.checked;
+        saveSettingsDebounced();
     });
     $('#gp-set-hide').on('change', function () {
         getSettings().hideSmsInChat = this.checked;
@@ -279,7 +285,8 @@ jQuery(async () => {
                 if (n > 0) toast(`Банк: ${n} ${n === 1 ? 'операция' : 'операции'} из ролевой`, 'fa-building-columns');
             } catch (e) { /* ignore */ }
             notifyBankReminders();
-            notifyAchievements();
+            // Мошенники: редкий скам-смс (сам себя гейтит кулдауном и шансом)
+            maybeScamSms().then(sms => { if (sms) deliverScamSms(sms); }).catch(() => {});
             updatePhoneInjection();
             applyChatHiding();
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST

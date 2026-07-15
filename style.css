@@ -498,6 +498,93 @@
     margin: 2px 6px 4px;
 }
 
+/* ═══ Голосовые сообщения ═══ */
+.gp-bubble-voice { min-width: 190px; }
+.gp-voice {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 2px 0;
+}
+.gp-voice-play {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    background: rgba(255,255,255,0.28);
+    color: inherit;
+    transition: transform .15s ease, background .15s ease;
+}
+.gp-voice-play:active { transform: scale(0.9); }
+.gp-in .gp-voice-play {
+    background: linear-gradient(135deg, rgba(var(--gp-accent-a-rgb), 0.75), rgba(var(--gp-accent-b-rgb), 0.65));
+    color: #fff;
+}
+.gp-voice-wave {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 26px;
+    flex: 1;
+    min-width: 110px;
+    overflow: hidden;
+}
+.gp-voice-wave span {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.55;
+}
+.gp-in .gp-voice-wave span { opacity: 0.4; }
+/* прогресс «проигрывания»: подсветка бежит по дорожке ровно длительность */
+.gp-voice-wave::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 0;
+    background: linear-gradient(90deg, rgba(255,255,255,0.35), rgba(255,255,255,0.18));
+    mix-blend-mode: overlay;
+    pointer-events: none;
+}
+.gp-in .gp-voice-wave::after {
+    background: linear-gradient(90deg, rgba(var(--gp-accent-a-rgb), 0.4), rgba(var(--gp-accent-b-rgb), 0.25));
+    mix-blend-mode: normal;
+    border-radius: 4px;
+}
+.gp-voice.gp-playing .gp-voice-wave::after {
+    animation: gp-voice-progress var(--gp-voice-dur, 3s) linear forwards;
+}
+@keyframes gp-voice-progress { from { width: 0; } to { width: 100%; } }
+.gp-voice-dur {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.8;
+}
+/* расшифровка под дорожкой */
+.gp-voice-tr {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid rgba(255,255,255,0.22);
+    font-size: 12.5px;
+    line-height: 1.4;
+}
+.gp-in .gp-voice-tr { border-top-color: var(--gp-border-soft); }
+/* кнопка микрофона во «взведённом» состоянии */
+#gp-voice-toggle.gp-voice-armed {
+    color: #fff;
+    background: linear-gradient(135deg, rgba(var(--gp-accent-a-rgb), 0.85), rgba(var(--gp-accent-b-rgb), 0.75));
+    box-shadow: 0 0 10px rgba(var(--gp-accent-a-rgb), 0.4);
+}
+
 /* «печатает…» */
 .gp-typing {
     display: flex;
@@ -790,35 +877,6 @@
 .gp-task-card:first-of-type { margin-top:0; }.gp-task-card div { min-width:0; }.gp-task-card b,.gp-task-card span { display:block; }.gp-task-card b { font-size:11px; }.gp-task-card span { margin-top:2px; color:var(--gp-text-dim); font-size:9px; line-height:1.35; }.gp-task-card strong { align-self:center; font-size:11px; }
 .gp-task-card > i { grid-column:1/-1; height:4px; overflow:hidden; border-radius:99px; background:rgba(255,255,255,.09); }.gp-task-card > i em { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--gp-accent-a),var(--gp-accent-b)); }
 .gp-gifts-section h3{display:flex;align-items:center;gap:6px}.gp-gifts-section h3 small{margin-left:auto;color:var(--gp-text-dim);font-size:8px;font-weight:600}
-/* ═══ Ачивки ═══ */
-.gp-ach-refresh { width:26px; height:26px; font-size:10px; margin-left:6px; flex:0 0 auto; }
-.gp-ach-list { display:flex; flex-direction:column; gap:6px; }
-.gp-ach {
-    display:flex; align-items:center; gap:10px; padding:8px 10px;
-    border:1px solid var(--gp-border-soft); border-radius:13px;
-    background:rgba(255,255,255,.03); opacity:.55; filter:grayscale(.6);
-}
-.gp-ach-on {
-    opacity:1; filter:none;
-    border-color:rgba(var(--gp-accent-a-rgb),.45);
-    background:linear-gradient(135deg, rgba(var(--gp-accent-a-rgb),.13), rgba(var(--gp-accent-b-rgb),.07));
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.1);
-}
-.gp-ach-icon {
-    width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center;
-    border-radius:11px; font-size:14px; color:var(--gp-text-dim);
-    background:rgba(255,255,255,.07); border:1px solid var(--gp-border-soft);
-}
-.gp-ach-on .gp-ach-icon {
-    color:#fff; border-color:rgba(255,255,255,.3);
-    background:linear-gradient(140deg, var(--gp-accent-a), var(--gp-accent-b));
-    box-shadow:0 4px 12px rgba(var(--gp-accent-a-rgb),.35), inset 0 1px 0 rgba(255,255,255,.35);
-    text-shadow:0 1px 3px rgba(0,0,0,.3);
-}
-.gp-ach-body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
-.gp-ach-name { font-size:11.5px; font-weight:800; }
-.gp-ach-desc { font-size:9.5px; opacity:.6; margin-top:1px; }
-.gp-ach-check { flex:0 0 auto; font-size:10px; color:var(--gp-accent-a); }
 .gp-unequip { width:100%; margin-top:9px; padding:8px; border:1px solid rgba(255,255,255,.12); border-radius:10px; color:var(--gp-text); background:rgba(255,255,255,.06); }
 .gp-event-banner { display:flex; width:100%; align-items:center; gap:10px; padding:12px; border:1px solid rgba(var(--gp-accent-b-rgb),.35); border-radius:16px; color:var(--gp-text); text-align:left; background:linear-gradient(135deg,rgba(var(--gp-accent-a-rgb),.2),rgba(var(--gp-accent-b-rgb),.14)); }.gp-event-banner > span { display:grid; width:34px; height:34px; flex:0 0 auto; place-items:center; border-radius:12px; background:rgba(255,255,255,.12); }.gp-event-banner div { min-width:0; flex:1; }.gp-event-banner b,.gp-event-banner small { display:block; }.gp-event-banner b { font-size:11px; }.gp-event-banner small { display:-webkit-box; overflow:hidden; margin-top:3px; color:var(--gp-text-dim); font-size:9px; line-height:1.35; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .gp-events-section { border-color:rgba(var(--gp-accent-b-rgb),.24); background:linear-gradient(150deg,rgba(var(--gp-accent-a-rgb),.09),var(--gp-glass)); }
@@ -1899,3 +1957,186 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
     padding-left: 8px;
     padding-right: 8px;
 }
+
+/* ═══ Казино ═══ */
+.gp-app-casino { background: linear-gradient(140deg, rgba(var(--gp-accent-b-rgb), .55), rgba(var(--gp-accent-a-rgb), .35)); }
+.gp-casino-title { color: var(--gp-text); }
+.gp-casino-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 14px; display: flex; flex-direction: column; gap: 10px; }
+.gp-casino-balance { display: flex; align-items: baseline; justify-content: space-between; margin: 2px 2px 8px; padding: 10px 13px; border: 1px solid rgba(255, 205, 183, .16); border-radius: 14px; background: linear-gradient(135deg, rgba(73, 20, 45, .68), rgba(112, 39, 58, .42)); }
+.gp-casino-balance span { color: var(--gp-text-dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.gp-casino-balance b { color: #ffd39a; font-family: Georgia, serif; font-size: 17px; }
+.gp-casino-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.gp-casino-tab { height: 37px; border: 1px solid rgba(255,255,255,.13); border-radius: 12px; background: rgba(255,255,255,.045); color: var(--gp-text-dim); font-size: 11px; font-weight: 800; cursor: pointer; }
+.gp-casino-tab.gp-active { border-color: rgba(255, 132, 110, .7); background: rgba(255, 112, 98, .16); color: #fff4ef; box-shadow: inset 0 -2px #ff826e; }
+.gp-casino-game { padding: 12px 10px 13px; border: 1px solid rgba(255, 161, 132, .18); border-radius: 21px; background: linear-gradient(155deg, rgba(42, 11, 31, .84), rgba(74, 22, 42, .7)); box-shadow: inset 0 1px rgba(255,255,255,.04), 0 12px 30px rgba(0,0,0,.12); }
+.gp-casino-game-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.gp-casino-game-head b { font-family: Georgia, serif; font-size: 15px; }
+.gp-casino-game-head span { color: var(--gp-text-dim); font-size: 8.5px; letter-spacing: .08em; text-transform: uppercase; }
+.gp-casino-machine { display: flex; justify-content: center; gap: 6px; padding: 13px 8px; border: 3px solid #b97855; border-radius: 18px; background: linear-gradient(145deg, #5a233d, #24101f); box-shadow: inset 0 0 0 1px rgba(255, 211, 151, .38), 0 9px 18px rgba(0,0,0,.28); }
+.gp-casino-reel { width: 66px; height: 70px; overflow: hidden; border: 2px solid rgba(255, 207, 143, .72); border-radius: 11px; background: #f4e1d2; box-shadow: inset 0 0 14px rgba(82, 25, 48, .5); }
+.gp-casino-reel-strip { display: flex; flex-direction: column; transform: translateY(0); }
+.gp-casino-reel-strip span { flex: 0 0 66px; height: 66px; display: grid; place-items: center; color: #8d3f55; font-size: 27px; }
+.gp-casino-reel:nth-child(2) .gp-casino-reel-strip span { color: #b97837; }
+.gp-casino-reel:nth-child(3) .gp-casino-reel-strip span { color: #4d8f70; }
+.gp-casino-machine.gp-spinning .gp-casino-reel-strip { animation: gp-casino-reel-spin .48s linear infinite; animation-delay: var(--reel-delay); }
+@keyframes gp-casino-reel-spin { to { transform: translateY(-264px); } }
+.gp-casino-paytable { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 9px; }
+.gp-casino-paytable span { padding: 6px 3px; border: 1px solid rgba(255,255,255,.09); border-radius: 8px; color: var(--gp-text-dim); font-size: 7.5px; text-align: center; }
+.gp-casino-paytable b { display: block; margin-bottom: 1px; color: #ffd39a; font: 700 12px Georgia, serif; }
+.gp-casino-quickbets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 9px; }
+.gp-casino-quickbets button { height: 27px; border: 1px solid rgba(255,255,255,.11); border-radius: 14px; background: rgba(255,255,255,.045); color: var(--gp-text-dim); font-size: 9px; cursor: pointer; }
+.gp-casino-quickbets button.gp-selected { border-color: rgba(255, 130, 110, .7); color: #fff; background: rgba(255, 130, 110, .13); }
+.gp-casino-actionrow { display: flex; gap: 7px; margin-top: 9px; }
+.gp-casino-bet { flex: 1 1 auto; min-width: 0; width: auto; height: 40px; padding: 0 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 13px; background: rgba(255,255,255,.075); color: var(--gp-text); font-size: 13px; font-weight: 800; outline: none; }
+.gp-casino-bet:focus { border-color: rgba(255, 130, 110, .72); }
+.gp-casino-spin { position: relative; flex: 0 0 96px; height: 40px; overflow: hidden; border: 1px solid rgba(255, 177, 157, .48); border-radius: 13px; background: linear-gradient(135deg, #ff947c, #ff7268 50%, #df4c6a); box-shadow: 0 6px 14px rgba(223, 76, 106, .22), inset 0 1px rgba(255,255,255,.4); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+.gp-casino-spin::before { content: ''; position: absolute; top: 1px; left: 18px; right: 18px; height: 1px; background: rgba(255,255,255,.5); }
+.gp-casino-spin:active { transform: translateY(1px) scale(.98); }
+.gp-casino-spin:disabled { opacity: .58; cursor: wait; }
+.gp-casino-status { min-height: 17px; margin-top: 8px; color: var(--gp-text-dim); font: 700 11px/1.4 Georgia, serif; text-align: center; }
+.gp-casino-status.gp-win { color: #ffd39a; }
+.gp-casino-wheel-stage { position: relative; width: 224px; height: 224px; margin: 0 auto 10px; border: 8px solid #a96d4e; border-radius: 50%; background: #17131d; box-shadow: 0 0 0 2px #dca16f, 0 11px 24px rgba(0,0,0,.42); }
+.gp-casino-wheel { position: absolute; inset: 15px; border-radius: 50%; transition: transform 3.2s cubic-bezier(.12,.72,.08,1); box-shadow: inset 0 0 0 2px rgba(255, 216, 154, .28), inset 0 0 18px rgba(0,0,0,.65); }
+.gp-casino-wheel::after { content: ''; position: absolute; inset: 26px; border: 1px solid rgba(255, 222, 171, .35); border-radius: 50%; }
+.gp-casino-pointer { position: absolute; z-index: 4; left: 50%; top: -4px; width: 0; height: 0; transform: translateX(-50%); border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 17px solid #ffd28a; filter: drop-shadow(0 2px 2px rgba(0,0,0,.7)); }
+.gp-casino-wheel-number { position: absolute; z-index: 2; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; color: #fff; font-size: 7px; font-weight: 800; line-height: 20px; text-align: center; }
+.gp-casino-wheel-number-red { color: #ffd3ca; }
+.gp-casino-wheel-number-green { color: #c0f1d9; }
+.gp-casino-wheel-center { position: absolute; z-index: 3; inset: 74px; display: grid; place-items: center; border: 3px solid #e3aa72; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #cc8d66, #6c3940 60%, #291621); color: #fff4e9; font: 700 18px Georgia, serif; box-shadow: 0 4px 12px rgba(0,0,0,.45); }
+.gp-casino-lastnums { display: flex; justify-content: center; gap: 5px; margin-bottom: 9px; }
+.gp-casino-lastnums span { width: 21px; height: 21px; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 8px; font-weight: 800; }
+.gp-roulette-num { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; font-weight: 800; font-size: 16px; color: #fff; }
+.gp-roulette-red { background: #b03040; }
+.gp-roulette-black { background: #1c1c22; border: 1px solid rgba(255,255,255,.25); }
+.gp-roulette-green { background: #1f7a4d; }
+.gp-casino-colors { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 7px; }
+.gp-casino-color { height: 30px; border: 1px solid rgba(255,255,255,.15); border-radius: 9px; color: #fff; font-size: 9px; font-weight: 800; cursor: pointer; }
+.gp-casino-color.gp-red { background: rgba(169, 52, 73, .74); }
+.gp-casino-color.gp-black { background: #201c25; }
+.gp-casino-color.gp-selected { outline: 2px solid #ffd28a; outline-offset: -2px; }
+.gp-casino-number-grid { display: grid; grid-template-columns: 27px repeat(12, 1fr); gap: 2px; }
+.gp-casino-number { min-width: 0; height: 23px; padding: 0; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; color: #fff; font-size: 7px; font-weight: 800; cursor: pointer; }
+.gp-casino-number-green { grid-row: span 3; height: auto; background: #237c59; }
+.gp-casino-number-red { background: #973349; }
+.gp-casino-number-black { background: #201c25; }
+.gp-casino-number.gp-selected { outline: 2px solid #ffd28a; outline-offset: -2px; }
+.gp-casino-choice { display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px; color: var(--gp-text-dim); font-size: 9px; }
+.gp-casino-choice b { color: #ffd39a; font-size: 10px; }
+.gp-casino-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.gp-casino-stats span { padding: 7px 5px; border-top: 1px solid rgba(255,255,255,.1); color: var(--gp-text-dim); font-size: 8px; text-align: center; }
+.gp-casino-stats b { display: block; margin-top: 2px; color: var(--gp-text); font: 700 11px Georgia, serif; }
+
+/* Казино наследует активную тему GlassPhone. Цвета рулетки ниже остаются
+   семантическими, а оболочка, акцент и выигрышные состояния меняются вместе
+   с темой телефона. */
+#gp-phone {
+    --gp-casino-accent: var(--gp-accent-a);
+    --gp-casino-accent-rgb: var(--gp-accent-a-rgb);
+    --gp-casino-accent-2: var(--gp-accent-b);
+    --gp-casino-accent-2-rgb: var(--gp-accent-b-rgb);
+    --gp-casino-win: var(--gp-accent-a);
+}
+#gp-phone .gp-casino-balance {
+    border-color: rgba(var(--gp-casino-accent-rgb), .28);
+    background: linear-gradient(135deg, rgba(var(--gp-casino-accent-rgb), .22), rgba(var(--gp-casino-accent-2-rgb), .18));
+}
+#gp-phone .gp-casino-balance b,
+#gp-phone .gp-casino-paytable b,
+#gp-phone .gp-casino-choice b,
+#gp-phone .gp-casino-status.gp-win {
+    color: var(--gp-casino-win);
+}
+#gp-phone .gp-casino-tab { border-color: var(--gp-border-soft); background: var(--gp-glass); }
+#gp-phone .gp-casino-tab.gp-active {
+    border-color: rgba(var(--gp-casino-accent-rgb), .72);
+    background: rgba(var(--gp-casino-accent-rgb), .16);
+    color: var(--gp-text);
+    box-shadow: inset 0 -2px var(--gp-casino-accent);
+}
+#gp-phone .gp-casino-game {
+    border-color: rgba(var(--gp-casino-accent-rgb), .28);
+    background: linear-gradient(155deg, rgba(var(--gp-casino-accent-rgb), .16), var(--gp-glass));
+}
+#gp-phone .gp-casino-machine {
+    border-color: var(--gp-casino-accent);
+    background: linear-gradient(145deg, rgba(var(--gp-casino-accent-2-rgb), .35), rgba(var(--gp-casino-accent-rgb), .14));
+    box-shadow: inset 0 0 0 1px rgba(var(--gp-casino-accent-rgb), .35), 0 9px 18px rgba(0,0,0,.28);
+}
+#gp-phone .gp-casino-reel { border-color: rgba(var(--gp-casino-accent-rgb), .72); background: var(--gp-glass-strong); }
+#gp-phone .gp-casino-reel-strip span { color: var(--gp-casino-accent); }
+#gp-phone .gp-casino-reel:nth-child(2) .gp-casino-reel-strip span { color: var(--gp-casino-accent-2); }
+#gp-phone .gp-casino-reel:nth-child(3) .gp-casino-reel-strip span { color: var(--gp-casino-win); }
+#gp-phone .gp-casino-paytable span,
+#gp-phone .gp-casino-quickbets button,
+#gp-phone .gp-casino-bet { border-color: var(--gp-border-soft); background-color: var(--gp-glass); }
+#gp-phone .gp-casino-number { border-color: var(--gp-border-soft); }
+#gp-phone .gp-casino-quickbets button.gp-selected,
+#gp-phone .gp-casino-bet:focus,
+#gp-phone .gp-casino-number.gp-selected { border-color: var(--gp-casino-accent); }
+#gp-phone .gp-casino-spin {
+    border-color: rgba(var(--gp-casino-accent-rgb), .62);
+    background: linear-gradient(135deg, var(--gp-casino-accent), var(--gp-casino-accent-2));
+    box-shadow: 0 6px 14px rgba(var(--gp-casino-accent-rgb), .22), inset 0 1px rgba(255,255,255,.4);
+}
+#gp-phone .gp-casino-wheel-stage { border-color: var(--gp-casino-accent-2); box-shadow: 0 0 0 2px var(--gp-casino-accent), 0 11px 24px rgba(0,0,0,.42); }
+#gp-phone .gp-casino-wheel-center { border-color: var(--gp-casino-accent); background: radial-gradient(circle at 35% 30%, var(--gp-casino-accent), rgba(var(--gp-casino-accent-2-rgb), .45) 60%, rgba(var(--gp-casino-accent-rgb), .18)); }
+#gp-phone .gp-casino-color.gp-selected,
+#gp-phone .gp-casino-number.gp-selected { outline-color: var(--gp-casino-accent); }
+#gp-phone .gp-casino-pointer { border-top-color: var(--gp-casino-accent); }
+#gp-phone .gp-casino-balance b,
+#gp-phone .gp-casino-game-head b,
+#gp-phone .gp-casino-paytable b,
+#gp-phone .gp-casino-status,
+#gp-phone .gp-casino-wheel-center,
+#gp-phone .gp-casino-stats b { font-family: inherit; }
+
+/* ═══ Новости ═══ */
+.gp-app-news { background: linear-gradient(140deg, rgba(var(--gp-accent-a-rgb), .45), rgba(var(--gp-accent-b-rgb), .3)); }
+.gp-news-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; display: flex; flex-direction: column; gap: 9px; }
+.gp-news-card { padding: 11px 13px; border-radius: var(--gp-theme-card-radius, 15px); background: var(--gp-glass); border: 1px solid var(--gp-border-soft); display: flex; flex-direction: column; gap: 5px; }
+.gp-news-meta { display: flex; align-items: center; gap: 8px; }
+.gp-news-meta .gp-bank-tx-del { margin-left: auto; opacity: .4; }
+.gp-news-tag { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; color: var(--gp-accent-a); background: rgba(var(--gp-accent-a-rgb), .12); padding: 2px 8px; border-radius: 8px; }
+.gp-news-card b { font-size: 13.5px; line-height: 1.3; }
+.gp-news-card p { font-size: 12px; line-height: 1.45; color: var(--gp-text-dim); margin: 0; }
+.gp-news-share { align-self: flex-start; margin-top: 3px; padding: 6px 11px; border-radius: 10px; border: 1px solid var(--gp-border-soft); background: var(--gp-glass-strong); color: var(--gp-text); font-size: 10.5px; cursor: pointer; }
+
+/* ═══ Почта ═══ */
+.gp-app-mail { background: linear-gradient(140deg, rgba(var(--gp-accent-b-rgb), .5), rgba(var(--gp-accent-a-rgb), .28)); }
+.gp-mail-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; display: flex; flex-direction: column; gap: 7px; }
+.gp-mail-row { padding: 10px 12px; border-radius: var(--gp-theme-card-radius, 13px); background: var(--gp-glass); border: 1px solid var(--gp-border-soft); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.gp-mail-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.gp-mail-from { font-size: 11px; font-weight: 700; color: var(--gp-text-dim); }
+.gp-mail-subject { font-size: 13px; font-weight: 600; }
+.gp-mail-preview { font-size: 11px; color: var(--gp-text-dim); }
+.gp-mail-unread { border-color: rgba(var(--gp-accent-a-rgb), .4); }
+.gp-mail-unread .gp-mail-subject { font-weight: 800; }
+.gp-mail-unread .gp-mail-from { color: var(--gp-accent-a); }
+.gp-mail-head { display: flex; flex-direction: column; gap: 3px; padding: 4px 4px 10px; border-bottom: 1px solid var(--gp-border-soft); }
+.gp-mail-head b { font-size: 15px; line-height: 1.3; }
+.gp-mail-head span { font-size: 11px; color: var(--gp-text-dim); }
+.gp-mail-body { padding: 10px 4px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.gp-mail-replybox { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+.gp-mail-replybox textarea { width: 100%; resize: vertical; padding: 9px 11px; border-radius: 12px; border: 1px solid var(--gp-border-soft); background: var(--gp-glass); color: var(--gp-text); font-size: 12.5px; }
+
+/* ═══ Заметки ═══ */
+.gp-app-notes { background: linear-gradient(140deg, rgba(var(--gp-accent-a-rgb), .4), rgba(var(--gp-accent-b-rgb), .5)); }
+.gp-notes-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; display: flex; flex-direction: column; gap: 8px; }
+.gp-notes-editor { display: flex; flex-direction: column; gap: 7px; }
+.gp-notes-editor textarea { width: 100%; resize: vertical; padding: 9px 11px; border-radius: 12px; border: 1px solid var(--gp-border-soft); background: var(--gp-glass); color: var(--gp-text); font-size: 12.5px; }
+.gp-note { padding: 10px 12px; border-radius: var(--gp-theme-card-radius, 13px); background: var(--gp-glass); border: 1px solid var(--gp-border-soft); display: flex; flex-direction: column; gap: 6px; }
+.gp-note-shared { border-color: rgba(var(--gp-accent-a-rgb), .4); }
+.gp-note-text { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; cursor: pointer; }
+.gp-note-meta { display: flex; align-items: center; gap: 8px; }
+.gp-note-meta .gp-tw-time { flex: 1 1 auto; }
+.gp-note-eye { width: 28px; height: 28px; font-size: 11px; }
+
+/* ═══ Галерея ═══ */
+.gp-app-gallery { background: linear-gradient(140deg, rgba(var(--gp-accent-b-rgb), .38), rgba(var(--gp-accent-a-rgb), .5)); }
+.gp-gallery-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; }
+.gp-gallery-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.gp-gallery-cell { position: relative; aspect-ratio: 1; border: 1px solid var(--gp-border-soft); border-radius: 10px; overflow: hidden; padding: 0; cursor: pointer; background: var(--gp-glass); }
+.gp-gallery-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gp-gallery-viewer { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, .88); border-radius: inherit; }
+.gp-gallery-viewer img { max-width: 94%; max-height: 88%; object-fit: contain; border-radius: 10px; }
+.gp-gallery-close { position: absolute; top: 14px; right: 14px; }

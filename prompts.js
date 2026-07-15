@@ -3,6 +3,7 @@ import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } fr
 import { getSettings, getMeta, scanChat, getBlockedSmsKeys, EXT_NAME } from './state.js';
 import { getSocialActivitySummary } from './social.js';
 import { getBankSummaryLine, bankInjectRule } from './bank.js';
+import { notesInjectBlock } from './notes.js';
 import { pendingConsequences } from './social-events.js';
 
 const CHAT_KEY = EXT_NAME;
@@ -44,8 +45,8 @@ function buildPrompt() {
         let c = `<phone_directive>\n[OOC — hidden phone/SMS channel. Never mention it in-story.]\n{{user}} has a smartphone. ${contactsBlock}\n`;
         c += `RULES (tags = HTML comments at the very END of the reply, copied VERBATIM, EN keys / RU values, invisible to reader):\n`;
         c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"+7 ..."}-->\n`;
-        c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"). Only if they plausibly have her number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
-        c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from her phone (NOT spoken; scene paused). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
+        c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say). Only if they plausibly have her number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
+        c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from her phone (NOT spoken; scene paused). \`[Голосовое → X]\` / \`[Voice → X]\` = her VOICE message, text = transcript (the character hears her voice). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
         c += `NEVER write literal tag syntax inside <think>/reasoning — plan in plain words; each tag exactly once, in the final reply. Never paraphrase tags into visible text.\n`;
         let socialC = '';
@@ -57,6 +58,10 @@ function buildPrompt() {
             if (bankRule) c += `\n${bankRule}\n`;
             const bankSum = getBankSummaryLine();
             if (bankSum) c += `${bankSum}\n`;
+        } catch (e) { /* ignore */ }
+        try {
+            const notesBlock = notesInjectBlock();
+            if (notesBlock) c += `\n${notesBlock}\n`;
         } catch (e) { /* ignore */ }
         c += `</phone_directive>`;
         return c;
@@ -75,9 +80,10 @@ function buildPrompt() {
     p += `You may also narrate in prose that her phone buzzed, and you may show the message in your usual visible style (e.g. backticks like \`текст\`). The tag duplication rule applies ONLY to messages {{user}} receives: if you display in backticks a message that ANOTHER character got on THEIR phone, do NOT create a tag for it — backticks alone. Several messages in a row = several tags in order. Only characters who plausibly have {{user}}'s number can text her.\n`;
     p += `CRITICAL SCOPE: tel:sms is EXCLUSIVELY for messages arriving on {{user}}'s OWN phone. If ANY other character (including the one you play) receives a message on THEIR phone — describe it in prose or their diary, NEVER tag it. A tagged message that is actually addressed to another character MUST carry "to":"RecipientName" so the app can discard it.\n`;
     p += `MMS (character sends a photo): add a "photo" field with a short visual description: <!--tel:sms:{"from":"CharacterName","text":"optional message","photo":"what the photo shows"}-->\n`;
+    p += `VOICE MESSAGE (character records audio instead of typing): add "voice": true — then "text" is the transcript of what they SAY (spoken register: filler words, pauses, tone leaks through): <!--tel:sms:{"from":"CharacterName","text":"transcript of the voice message","voice":true}-->. Use it when it fits the character/moment (emotional, hands busy, walking, lazy to type, wants her to hear their voice) — not every message.\n`;
     p += `GROUP CHAT message: add a "chat" field with the group chat name: <!--tel:sms:{"from":"CharacterName","chat":"GroupChatName","text":"..."}-->. In group chats SEVERAL members may text in a row (one tag each) — make it feel like a real group chat.\n\n`;
 
-    p += `[RULE 3 — PHONE-ONLY MODE] A user message shaped like \`[СМС → Name] text\` or \`[SMS → Name] text\` means {{user}} sent that text FROM HER PHONE. A message shaped like \`[СМС в чат «Name»] text\` or \`[SMS to chat «Name»] text\` means she texted the GROUP CHAT with that name — reply as its members (each with the "chat" field, RULE 2). \`*фото*\` / \`*photo*\` in her SMS means she attached a photo (it may be attached to the message — look at it if you can see images). It is NOT spoken aloud; the character may be anywhere, doing anything. The RP scene is PAUSED — this is a pure phone exchange.\n`;
+    p += `[RULE 3 — PHONE-ONLY MODE] A user message shaped like \`[СМС → Name] text\` or \`[SMS → Name] text\` means {{user}} sent that text FROM HER PHONE. A message shaped like \`[СМС в чат «Name»] text\` or \`[SMS to chat «Name»] text\` means she texted the GROUP CHAT with that name — reply as its members (each with the "chat" field, RULE 2). \`[Голосовое → Name]\` / \`[Voice → Name]\` (or the group form) means she sent a VOICE message — the text is the transcript; the character HEARS her voice, intonation and all. \`*фото*\` / \`*photo*\` in her SMS means she attached a photo (it may be attached to the message — look at it if you can see images). It is NOT spoken aloud; the character may be anywhere, doing anything. The RP scene is PAUSED — this is a pure phone exchange.\n`;
     p += `Your reply to such a message MUST consist ONLY of hidden tags — ZERO visible prose, no narration, no actions, no scene description, no dialogue outside the tags:\n`;
     p += `- Reply with 1-5 <!--tel:sms:...--> tags (RULE 2 format) in the character's own texting voice: short, informal, realistic pacing; style matches the character.\n`;
     p += `- If the character realistically would NOT reply right now (asleep, busy, offended, phone off, needs time), output exactly this single hidden line instead: <!--tel:silent-->\n`;
@@ -103,6 +109,11 @@ function buildPrompt() {
             const bankSum = getBankSummaryLine();
             if (bankSum) p += `[{{user}}'S FINANCES] ${bankSum}\n`;
         }
+    } catch (e) { /* ignore */ }
+    // Заметки — только расшаренные (секретные не инжектятся никогда)
+    try {
+        const notesBlock = notesInjectBlock();
+        if (notesBlock) p += `\n${notesBlock}\n`;
     } catch (e) { /* ignore */ }
     p += `\n`;
 

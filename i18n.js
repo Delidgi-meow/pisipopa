@@ -56,7 +56,7 @@ const DICT = {
     'Нажми, чтобы переименовать': 'Tap to rename', 'Новое имя контакта:': 'New contact name:',
     'Ник для соцсетей': 'Social handle', 'Приложить фото': 'Attach photo', 'Фото приложено': 'Photo attached',
     'Голосовое сообщение': 'Voice message', 'Расшифровка голосового...': 'Voice transcript...',
-    'Воспроизвести': 'Play', 'Сгенерировать фото': 'Generate photo',
+    'Воспроизвести': 'Play', 'Сгенерировать фото': 'Generate photo', 'Перегенерировать фото': 'Regenerate photo',
     'novarakk не установлен — генерация картинок недоступна': 'No image extension installed — image generation unavailable',
     'Удалить это сообщение?': 'Delete this message?', 'Не удалось удалить': 'Failed to delete',
     'Не удалось отправить': 'Failed to send', 'Не удалось загрузить фото': 'Failed to load the photo',

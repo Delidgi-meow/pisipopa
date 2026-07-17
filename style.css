@@ -1771,6 +1771,7 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 
 /* ═══ v1.5: фото в смс ═══ */
 .gp-bubble-img {
+    position: relative; /* якорь для кнопки генерации/перегена (.gp-mms-gen) */
     margin: 2px 0 6px;
     border-radius: 12px;
     overflow: hidden;

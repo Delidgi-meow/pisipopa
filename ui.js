@@ -1342,7 +1342,12 @@ function renderThread(screen) {
         // Фото в смс: реальное (юзер приложила) или заглушка с описанием (ММС от персонажа)
         let media = '';
         if (m.img) {
-            media = `<div class="gp-bubble-img"><img src="${esc(m.img)}" alt=""></div>`;
+            // Переген доступен только для ММС с описанием (без описания нечего рисовать)
+            const genKey = m.eventId || `${m.idx}:${m.tagStart}`;
+            const busy = _mmsGenBusy.has(genKey);
+            const regenBtn = m.photoDesc && m.dir === 'in'
+                ? `<button class="gp-mms-gen" data-mmsgen="${mi}" title="Перегенерировать фото" ${busy ? 'disabled' : ''}>${ic(busy ? 'fa-spinner fa-spin' : 'fa-rotate-right')}</button>` : '';
+            media = `<div class="gp-bubble-img"><img src="${esc(m.img)}" alt="">${regenBtn}</div>`;
         } else if (m.photoDesc) {
             const genKey = m.eventId || `${m.idx}:${m.tagStart}`;
             const busy = _mmsGenBusy.has(genKey);
@@ -1549,7 +1554,7 @@ function renderThread(screen) {
         try {
             const author = m.from || t.name;
             const src = await generatePostImage(
-                { imgDesc: m.photoDesc, author, ak: `contact:${keyOf(author)}`, kind: 'ig' },
+                { imgDesc: m.photoDesc, author, ak: `contact:${keyOf(author)}`, kind: 'ig', mms: true },
                 (status) => {
                     const el = document.querySelector(`[data-mmsdesc="${CSS.escape(genKey)}"]`);
                     if (el) el.textContent = status;

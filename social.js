@@ -1537,6 +1537,12 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
         if (!allowChar) neg.push('the main story characters');
         negLine = ` This photo belongs to an unrelated stranger's account — do NOT depict ${neg.join(' or ')}; only people unrelated to the main story.`;
     }
+    // ММС: снимал и отправил КОНТАКТ — получательница (юзер) за кадром,
+    // иначе её лицо с рефа персоны лезло на чужие фото
+    if (post.mms) {
+        const un = getUserName();
+        negLine += ` This photo was taken and sent by ${post.author} from their own phone to ${un}. ${un} is the RECIPIENT — she is NOT in the photo. Do NOT depict her unless the description explicitly says she is in the frame.`;
+    }
     return `${framing}. ${parts.join('. ')}.${negLine}`;
 }
 
@@ -1548,9 +1554,12 @@ async function sceneToBooruTags(post, { anonymous }) {
     const nsfw = post.kind === 'of'
         ? 'This is adult NSFW content — include explicit danbooru tags matching the scene, do not sanitize.'
         : '';
-    const who = anonymous
+    let who = anonymous
         ? 'The subject is a random stranger — use generic appearance tags, NOT any specific named main character.'
         : '';
+    if (post.mms) {
+        who += ` The photo was taken and sent by ${post.author}; the recipient ${getUserName()} is NOT in the frame — do not add tags describing her unless the scene explicitly includes her.`;
+    }
     const prompt = `Convert this scene into ONE line of English Danbooru-style image tags for an anime image model (NovelAI).
 Scene: ${scene}
 
@@ -1609,7 +1618,10 @@ async function _generatePostImage(post, onStatus = null) {
     const isContactPost = typeof post.ak === 'string' && post.ak.startsWith('contact:');
     const charName = mainCharName();
     const charKey = keyOf(charName);
-    const isCharPost = !isUserPost && charKey && keyOf(post.author) === charKey;
+    // Точное совпадение ИЛИ (для ММС) имя контакта — часть имени карточки:
+    // контакт «Вадим» vs карточка «Вадим Огнев» — реф должен подтянуться
+    const isCharPost = !isUserPost && charKey && (keyOf(post.author) === charKey
+        || (post.mms && !!charName && textMentionsName(charName, post.author)));
     const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
     const wantChar = isCharPost || mentionsChar;
     // Анонимный рандом-аккаунт = НЕ юзер, НЕ контакт (НПС), НЕ главный персонаж.

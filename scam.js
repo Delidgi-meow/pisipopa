@@ -13,6 +13,8 @@ function getScam() {
     if (!m.scam || typeof m.scam !== 'object') m.scam = {};
     if (!Number.isFinite(m.scam.lastAt)) m.scam.lastAt = 0;
     if (!Number.isFinite(m.scam.count)) m.scam.count = 0;
+    // Последние скам-смс — уходят в промпт как «не повторяй эти схемы»
+    if (!Array.isArray(m.scam.recent)) m.scam.recent = [];
     return m.scam;
 }
 
@@ -35,8 +37,13 @@ export async function maybeScamSms({ force = false } = {}) {
         // lastAt ставим ДО генерации: неудачная попытка тоже уходит в кулдаун
         sc.lastAt = Date.now();
         saveMeta();
-        const sms = await generateScamSms();
-        if (sms) { sc.count++; saveMeta(); }
+        const sms = await generateScamSms(sc.recent);
+        if (sms) {
+            sc.count++;
+            sc.recent.unshift(String(sms.text).slice(0, 140));
+            sc.recent = sc.recent.slice(0, 8);
+            saveMeta();
+        }
         return sms;
     } catch (e) {
         return null;

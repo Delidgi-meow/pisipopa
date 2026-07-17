@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.20.6';
+export const GP_VERSION = '1.20.7';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -822,6 +822,8 @@ export function scanChat() {
                 if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
                 // Голосовое: text = расшифровка, в пузыре рисуем дорожку
                 if (j.voice) entry.voice = true;
+                // Сгенерированное фото ММС (кнопка на заглушке пишет img в тег)
+                if (j.img) entry.img = String(j.img);
                 if (j.chat) {
                     // Сообщение в групповой чат
                     pushMsg(`group:${keyOf(j.chat)}`, entry, String(j.chat));

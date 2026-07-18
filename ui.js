@@ -1286,6 +1286,53 @@ function renderList(screen) {
 }
 
 // ── Экран треда ──
+// ── Реакции на сообщения (как в ТГ, но FontAwesome — без стандартных эмодзи) ──
+const REACTIONS = [
+    { id: 'heart', icon: 'fa-heart', ru: 'сердечко' },
+    { id: 'like', icon: 'fa-thumbs-up', ru: 'лайк' },
+    { id: 'laugh', icon: 'fa-face-laugh-squint', ru: 'смех' },
+    { id: 'wow', icon: 'fa-face-surprise', ru: 'вау' },
+    { id: 'sad', icon: 'fa-face-sad-tear', ru: 'грусть' },
+    { id: 'angry', icon: 'fa-face-angry', ru: 'злость' },
+    { id: 'fire', icon: 'fa-fire', ru: 'огонь' },
+];
+let _reactPickerFor = null; // mi сообщения с открытым пикером
+let _reactPickerKey = null; // тред пикера (чтобы mi не «переехал» в другой чат)
+
+// Перезапись JSON-тега сообщения по позиции (tel:sms или tel:out маркер юзера).
+// После записи позиции соседних тегов устаревают — но render() пересканирует чат.
+async function rewriteSmsTag(m, t, mutate) {
+    try {
+        const ctx = SillyTavern.getContext();
+        const chatMsg = ctx?.chat?.[m.idx];
+        if (!chatMsg || !Number.isInteger(m.tagStart) || !Number.isInteger(m.tagEnd)) return false;
+        const tag = chatMsg.mes.slice(m.tagStart, m.tagEnd);
+        const re = m.dir === 'out'
+            ? /<!--\s*tel:out:(\{[\s\S]*?\})\s*-->/i
+            : /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/i;
+        const jm = tag.match(re);
+        if (!jm) return false; // индексы съехали — не портим чужой текст
+        let j = null;
+        try { j = JSON.parse(jm[1]); } catch (e) { /* битый JSON от модели — соберём заново */ }
+        if (!j) {
+            if (m.dir === 'out') return false; // свои маркеры пишем мы, они всегда валидны
+            j = { from: m.from, text: m.text || '' };
+            if (t?.isGroup) j.chat = t.name;
+            if (m.photoDesc) j.photo = m.photoDesc;
+            if (m.voice) j.voice = true;
+            if (m.img) j.img = m.img;
+        }
+        mutate(j);
+        const kind = m.dir === 'out' ? 'out' : 'sms';
+        chatMsg.mes = chatMsg.mes.slice(0, m.tagStart) + `<!--tel:${kind}:${JSON.stringify(j)}-->` + chatMsg.mes.slice(m.tagEnd);
+        await saveChatConditional();
+        return true;
+    } catch (e) {
+        console.warn('[GlassPhone] rewriteSmsTag failed:', e);
+        return false;
+    }
+}
+
 // ── Голосовые: дорожка детерминирована текстом (стабильна между рендерами),
 // длительность оценивается по числу слов (~2.4 слова/сек, 0:02–3:00)
 function voiceBars(seed, n = 27) {
@@ -1358,9 +1405,14 @@ function renderThread(screen) {
         const senderLabel = t.isGroup && m.dir === 'in' && m.from
             ? `<div class="gp-bubble-sender" style="color:${senderColor(m.from)}">${esc(m.from)}</div>` : '';
         const body = m.voice ? voiceBubbleHtml(m) : esc(m.text);
+        const reaction = m.react ? REACTIONS.find(r => r.id === m.react) : null;
+        const reactChip = reaction ? `<span class="gp-react-chip">${ic(reaction.icon)}</span>` : '';
+        const picker = (_reactPickerFor === mi && _reactPickerKey === t.key)
+            ? `<div class="gp-react-picker">${REACTIONS.map(r => `<button data-react="${r.id}" data-react-mi="${mi}" class="${m.react === r.id ? 'gp-selected' : ''}" title="${r.ru}">${ic(r.icon)}</button>`).join('')}</div>` : '';
         bubbles += `
-        <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}">
-            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}">${senderLabel}${media}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button></div>
+        <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}${reaction ? ' gp-has-react' : ''}">
+            ${picker}
+            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}" data-bmi="${mi}">${senderLabel}${media}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button>${reactChip}</div>
             ${tm ? `<div class="gp-bubble-time">${esc(tm)}</div>` : ''}
         </div>`;
     }
@@ -1532,6 +1584,40 @@ function renderThread(screen) {
     });
     sendBtn?.addEventListener('click', () => doSend(t.key));
     screen.querySelector('#gp-regen')?.addEventListener('click', () => doRegen(t.key));
+    // Реакции: тап по пузырю → пикер; выбор пишет react в тег + журнал
+    screen.querySelectorAll('[data-bmi]').forEach(b => b.addEventListener('click', () => {
+        const mi = parseInt(b.getAttribute('data-bmi'));
+        const wasOpen = _reactPickerFor === mi && _reactPickerKey === t.key;
+        _reactPickerFor = wasOpen ? null : mi;
+        _reactPickerKey = t.key;
+        render();
+    }));
+    screen.querySelectorAll('[data-react]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const mi = parseInt(b.getAttribute('data-react-mi'));
+        const m = t.messages[mi];
+        const r = REACTIONS.find(x => x.id === b.getAttribute('data-react'));
+        if (!m || !r) return;
+        const removing = m.react === r.id;
+        _reactPickerFor = null;
+        const ok = await rewriteSmsTag(m, t, (j) => {
+            if (removing) delete j.react;
+            else j.react = r.id;
+        });
+        if (!ok) {
+            toast('Не получилось', 'fa-circle-exclamation');
+            render();
+            return;
+        }
+        m.react = removing ? null : r.id; // мгновенно, до перескана
+        // В журнал — только НОВАЯ реакция на чужое сообщение (снятие — шум)
+        if (!removing && m.dir === 'in') {
+            logSocialToChat(`${getUserName()} поставила реакцию «${r.ru}» на сообщение ${m.from || t.name}: «${String(m.text || (m.photoDesc ? 'фото' : m.voice ? 'голосовое' : '')).slice(0, 80)}»`);
+        }
+        applyChatHiding();
+        render();
+    }));
+
     // Генерация фото по описанию ММС (заглушка → реальная картинка).
     // Результат пишем в img прямо в tel:sms тег — переживает пересканирование.
     screen.querySelectorAll('[data-mmsgen]').forEach(b => b.addEventListener('click', async (e) => {

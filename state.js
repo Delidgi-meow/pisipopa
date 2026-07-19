@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.20.10';
+export const GP_VERSION = '1.22.1';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -38,6 +38,14 @@ const defaultSettings = () => ({
     imageGenExtension: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
+    // Профиль подключения картинко-расширения ТОЛЬКО для телефона
+    // ('' = активный профиль основного чата). Профили живут в
+    // extension_settings.inline_image_gen.connectionProfiles (novarakk и форки)
+    imageGenProfileId: '',
+    // Стиль картинко-расширения ТОЛЬКО для телефона ('' = активный стиль).
+    // Стили у новорака ГЛОБАЛЬНЫЕ (не входят в профиль подключения) — поэтому
+    // телефону нужен свой выбор: на другой модели нужен другой стиль
+    imageGenStyleId: '',
     // Макс. длина ответа для генерации соцсетей (0 = авто по задаче). Если модель
     // рвёт JSON из-за лимита токенов — поднять (действует как ПОЛ: не ниже задачи).
     socialMaxTokens: 0,
@@ -47,6 +55,9 @@ const defaultSettings = () => ({
     // главперсонажей на чужих аккаунтах дописываются автоматически ПОСЛЕ него.
     imgPromptIg: 'social media post, self-taken candid framing',
     imgPromptOf: 'intimate boudoir shot, self-taken framing',
+    // Кадры твича: чужой эфир (что показывает камера стрима) и свой (фейскам)
+    imgPromptTwWatch: 'livestream video frame, what the stream camera shows, stream overlay vibe',
+    imgPromptTwMy: 'live webcam stream frame, streamer facecam view, stream overlay vibe',
     // Booru-теги: перед генерацией сцена конвертируется в англ. danbooru-теги
     // (1girl/1boy, solo, hair, ...) — для NovelAI и аниме-моделей, которые не
     // понимают короткие описания на русском. Стоит доп. текстовый запрос.
@@ -72,6 +83,9 @@ const defaultSettings = () => ({
     customCss: '',
     // Автоматически тянуть аватарки из карточек персонажей/персоны
     autoAvatars: true,
+    // Аватарки НПС из интернета: контактам без фото/карточки детерминированно
+    // подтягивается портрет с randomuser.me (по хэшу имени; пол — по окончанию)
+    onlineAvatars: true,
     // Прикладывать фото к генерации комментов, даже когда есть описание (дороже по токенам)
     visionInComments: false,
     // Журнал соцсетей: посты юзера пишутся скрытой строкой в чат — попадают в контекст

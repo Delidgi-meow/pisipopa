@@ -24,12 +24,15 @@ import {
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
+    getStories, activeStories, addStory, deleteStory, bumpStoryViews, generateContactStories,
     generateRepLabel,
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
+import { getDiscord, findDServer, findDChannel, refreshDiscordServers, refreshDChannel, postToDChannel, deleteDServer } from './discord.js';
+import { getTwitch, findStream, refreshStreams, tickStream, donateToStream, startMyStream, tickMyStream, endMyStream } from './twitch.js';
 import { getNotes, addNote, updateNote, deleteNote, toggleNoteShared } from './notes.js';
 import { tr, trDom, lang, DAYS_I18N, MONTHS_I18N } from './i18n.js';
 
@@ -86,10 +89,39 @@ function initialOf(name) {
     return esc(t.charAt(0).toUpperCase() || '?');
 }
 
-// Аватар: фото если загружено, иначе градиент с инициалом
+// Онлайн-аватар для НПС без фото: детерминированный портрет с randomuser.me
+// (хэш имени → номер 0-98; пол — по окончанию первого имени, с исключениями)
+const MALE_A_NAMES = new Set([
+    'никита', 'илья', 'лука', 'фома', 'кузьма', 'данила', 'савва', 'миша', 'паша',
+    'саша', 'гоша', 'лёша', 'леша', 'ваня', 'петя', 'коля', 'толя', 'вася', 'дима',
+    'костя', 'витя', 'юра', 'боря', 'серёжа', 'сережа', 'стёпа', 'степа', 'лёва',
+    'лева', 'гриша', 'тёма', 'тема', 'рома', 'слава', 'жора', 'сеня', 'веня', 'митя',
+]);
+// Женские имена НЕ на -а/-я
+const FEMALE_X_NAMES = new Set([
+    'марго', 'любовь', 'нинель', 'николь', 'мишель', 'рахиль', 'эстер', 'руфь',
+    'кармен', 'ассоль', 'сольвейг', 'ингрид', 'астрид', 'гретхен', 'элен', 'джейн',
+    'кейт', 'мэри', 'энн', 'грейс', 'скарлетт', 'жанетт', 'фло',
+]);
+function onlineAvatarUrl(name) {
+    const first = String(name || '').trim().split(/\s+/)[0].toLowerCase();
+    if (!first || /^\+?\d/.test(first)) return ''; // номера телефонов — без портрета
+    let h = 0;
+    for (const ch of String(name)) h = (Math.imul(h, 31) + ch.codePointAt(0)) | 0;
+    const n = Math.abs(h) % 99;
+    const fem = (/[ая]$/.test(first) && !MALE_A_NAMES.has(first)) || FEMALE_X_NAMES.has(first);
+    return `https://randomuser.me/api/portraits/${fem ? 'women' : 'men'}/${n}.jpg`;
+}
+
+// Аватар: фото если загружено, иначе онлайн-портрет (если включено),
+// под ним всегда градиент с инициалом — если источник недоступен, img прячется
 function avatarHtml(name, avatarUrl, cls = 'gp-avatar') {
     if (avatarUrl) {
         return `<div class="${cls} gp-avatar-img"><img src="${esc(avatarUrl)}" alt=""></div>`;
+    }
+    const online = getSettings().onlineAvatars !== false ? onlineAvatarUrl(name) : '';
+    if (online) {
+        return `<div class="${cls} gp-avatar-img" style="${avatarStyle(name)}"><span class="gp-avatar-fb">${initialOf(name)}</span><img src="${esc(online)}" alt="" loading="lazy" onerror="this.style.display='none'"></div>`;
     }
     return `<div class="${cls}" style="${avatarStyle(name)}">${initialOf(name)}</div>`;
 }
@@ -564,6 +596,8 @@ export function render() {
     else if (currentScreen === 'ig') renderIg(screen);
     else if (currentScreen === 'igview' && currentPostId) renderIgView(screen);
     else if (currentScreen === 'ignew') renderIgNew(screen);
+    else if (currentScreen === 'ignewstory') renderIgNewStory(screen);
+    else if (currentScreen === 'igstory') renderIgStory(screen);
     else if (currentScreen === 'socialhub') renderSocialHub(screen);
     else if (currentScreen === 'storyevent') renderStoryEvent(screen);
     else if (currentScreen === 'storyresult') renderStoryResult(screen);
@@ -580,8 +614,12 @@ export function render() {
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
     else if (currentScreen === 'casino') renderCasino(screen);
     else if (currentScreen === 'news') renderNews(screen);
+    else if (currentScreen === 'discord') renderDiscord(screen);
+    else if (currentScreen === 'dchannel') renderDChannel(screen);
+    else if (currentScreen === 'twitch') renderTwitch(screen);
+    else if (currentScreen === 'stream') renderStream(screen);
+    else if (currentScreen === 'mystream') renderMyStream(screen);
     else if (currentScreen === 'notes') renderNotes(screen);
-    else if (currentScreen === 'gallery') renderGallery(screen);
     else if (currentScreen === 'appearance') renderAppearance(screen);
     else renderHome(screen);
     // Перевод отрендеренного экрана (en) / восстановление оригиналов (ru)
@@ -934,9 +972,13 @@ function renderHome(screen) {
                     <div class="gp-app-icon gp-app-news">${ic('fa-newspaper')}</div>
                     <div class="gp-app-name">Новости</div>
                 </div>
-                <div class="gp-app" data-app="gallery">
-                    <div class="gp-app-icon gp-app-gallery">${ic('fa-images')}</div>
-                    <div class="gp-app-name">Галерея</div>
+                <div class="gp-app" data-app="discord">
+                    <div class="gp-app-icon gp-app-discord">${brand('fa-discord')}</div>
+                    <div class="gp-app-name">Discord</div>
+                </div>
+                <div class="gp-app" data-app="twitch">
+                    <div class="gp-app-icon gp-app-twitch">${brand('fa-twitch')}${getTwitch().myStream ? '<span class="gp-app-badge gp-live-badge">LIVE</span>' : ''}</div>
+                    <div class="gp-app-name">Twitch</div>
                 </div>
                 <div class="gp-app" data-app="notes">
                     <div class="gp-app-icon gp-app-notes">${ic('fa-note-sticky')}</div>
@@ -2280,6 +2322,7 @@ function renderIg(screen) {
             <button class="gp-iconbtn" id="gp-ig-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-feed" id="gp-ig-feed">
+            ${igStoriesRow()}
             ${posts.length === 0
                 ? `<div class="gp-empty"><div class="gp-empty-icon">${brand('fa-instagram')}</div><div class="gp-empty-title">Лента пуста</div><div class="gp-empty-text">${ic('fa-wand-magic-sparkles')} — сгенерировать ленту<br>${ic('fa-plus')} — выложить своё фото</div></div>`
                 : posts.map(p => igCard(p)).join('')}
@@ -2288,6 +2331,17 @@ function renderIg(screen) {
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
     bindSocialSystemLinks(screen);
     screen.querySelector('#gp-ig-new')?.addEventListener('click', () => goto('ignew'));
+    screen.querySelector('#gp-ig-story-me')?.addEventListener('click', () => {
+        _storyAuthor = null; // свои
+        if (activeStories().some(s => s.ak === 'user')) { _storyIdx = 0; goto('igstory'); }
+        else goto('ignewstory');
+    });
+    screen.querySelector('#gp-ig-story-add')?.addEventListener('click', () => goto('ignewstory'));
+    screen.querySelectorAll('[data-storyauthor]').forEach(b => b.addEventListener('click', () => {
+        _storyAuthor = b.getAttribute('data-storyauthor');
+        _storyIdx = 0;
+        goto('igstory');
+    }));
     screen.querySelector('#gp-ig-gen')?.addEventListener('click', async () => {
         if (genBusy) return;
         genBusy = true; render();
@@ -2436,6 +2490,221 @@ function renderIgView(screen) {
 
 // Новый пост юзера с загрузкой фото
 let _igDraftImage = null;
+// ═══ ИНСТА-СТОРИС ═══
+
+let _storyDraftImage = null;
+let _storyGenBusy = false;
+let _storyIdx = 0;
+let _storyAuthor = null;   // null = свои сторис, иначе имя автора
+let _othersStoriesBusy = false;
+
+function igStoriesRow() {
+    const all = activeStories();
+    const mine = all.filter(s => s.ak === 'user');
+    // Чужие сторис группируются по автору — один кружок на человека
+    const others = [];
+    const seen = new Set();
+    for (const s of all) {
+        if (s.ak === 'user' || !s.author || seen.has(s.author)) continue;
+        seen.add(s.author);
+        others.push(s);
+    }
+    const ava = avatarHtml(getUserName(), avatarForAuthor('user'), 'gp-avatar');
+    return `
+        <div class="gp-igst-row">
+            <button class="gp-igst-bubble${mine.length ? ' gp-igst-has' : ''}" id="gp-ig-story-me">
+                <span class="gp-igst-ring">${ava}${mine.length ? '' : `<span class="gp-igst-plus">${ic('fa-plus')}</span>`}</span>
+                <i>${mine.length ? 'Твоя сторис' : 'Добавить'}</i>
+            </button>
+            ${mine.length ? `
+            <button class="gp-igst-bubble" id="gp-ig-story-add">
+                <span class="gp-igst-ring gp-igst-ring-add">${ic('fa-plus')}</span>
+                <i>Ещё</i>
+            </button>` : ''}
+            ${others.map(o => `
+            <button class="gp-igst-bubble gp-igst-has" data-storyauthor="${esc(o.author)}">
+                <span class="gp-igst-ring">${avatarHtml(o.author, avatarForAuthor(o.ak), 'gp-avatar')}</span>
+                <i>${esc(o.author)}</i>
+            </button>`).join('')}
+        </div>`;
+}
+
+function renderIgNewStory(screen) {
+    currentScreen = 'ignewstory';
+    screen.innerHTML = `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">Новая сторис</div>
+        </div>
+        <div class="gp-add-form">
+            <div class="gp-ig-pick gp-igst-pick${_storyDraftImage ? ' gp-ig-pick-has' : ''}" id="gp-st-pick">
+                ${_storyDraftImage ? `<img src="${esc(_storyDraftImage)}" alt="">` : `${ic('fa-camera')}<span>Выбрать фото</span>`}
+            </div>
+            <input type="file" id="gp-st-file" accept="image/*" style="display:none">
+            <label class="gp-field">
+                <span>Что на фото</span>
+                <input type="text" id="gp-st-desc" maxlength="300" placeholder="Для генерации и реакций в ролевой">
+            </label>
+            <button class="gp-secondary" id="gp-st-draw" ${_storyGenBusy ? 'disabled' : ''}>${ic(_storyGenBusy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')} Нарисовать по описанию</button>
+            <label class="gp-field">
+                <span>Текст на сторис <i style="opacity:0.5;text-transform:none;letter-spacing:0">(необязательно)</i></span>
+                <input type="text" id="gp-st-caption" maxlength="300" placeholder="Подпись поверх фото">
+            </label>
+            <button class="gp-primary" id="gp-st-publish">${ic('fa-check')} Опубликовать</button>
+        </div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => { _storyDraftImage = null; goto('ig'); });
+    const pick = screen.querySelector('#gp-st-pick');
+    const file = screen.querySelector('#gp-st-file');
+    pick?.addEventListener('click', () => file?.click());
+    file?.addEventListener('change', async () => {
+        const f = file.files?.[0];
+        if (!f) return;
+        try {
+            _storyDraftImage = await compressImage(f, 720, 0.82);
+            render();
+        } catch (e) {
+            toast('Не удалось загрузить фото', 'fa-circle-exclamation');
+        }
+    });
+    screen.querySelector('#gp-st-draw')?.addEventListener('click', async () => {
+        if (_storyGenBusy) return;
+        const desc = screen.querySelector('#gp-st-desc')?.value.trim() || '';
+        if (!desc) { toast('Опиши, что на фото — по этому и рисуем', 'fa-circle-exclamation'); return; }
+        if (!_imgGenReady) {
+            const ready = await isImageGenAvailable();
+            if (!ready) { toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation'); return; }
+            _imgGenReady = true;
+        }
+        _storyGenBusy = true;
+        const caption = screen.querySelector('#gp-st-caption')?.value.trim() || '';
+        render();
+        try {
+            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption });
+            _storyDraftImage = src2;
+            toast('Фото готово', 'fa-image');
+        } catch (e) {
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally {
+            _storyGenBusy = false;
+            const d = document.getElementById('gp-st-desc')?.value;
+            const c = document.getElementById('gp-st-caption')?.value;
+            render();
+            const d2 = document.getElementById('gp-st-desc'); if (d2 && d) d2.value = d;
+            const c2 = document.getElementById('gp-st-caption'); if (c2 && c) c2.value = c;
+        }
+    });
+    screen.querySelector('#gp-st-publish')?.addEventListener('click', () => {
+        const desc = screen.querySelector('#gp-st-desc')?.value.trim() || '';
+        const caption = screen.querySelector('#gp-st-caption')?.value.trim() || '';
+        if (!_storyDraftImage && !desc) {
+            toast('Выбери фото или опиши, что на нём', 'fa-circle-exclamation');
+            return;
+        }
+        const story = addStory({ image: _storyDraftImage, imgDesc: desc, caption });
+        _storyDraftImage = null;
+        // Журнал: ролевая знает про сторис (с фото — vision-модель видит сама)
+        logSocialToChat(
+            `${getUserName()} выложила сторис в Instagram${desc ? ` (на фото: ${desc})` : ''}${caption ? `, текст: «${caption}»` : ''} — исчезнет через 24 часа`,
+            story.image,
+        );
+        applyChatHiding();
+        toast('Сторис опубликована', 'fa-instagram');
+        _storyAuthor = null;
+        _storyIdx = 0;
+        goto('igstory');
+        // Знакомые тоже постят: чужие сторис подъезжают следом (без картинок —
+        // рисуются по кнопке в просмотрщике)
+        if (!_othersStoriesBusy) {
+            _othersStoriesBusy = true;
+            generateContactStories().then(n => {
+                if (n > 0) toast('Появились сторис знакомых', 'fa-instagram');
+            }).catch(() => {}).finally(() => {
+                _othersStoriesBusy = false;
+                if (currentScreen === 'ig' || currentScreen === 'igstory') render();
+            });
+        }
+    });
+}
+
+function renderIgStory(screen) {
+    currentScreen = 'igstory';
+    const isMine = !_storyAuthor;
+    const stories = activeStories().filter(s => isMine ? s.ak === 'user' : s.author === _storyAuthor);
+    if (!stories.length) { goto('ig'); return; }
+    if (_storyIdx >= stories.length) _storyIdx = stories.length - 1;
+    const st = stories[_storyIdx];
+    const authorName = isMine ? getUserName() : (st.author || _storyAuthor);
+    const authorAva = avatarHtml(authorName, avatarForAuthor(isMine ? 'user' : st.ak), 'gp-avatar gp-avatar-sm');
+    const views = isMine ? bumpStoryViews(st) : 0;
+    const ageMin = Math.max(1, Math.round((Date.now() - st.time) / 60000));
+    const ageLabel = ageMin < 60 ? `${ageMin} м` : `${Math.round(ageMin / 60)} ч`;
+    const media = st.image
+        ? `<img class="gp-igst-media" src="${esc(st.image)}" alt="">`
+        : `<div class="gp-igst-media gp-igst-media-gen" style="${avatarStyle('story' + st.imgDesc)}"><span>${ic('fa-image')}</span><i>${esc(st.imgDesc)}</i></div>`;
+    screen.innerHTML = `
+        <div class="gp-igst-viewer">
+            <div class="gp-igst-segments">${stories.map((_, i2) => `<span class="${i2 < _storyIdx ? 'gp-done' : i2 === _storyIdx ? 'gp-cur' : ''}"></span>`).join('')}</div>
+            <div class="gp-igst-top">
+                ${authorAva}
+                <b>${esc(authorName)}</b>
+                <span>${esc(ageLabel)}</span>
+                ${!st.image && st.imgDesc ? `<button class="gp-iconbtn" id="gp-st-draw2" title="Нарисовать" ${_storyGenBusy ? 'disabled' : ''}>${ic(_storyGenBusy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button>` : ''}
+                <button class="gp-iconbtn gp-danger" id="gp-st-del" title="Удалить сторис">${ic('fa-trash-can')}</button>
+                <button class="gp-iconbtn" id="gp-st-close">${ic('fa-xmark')}</button>
+            </div>
+            ${media}
+            ${st.caption ? `<div class="gp-igst-caption">${esc(st.caption)}</div>` : ''}
+            ${isMine ? `<div class="gp-igst-bottom">${ic('fa-eye')} ${views}</div>` : ''}
+            <div class="gp-igst-nav gp-igst-nav-left" id="gp-st-prev"></div>
+            <div class="gp-igst-nav gp-igst-nav-right" id="gp-st-next"></div>
+        </div>`;
+    screen.querySelector('#gp-st-close')?.addEventListener('click', () => goto('ig'));
+    screen.querySelector('#gp-st-draw2')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (_storyGenBusy) return;
+        if (!_imgGenReady) {
+            const ready = await isImageGenAvailable();
+            if (!ready) { toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation'); return; }
+            _imgGenReady = true;
+        }
+        _storyGenBusy = true;
+        render();
+        try {
+            const src2 = await generatePostImage({
+                ak: isMine ? 'user' : st.ak,
+                author: authorName,
+                imgDesc: st.imgDesc,
+                caption: st.caption,
+                kind: 'ig',
+                stream: !isMine, // частичный неймматч с карточкой для НПС
+            });
+            st.image = src2;
+            saveMeta();
+            toast('Фото готово', 'fa-image');
+        } catch (err) {
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally {
+            _storyGenBusy = false;
+            if (currentScreen === 'igstory') render();
+        }
+    });
+    screen.querySelector('#gp-st-del')?.addEventListener('click', () => {
+        if (!confirm('Удалить эту сторис?')) return;
+        deleteStory(st.id);
+        if (_storyIdx > 0) _storyIdx--;
+        const left = activeStories().filter(s => isMine ? s.ak === 'user' : s.author === _storyAuthor);
+        if (!left.length) goto('ig');
+        else render();
+    });
+    screen.querySelector('#gp-st-prev')?.addEventListener('click', () => {
+        if (_storyIdx > 0) { _storyIdx--; render(); }
+    });
+    screen.querySelector('#gp-st-next')?.addEventListener('click', () => {
+        if (_storyIdx < stories.length - 1) { _storyIdx++; render(); }
+        else goto('ig');
+    });
+}
+
 function renderIgNew(screen) {
     screen.innerHTML = `
         <div class="gp-header gp-thread-header">
@@ -3428,6 +3697,428 @@ function renderCasino(screen) {
     });
 }
 
+// ═══ ДИСКОРД ═══
+// Лейаут как в настоящем Discord mobile: рейка серверов слева, панель каналов,
+// плоские сообщения с аватарками. Свой тёмный скин с блюрплом (это бренд
+// приложения, как у твиттера/инсты — темы телефона его не перекрашивают).
+
+let _dServerId = null;
+let _dChannelId = null;
+let _dBusy = false;
+
+function renderDiscord(screen) {
+    currentScreen = 'discord';
+    const d = getDiscord();
+    if (!_dServerId || !findDServer(_dServerId)) _dServerId = d.servers[0]?.id || null;
+    const srv = findDServer(_dServerId);
+    const rail = d.servers.map(s => `
+        <button class="gp-dc-srv${s.id === _dServerId ? ' gp-active' : ''}" data-dserver="${s.id}" title="${esc(s.name)}" style="${avatarStyle('ds' + s.name)}">${esc(s.name.slice(0, 2).toUpperCase())}</button>`).join('');
+    const panel = srv ? `
+        <div class="gp-dc-head">
+            <b>${esc(srv.name)}</b>
+            <button class="gp-dc-leave" data-ddel="${srv.id}" title="Покинуть сервер">${ic('fa-right-from-bracket')}</button>
+        </div>
+        ${srv.desc ? `<div class="gp-dc-desc">${esc(srv.desc)}</div>` : ''}
+        <div class="gp-dc-cat">Текстовые каналы</div>
+        ${srv.channels.map(c => `
+            <button class="gp-dc-chan" data-dchan="${c.id}">
+                <span class="gp-dc-hash">#</span>
+                <span class="gp-dc-chan-name">${esc(c.name)}</span>
+                ${c.messages.length ? `<span class="gp-dc-chan-count">${c.messages.length}</span>` : ''}
+            </button>`).join('')}
+        <div class="gp-dc-cat">Участники — ${srv.members.length}</div>
+        <div class="gp-dc-members">
+            ${srv.members.map(mb => `<span class="gp-dc-member"><i class="gp-dc-dot"></i><b style="color:${senderColor(mb)}">${esc(mb)}</b></span>`).join('')}
+        </div>` : `
+        <div class="gp-empty">
+            <div class="gp-empty-icon">${brand('fa-discord')}</div>
+            <div class="gp-empty-text">Нажми «+» — модель придумает серверы,<br>где ты могла бы состоять</div>
+        </div>`;
+    screen.innerHTML = `
+        <div class="gp-dc-skin">
+            <div class="gp-dc-rail">
+                <button class="gp-dc-home" id="gp-back">${ic('fa-chevron-left')}</button>
+                <div class="gp-dc-sep"></div>
+                ${rail}
+                <button class="gp-dc-srv gp-dc-add" id="gp-d-refresh" title="Найти серверы" ${_dBusy ? 'disabled' : ''}>${ic(_dBusy ? 'fa-spinner fa-spin' : 'fa-plus')}</button>
+            </div>
+            <div class="gp-dc-panel">${panel}</div>
+        </div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelector('#gp-d-refresh')?.addEventListener('click', async () => {
+        if (_dBusy) return;
+        _dBusy = true;
+        render();
+        try {
+            await refreshDiscordServers();
+            toast('Серверы найдены', 'fa-check');
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        } finally {
+            _dBusy = false;
+            render();
+        }
+    });
+    screen.querySelectorAll('[data-dserver]').forEach(b => b.addEventListener('click', () => {
+        _dServerId = b.getAttribute('data-dserver');
+        render();
+    }));
+    screen.querySelectorAll('[data-dchan]').forEach(b => b.addEventListener('click', () => {
+        _dChannelId = b.getAttribute('data-dchan');
+        goto('dchannel');
+    }));
+    screen.querySelectorAll('[data-ddel]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const s = findDServer(b.getAttribute('data-ddel'));
+        if (!s || !confirm(`Выйти с сервера «${s.name}»?`)) return;
+        deleteDServer(s.id);
+        _dServerId = null;
+        render();
+    }));
+}
+
+function renderDChannel(screen) {
+    currentScreen = 'dchannel';
+    const s = findDServer(_dServerId);
+    const c = findDChannel(_dServerId, _dChannelId);
+    if (!s || !c) { goto('discord'); return; }
+    const msgs = c.messages.map(mm => `
+        <div class="gp-dcmsg">
+            <span class="gp-dcmsg-ava" style="${avatarStyle(mm.user ? 'user' + mm.author : mm.author)}">${esc(String(mm.author).slice(0, 1).toUpperCase())}</span>
+            <div class="gp-dcmsg-body">
+                <b style="color:${mm.user ? 'var(--dc-blurple-light)' : senderColor(mm.author)}">${esc(mm.author)}</b>
+                <span>${esc(mm.text)}</span>
+            </div>
+        </div>`).join('');
+    setHtmlKeepScroll(screen, '.gp-dcmsg-scroll', `
+        <div class="gp-dc-skin gp-dc-skin-chat">
+            <div class="gp-dc-chathead">
+                <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+                <span class="gp-dc-hash">#</span>
+                <div class="gp-dc-chathead-title">
+                    <b>${esc(c.name)}</b>
+                    <span>${esc(s.name)}</span>
+                </div>
+                <button class="gp-iconbtn" id="gp-dc-refresh" ${_dBusy ? 'disabled' : ''}>${ic(_dBusy ? 'fa-spinner fa-spin' : 'fa-rotate-right')}</button>
+            </div>
+            <div class="gp-dcmsg-scroll" id="gp-dmsg-scroll">
+                ${msgs || `<div class="gp-dc-welcome"><span class="gp-dc-hash-big">#</span><b>Добро пожаловать в #${esc(c.name)}!</b><span>${esc(c.topic || 'Начало канала.')}</span><span class="gp-dc-welcome-hint">Нажми ↻ — канал оживёт, или напиши первой</span></div>`}
+                ${_dBusy ? `<div class="gp-dcmsg gp-dmsg-typing"><span></span><span></span><span></span></div>` : ''}
+            </div>
+            <div class="gp-dc-inputwrap">
+                <textarea id="gp-d-input" rows="1" placeholder="Написать в #${esc(c.name)}"></textarea>
+                <button class="gp-dc-send" id="gp-d-send" ${_dBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+            </div>
+        </div>`);
+    const scroll = screen.querySelector('#gp-dmsg-scroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('discord'));
+    const dRun = async (fn) => {
+        if (_dBusy) return;
+        _dBusy = true;
+        render();
+        try {
+            await fn();
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        } finally {
+            _dBusy = false;
+            applyChatHiding(); // журнальные строки — с глаз долой
+            render();
+        }
+    };
+    screen.querySelector('#gp-dc-refresh')?.addEventListener('click', () => dRun(() => refreshDChannel(s.id, c.id)));
+    const input = screen.querySelector('#gp-d-input');
+    const send = () => {
+        const v = (input?.value || '').trim();
+        if (!v) return;
+        input.value = '';
+        dRun(() => postToDChannel(s.id, c.id, v));
+    };
+    screen.querySelector('#gp-d-send')?.addEventListener('click', send);
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+}
+
+// ═══ ТВИЧ ═══
+// Фирменный скин (тёмный + фиолетовый #9146ff), карточки эфиров с превью,
+// чат твич-строками «ник: текст», донат-алерты поверх кадра.
+
+let _twStreamId = null;
+let _twBusy = false;
+let _twAlert = null;      // текущий донат-алерт {from, amount, text}
+let _twAlertQueue = [];
+let _twAlertTimer = null;
+
+function showTwAlert(alert) {
+    _twAlertQueue.push(alert);
+    if (!_twAlert) _nextTwAlert();
+}
+function _nextTwAlert() {
+    clearTimeout(_twAlertTimer);
+    _twAlert = _twAlertQueue.shift() || null;
+    if (isPhoneOpen() && (currentScreen === 'stream' || currentScreen === 'mystream')) render();
+    if (_twAlert) _twAlertTimer = setTimeout(_nextTwAlert, 4500);
+}
+
+// Кадр стрима: рисуем по описанию сцены через картинко-пайплайн (свой стиль/рефы)
+async function drawStreamFrame(target, streamer, isMine) {
+    if (!_imgGenReady) {
+        const ready = await isImageGenAvailable();
+        if (!ready) return; // нет картинко-расширения — живём на текстовой сцене
+        _imgGenReady = true;
+    }
+    try {
+        const src = await generatePostImage({
+            imgDesc: target.scene,
+            author: isMine ? getUserName() : streamer,
+            ak: isMine ? 'user' : `contact:${keyOf(streamer)}`,
+            kind: 'ig',
+            stream: true, // рефы: частичный матч имени с карточкой + аватар контакта
+            framing: isMine
+                ? (getSettings().imgPromptTwMy || 'live webcam stream frame, streamer facecam view, stream overlay vibe')
+                : (getSettings().imgPromptTwWatch || 'livestream video frame, what the stream camera shows, stream overlay vibe'),
+        });
+        target.image = src;
+        target.imgTs = Date.now();
+        saveMeta();
+    } catch (e) {
+        console.warn('[GlassPhone] stream frame gen failed:', e);
+    }
+}
+
+function twAlertHtml() {
+    if (!_twAlert) return '';
+    return `
+        <div class="gp-twch-alert">
+            <span class="gp-twch-alert-icon">${ic('fa-coins')}</span>
+            <div class="gp-twch-alert-body">
+                <b>${esc(_twAlert.from)} — ${esc(fmtMoney(_twAlert.amount))}</b>
+                ${_twAlert.text ? `<span>${esc(_twAlert.text)}</span>` : ''}
+            </div>
+        </div>`;
+}
+
+function twFrameHtml(target) {
+    const inner = target.image
+        ? `<img src="${esc(target.image)}${target.imgTs ? `?t=${target.imgTs}` : ''}" alt="">`
+        : `<div class="gp-twch-frame-gen" style="${avatarStyle('stream' + (target.title || ''))}">${ic('fa-video')}</div>`;
+    return `
+        <div class="gp-twch-frame">
+            ${inner}
+            <span class="gp-twch-live-tag">LIVE</span>
+            ${_twBusy ? `<div class="gp-twch-frame-busy">${ic('fa-spinner fa-spin')}</div>` : ''}
+            ${twAlertHtml()}
+        </div>`;
+}
+
+function twChatHtml(chat) {
+    return chat.map(mm => {
+        if (mm.don) {
+            return `
+            <div class="gp-twch-don">
+                <b>${ic('fa-coins')} ${esc(mm.author)} — ${esc(fmtMoney(mm.don))}</b>
+                ${mm.text ? `<span>${esc(mm.text)}</span>` : ''}
+            </div>`;
+        }
+        return `
+            <div class="gp-twch-line${mm.host ? ' gp-twch-line-host' : ''}">
+                <b style="color:${mm.user ? 'var(--twch-purple-light)' : senderColor(mm.author)}">${mm.host ? ic('fa-tower-broadcast') + ' ' : ''}${esc(mm.author)}</b><span class="gp-twch-colon">:</span>
+                <span>${esc(mm.text)}</span>
+            </div>`;
+    }).join('');
+}
+
+function renderTwitch(screen) {
+    currentScreen = 'twitch';
+    const t = getTwitch();
+    const cards = t.streams.map(s => `
+        <div class="gp-twch-card" data-stream="${s.id}">
+            <div class="gp-twch-thumb" style="${avatarStyle('stream' + s.title)}">
+                ${s.image ? `<img src="${esc(s.image)}" alt="">` : ic('fa-play')}
+                <span class="gp-twch-live-tag">LIVE</span>
+                <span class="gp-twch-viewers">${ic('fa-user')} ${s.viewers}</span>
+            </div>
+            <div class="gp-twch-meta">
+                <span class="gp-twch-ava" style="${avatarStyle(s.streamer)}">${esc(s.streamer.slice(0, 1).toUpperCase())}</span>
+                <div class="gp-twch-meta-text">
+                    <b>${esc(s.title)}</b>
+                    <span>${esc(s.streamer)}</span>
+                    <i>${esc(s.category)}</i>
+                </div>
+            </div>
+        </div>`).join('');
+    screen.innerHTML = `
+        <div class="gp-twch-skin">
+            <div class="gp-twch-head">
+                <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+                <b>${brand('fa-twitch')} Twitch</b>
+                <button class="gp-iconbtn" id="gp-twch-refresh" ${_twBusy ? 'disabled' : ''}>${ic(_twBusy ? 'fa-spinner fa-spin' : 'fa-rotate-right')}</button>
+            </div>
+            <div class="gp-twch-scroll">
+                <button class="gp-twch-golive" id="gp-golive">${ic('fa-tower-broadcast')} ${getTwitch().myStream ? 'Ты в эфире — открыть' : 'Начать свой стрим'}</button>
+                ${cards || `<div class="gp-empty"><div class="gp-empty-icon">${brand('fa-twitch')}</div><div class="gp-empty-text">Нажми ↻ — модель придумает,<br>кто сейчас в эфире</div></div>`}
+            </div>
+        </div>`;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelector('#gp-twch-refresh')?.addEventListener('click', async () => {
+        if (_twBusy) return;
+        _twBusy = true;
+        render();
+        try {
+            await refreshStreams();
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        } finally {
+            _twBusy = false;
+            render();
+        }
+    });
+    screen.querySelectorAll('[data-stream]').forEach(b => b.addEventListener('click', () => {
+        _twStreamId = b.getAttribute('data-stream');
+        goto('stream');
+        const s = findStream(_twStreamId);
+        if (s && !s.image && s.scene) drawStreamFrame(s, s.streamer, false).then(() => { if (currentScreen === 'stream') render(); });
+    }));
+    screen.querySelector('#gp-golive')?.addEventListener('click', () => {
+        if (getTwitch().myStream) { goto('mystream'); return; }
+        const title = prompt('Название стрима:', '');
+        if (title === null || !title.trim()) return;
+        const cat = prompt('Категория (IRL / игра / музыка...):', 'IRL') || 'IRL';
+        startMyStream(title.trim(), cat.trim());
+        goto('mystream');
+        // первый тик: зрители заходят
+        _twRun(() => tickMyStream(null), true);
+    });
+}
+
+// Обёртка тиков твича: busy-стейт, донат-алерты, авто-перерисовка кадра
+async function _twRun(fn, mine = false) {
+    if (_twBusy) return;
+    _twBusy = true;
+    render();
+    try {
+        const res = await fn();
+        const sceneChanged = mine ? !!res?.sceneChanged : !!res;
+        for (const a of (mine ? res?.alerts || [] : [])) showTwAlert(a);
+        const target = mine ? getTwitch().myStream : findStream(_twStreamId);
+        // Кадр перерисовывается сам, когда сцена изменилась (визуальная новелла)
+        if (target && target.scene && (sceneChanged || !target.image)) {
+            await drawStreamFrame(target, mine ? getUserName() : target.streamer, mine);
+        }
+    } catch (e) {
+        toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+    } finally {
+        _twBusy = false;
+        applyChatHiding(); // журнальные строки — с глаз долой
+        render();
+    }
+}
+
+function renderStream(screen) {
+    currentScreen = 'stream';
+    const s = findStream(_twStreamId);
+    if (!s) { goto('twitch'); return; }
+    setHtmlKeepScroll(screen, '.gp-twch-chat', `
+        <div class="gp-twch-skin gp-twch-skin-live">
+            <div class="gp-twch-head">
+                <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+                <div class="gp-twch-head-title">
+                    <b>${esc(s.streamer)}</b>
+                    <span>${esc(s.title)}</span>
+                </div>
+                <span class="gp-twch-eye">${ic('fa-user')} ${s.viewers}</span>
+            </div>
+            ${twFrameHtml(s)}
+            <div class="gp-twch-info"><span class="gp-twch-cat">${esc(s.category)}</span></div>
+            ${s.scene ? `<div class="gp-twch-scene">${esc(s.scene)}</div>` : ''}
+            <div class="gp-twch-chat" id="gp-twch-chat">
+                ${twChatHtml(s.chat) || `<div class="gp-twch-chat-empty">Чат подгрузится с первым событием</div>`}
+            </div>
+            <div class="gp-twch-inputbar">
+                <button class="gp-twch-tool" id="gp-st-tick" title="Что дальше?" ${_twBusy ? 'disabled' : ''}>${ic(_twBusy ? 'fa-spinner fa-spin' : 'fa-forward')}</button>
+                <button class="gp-twch-tool gp-twch-donbtn" id="gp-st-don" title="Донат" ${_twBusy ? 'disabled' : ''}>${ic('fa-coins')}</button>
+                <textarea id="gp-st-input" rows="1" placeholder="Отправить сообщение"></textarea>
+                <button class="gp-twch-send" id="gp-st-send" ${_twBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+            </div>
+        </div>`);
+    const chatEl = screen.querySelector('#gp-twch-chat');
+    if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('twitch'));
+    screen.querySelector('#gp-st-tick')?.addEventListener('click', () => _twRun(() => tickStream(s.id, null)));
+    const input = screen.querySelector('#gp-st-input');
+    screen.querySelector('#gp-st-don')?.addEventListener('click', () => {
+        const amtRaw = prompt(`Сумма доната для ${s.streamer}:`, '100');
+        if (amtRaw === null) return;
+        const amount = Math.round(parseFloat(String(amtRaw).replace(',', '.')) || 0);
+        if (amount <= 0) { toast('Сумма доната должна быть больше нуля', 'fa-circle-exclamation'); return; }
+        const text = (input?.value || '').trim() || (prompt('Сообщение к донату (можно пусто):', '') || '').trim();
+        if (input) input.value = '';
+        showTwAlert({ from: getUserName(), amount, text });
+        _twRun(() => donateToStream(s.id, amount, text));
+    });
+    const send = () => {
+        const v = (input?.value || '').trim();
+        if (!v) return;
+        input.value = '';
+        _twRun(() => tickStream(s.id, v));
+    };
+    screen.querySelector('#gp-st-send')?.addEventListener('click', send);
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+}
+
+function renderMyStream(screen) {
+    currentScreen = 'mystream';
+    const my = getTwitch().myStream;
+    if (!my) { goto('twitch'); return; }
+    setHtmlKeepScroll(screen, '.gp-twch-chat', `
+        <div class="gp-twch-skin gp-twch-skin-live">
+            <div class="gp-twch-head">
+                <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+                <div class="gp-twch-head-title">
+                    <b>${esc(my.title)}</b>
+                    <span>${esc(my.category)}${my.donTotal ? ` · донаты ${esc(fmtMoney(my.donTotal))}` : ''}</span>
+                </div>
+                <span class="gp-twch-eye">${ic('fa-user')} ${my.viewers}</span>
+                <button class="gp-twch-endbtn" id="gp-st-end" title="Завершить стрим">${ic('fa-stop')}</button>
+            </div>
+            ${twFrameHtml(my)}
+            ${my.scene ? `<div class="gp-twch-scene">${esc(my.scene)}</div>` : ''}
+            <div class="gp-twch-chat" id="gp-twch-chat">
+                ${twChatHtml(my.chat) || `<div class="gp-twch-chat-empty">Зрители заходят...</div>`}
+            </div>
+            <div class="gp-twch-inputbar">
+                <button class="gp-twch-tool" id="gp-st-tick" title="Пауза: чат живёт сам" ${_twBusy ? 'disabled' : ''}>${ic(_twBusy ? 'fa-spinner fa-spin' : 'fa-forward')}</button>
+                <textarea id="gp-st-input" rows="1" placeholder="Что говоришь / делаешь в кадре..."></textarea>
+                <button class="gp-twch-send" id="gp-st-send" ${_twBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+            </div>
+        </div>`);
+    const chatEl = screen.querySelector('#gp-twch-chat');
+    if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('twitch'));
+    screen.querySelector('#gp-st-end')?.addEventListener('click', () => {
+        if (!confirm('Завершить стрим? Итог уйдёт в историю.')) return;
+        endMyStream();
+        applyChatHiding();
+        goto('twitch');
+    });
+    screen.querySelector('#gp-st-tick')?.addEventListener('click', () => _twRun(() => tickMyStream(null), true));
+    const input = screen.querySelector('#gp-st-input');
+    const send = () => {
+        const v = (input?.value || '').trim();
+        if (!v) return;
+        input.value = '';
+        _twRun(() => tickMyStream(v), true);
+    };
+    screen.querySelector('#gp-st-send')?.addEventListener('click', send);
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+}
+
 // ═══ НОВОСТИ ═══
 
 let _newsBusy = false;
@@ -3536,68 +4227,6 @@ function renderNotes(screen) {
             render();
         }
     }));
-}
-
-// ═══ ГАЛЕРЕЯ ═══
-
-// Все картинки чата: посты инсты/OF, фото в смс, вложения сообщений
-function collectGalleryImages() {
-    const seen = new Set();
-    const out = [];
-    const push = (src, label) => {
-        if (!src || seen.has(src)) return;
-        seen.add(src);
-        out.push({ src, label });
-    };
-    try {
-        for (const p of getIgPosts()) if (p.image) push(p.image, 'Instagram');
-        for (const p of getOfPosts()) if (p.image) push(p.image, 'OnlyFans');
-    } catch (e) { /* ignore */ }
-    try {
-        const { threads } = scanChat();
-        for (const t of threads.values()) for (const m of t.messages) if (m.img) push(m.img, 'СМС');
-    } catch (e) { /* ignore */ }
-    try {
-        const chat = SillyTavern.getContext()?.chat || [];
-        for (const msg of chat) {
-            const img = extraImageOf(msg);
-            if (img) push(img, msg.is_user ? 'Чат' : (msg.name || 'Чат'));
-        }
-    } catch (e) { /* ignore */ }
-    return out.reverse(); // свежие сверху
-}
-
-function renderGallery(screen) {
-    currentScreen = 'gallery';
-    const imgs = collectGalleryImages();
-    setHtmlKeepScroll(screen, '.gp-gallery-scroll', `
-        <div class="gp-header gp-thread-header">
-            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
-            <div class="gp-title gp-title-app gp-gallery-title">Галерея</div>
-            <span style="width:32px"></span>
-        </div>
-        <div class="gp-gallery-scroll">
-            ${imgs.length === 0
-                ? `<div class="gp-empty"><div class="gp-empty-icon">${ic('fa-images')}</div><div class="gp-empty-title">Пока пусто</div><div class="gp-empty-text">Здесь соберутся все фото:<br>из смс, постов и чата</div></div>`
-                : `<div class="gp-gallery-grid">${imgs.map((im, i) => `
-                    <button class="gp-gallery-cell" data-gal="${i}" title="${esc(im.label)}"><img src="${esc(im.src)}" loading="lazy" alt=""></button>`).join('')}</div>`}
-        </div>`);
-    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
-    screen.querySelectorAll('[data-gal]').forEach(btn => btn.addEventListener('click', () => {
-        const im = imgs[parseInt(btn.getAttribute('data-gal'))];
-        if (im) openGalleryViewer(im.src);
-    }));
-}
-
-function openGalleryViewer(src) {
-    const ph = document.getElementById('gp-phone');
-    if (!ph) return;
-    ph.querySelector('.gp-gallery-viewer')?.remove();
-    const v = document.createElement('div');
-    v.className = 'gp-gallery-viewer';
-    v.innerHTML = `<img src="${esc(src)}" alt=""><button class="gp-iconbtn gp-gallery-close">${ic('fa-xmark')}</button>`;
-    v.addEventListener('click', () => v.remove());
-    ph.appendChild(v);
 }
 
 // ═══ СКАМ-СМС: доставка призраком ═══

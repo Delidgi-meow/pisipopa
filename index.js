@@ -3,7 +3,7 @@ import { eventSource, event_types, saveSettingsDebounced } from '../../../../scr
 import { getSettings, GP_VERSION } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, deliverScamSms } from './ui.js';
-import { harvestSocialTags, setUserHandle, getUserHandle } from './social.js';
+import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
@@ -61,12 +61,16 @@ function setupSettingsPanel() {
             <summary><i class="fa-solid fa-image"></i><span><b>Изображения</b><small>Модель, формат и промпты</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
             <div class="gp-settings-group-body gp-settings-grid">
                 <label class="gp-settings-field gp-settings-wide"><span>Модель картинок</span><span class="gp-settings-control-row"><input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" placeholder="авто"><datalist id="gp-imgmodels"></datalist><button class="menu_button gp-settings-icon-button" id="gp-imgmodel-refresh" type="button" title="Загрузить список моделей" aria-label="Загрузить список моделей"><i class="fa-solid fa-rotate"></i></button></span></label>
+                <label class="gp-settings-field"><span>Профиль картинко-расширения</span><select id="gp-set-imgprofile" class="text_pole"></select></label>
+                <label class="gp-settings-field"><span>Стиль картинок телефона</span><select id="gp-set-imgstyle" class="text_pole"></select></label>
                 <div class="gp-settings-checks gp-settings-wide">
                     <label><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
                     <label><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
                 </div>
                 <label class="gp-settings-field"><span>Публичные посты</span><textarea id="gp-set-imgprompt-ig" class="text_pole" rows="3"></textarea></label>
                 <label class="gp-settings-field"><span>Закрытые посты</span><textarea id="gp-set-imgprompt-of" class="text_pole" rows="3"></textarea></label>
+                <label class="gp-settings-field"><span>Твич: чужой эфир</span><textarea id="gp-set-imgprompt-twwatch" class="text_pole" rows="3"></textarea></label>
+                <label class="gp-settings-field"><span>Твич: свой эфир</span><textarea id="gp-set-imgprompt-twmy" class="text_pole" rows="3"></textarea></label>
                 <div class="gp-settings-wide gp-settings-align-end"><button id="gp-imgprompt-apply" type="button" class="menu_button">Применить</button></div>
             </div>
         </details>
@@ -77,6 +81,7 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks">
                     <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
+                    <label><input type="checkbox" id="gp-set-onlineava" ${s.onlineAvatars !== false ? 'checked' : ''}><span>Аватарки НПС из интернета</span></label>
                 </div>
                 <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
             </div>
@@ -91,6 +96,40 @@ function setupSettingsPanel() {
     $('#gp-set-imgmodel').val(s.imageGenModel || '');
     $('#gp-set-imgprompt-ig').val(s.imgPromptIg || '');
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
+    $('#gp-set-imgprompt-twwatch').val(s.imgPromptTwWatch || '');
+    $('#gp-set-imgprompt-twmy').val(s.imgPromptTwMy || '');
+    // Профили подключения картинко-расширения (общее ведро novarakk и форков).
+    // '' = телефон рисует через активный профиль основного чата
+    {
+        const sel = $('#gp-set-imgprofile');
+        const profiles = listIigProfiles();
+        sel.empty().append(`<option value="">Как в основном чате</option>`);
+        for (const p of profiles) sel.append($('<option>').val(p.id).text(p.name));
+        if (s.imageGenProfileId && !profiles.some(p => p.id === s.imageGenProfileId)) {
+            s.imageGenProfileId = ''; // профиль удалили в расширении — тихий сброс
+        }
+        sel.val(s.imageGenProfileId || '');
+        sel.off('change.gp').on('change.gp', function () {
+            getSettings().imageGenProfileId = String($(this).val() || '');
+            $('#gp-imgmodels').empty(); // список моделей от старого профиля устарел — ↻ перечитает
+            saveSettingsDebounced();
+        });
+    }
+    // Стиль картинок для телефона (стили расширения глобальные — не в профилях)
+    {
+        const sel = $('#gp-set-imgstyle');
+        const styles = listIigStyles();
+        sel.empty().append(`<option value="">Как в основном чате</option>`);
+        for (const p of styles) sel.append($('<option>').val(p.id).text(p.name));
+        if (s.imageGenStyleId && !styles.some(p => p.id === s.imageGenStyleId)) {
+            s.imageGenStyleId = ''; // стиль удалили в расширении — тихий сброс
+        }
+        sel.val(s.imageGenStyleId || '');
+        sel.off('change.gp').on('change.gp', function () {
+            getSettings().imageGenStyleId = String($(this).val() || '');
+            saveSettingsDebounced();
+        });
+    }
     // Перевод панели (en) — оригиналы хранятся на нодах, переключение обратимо
     const translatePanel = () => { try { trDom(document.getElementById('gp-settings-drawer')); } catch (e) { /* ignore */ } };
     const updatePanelStatus = () => {
@@ -185,6 +224,8 @@ function setupSettingsPanel() {
     $('#gp-imgprompt-apply').on('click', function () {
         getSettings().imgPromptIg = $('#gp-set-imgprompt-ig').val() || '';
         getSettings().imgPromptOf = $('#gp-set-imgprompt-of').val() || '';
+        getSettings().imgPromptTwWatch = $('#gp-set-imgprompt-twwatch').val() || '';
+        getSettings().imgPromptTwMy = $('#gp-set-imgprompt-twmy').val() || '';
         saveSettingsDebounced();
         toast('Промпты картинок сохранены', 'fa-check');
     });
@@ -196,6 +237,11 @@ function setupSettingsPanel() {
         getSettings().compactRules = this.checked;
         saveSettingsDebounced();
         updatePhoneInjection();
+    });
+    $('#gp-set-onlineava').on('change', function () {
+        getSettings().onlineAvatars = this.checked;
+        saveSettingsDebounced();
+        if (isPhoneOpen()) render();
     });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;

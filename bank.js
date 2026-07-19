@@ -425,14 +425,26 @@ export function harvestBankTags() {
         }
 
         // 1) Явные теги tel:bank (протокол)
+        // КЛЮЧ: контент + сообщение + ПОРЯДКОВЫЙ номер одинаковых тегов в сообщении.
+        // НЕ позиция m.index: позиция съезжает при любой правке текста (реакции,
+        // фото в теги, чужие расширения) — и та же операция дублировалась.
+        const occ = {};
         let hasBankTag = false;
         BANK_TAG_RE.lastIndex = 0;
         let m;
         while ((m = BANK_TAG_RE.exec(text)) !== null) {
             hasBankTag = true;
             const legacyH = 'bk' + hash32(m[1]);
-            const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
+            const base = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}`;
+            const n = occ[base] = (occ[base] || 0) + 1;
+            const h = `${base}#${n}`;
             if (seen.has(h)) continue;
+            // Миграция с позиционных ключей (base:<позиция>): первый экземпляр
+            // контента в этом сообщении считаем уже обработанным
+            if (n === 1 && b.seenTags.some(k => k.startsWith(base + ':'))) {
+                seen.add(h); b.seenTags.push(h);
+                continue;
+            }
             // v1.13 and older keyed only by JSON content. Convert those keys in
             // place without replaying the current history; future identical
             // transactions then remain valid independent events.
@@ -458,8 +470,14 @@ export function harvestBankTags() {
             SMS_TAG_RE.lastIndex = 0;
             while ((m = SMS_TAG_RE.exec(text)) !== null) {
                 const legacyH = 'bs' + hash32(m[1]);
-                const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
+                const base = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}`;
+                const n = occ[base] = (occ[base] || 0) + 1;
+                const h = `${base}#${n}`;
                 if (seen.has(h)) continue;
+                if (n === 1 && b.seenTags.some(k => k.startsWith(base + ':'))) {
+                    seen.add(h); b.seenTags.push(h);
+                    continue;
+                }
                 if (seen.has(legacyH)) {
                     seen.add(h); b.seenTags.push(h); migratedLegacyKeys = true;
                     continue;

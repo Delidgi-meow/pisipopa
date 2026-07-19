@@ -36,6 +36,89 @@ export function getSocial() {
 }
 export function getTweets() { return getSocial().tweets; }
 export function getIgPosts() { return getSocial().igPosts; }
+
+// ── Инста-сторис: живут 24 часа реального времени, потом гаснут ──
+export function getStories() {
+    const s = getSocial();
+    if (!Array.isArray(s.stories)) s.stories = [];
+    return s.stories;
+}
+export function activeStories() {
+    const now = Date.now();
+    return getStories().filter(st => st && now - (st.time || 0) < 24 * 3600 * 1000);
+}
+export function addStory({ image = null, imgDesc = '', caption = '' }) {
+    const stories = getStories();
+    const story = {
+        id: genId(),
+        ak: 'user',
+        author: getUserName(),
+        image,
+        imgDesc: String(imgDesc || '').slice(0, 300),
+        caption: String(caption || '').slice(0, 300),
+        time: Date.now(),
+        views: 0,
+    };
+    stories.unshift(story);
+    getSocial().stories = stories.slice(0, 30);
+    saveMeta();
+    return story;
+}
+
+// Чужие сторис: знакомые тоже постят (генерятся, когда юзер выкладывает свою).
+// Картинка НЕ рисуется автоматически — в просмотрщике есть кнопка «нарисовать».
+export async function generateContactStories() {
+    const m = getMeta();
+    const names = [...new Set((m.contacts || []).map(c => displayName(keyOf(c.name), c.name)))].slice(0, 12);
+    const existing = activeStories().filter(s => s.ak !== 'user').map(s => s.author);
+    const prompt = `${await taskHeader(`invent Instagram stories posted in the last hours by people around ${getUserName()}.`)}
+People who might post (her phone contacts): ${names.join(', ') || '—'}. You may also add ONE local celebrity or acquaintance from the roleplay world.
+${existing.length ? `These people ALREADY have an active story (skip them): ${existing.join(', ')}.` : ''}
+Invent 2-4 stories: slice-of-life moments fitting the current story timeline and each person's character. For each: "author" — name from the list (or the celebrity), "photo" — ONE vivid sentence of what the story shows, "caption" — short overlay text or empty string.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"author":"Имя","photo":"...","caption":"..."}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 900, prefill: '[{"author":"' }));
+    const s = getSocial();
+    if (!Array.isArray(s.stories)) s.stories = [];
+    let added = 0;
+    for (const it of (Array.isArray(arr) ? arr : []).slice(0, 4)) {
+        if (!it || !it.author || !it.photo) continue;
+        const author = String(it.author).slice(0, 40);
+        if (isBanned(author)) continue;
+        s.stories.unshift({
+            id: genId(),
+            ak: resolveAuthorKey(author),
+            author,
+            image: null,
+            imgDesc: String(it.photo).slice(0, 300),
+            caption: String(it.caption || '').slice(0, 200),
+            time: Date.now() - Math.floor(Math.random() * 3 * 3600 * 1000),
+            views: 0,
+        });
+        added++;
+    }
+    s.stories = s.stories.slice(0, 30);
+    saveMeta();
+    return added;
+}
+export function deleteStory(id) {
+    const s = getSocial();
+    s.stories = (s.stories || []).filter(x => x.id !== id);
+    saveMeta();
+}
+// Ленивый рост просмотров: доля подписчиков, добирается за ~4 часа
+export function bumpStoryViews(story) {
+    if (!story) return 0;
+    const followers = getSocial().socialProfiles?.instagram?.followers || 40;
+    const ageMin = (Date.now() - (story.time || Date.now())) / 60000;
+    const target = Math.round(Math.min(followers * 0.65, 2 + followers * 0.65 * Math.min(1, ageMin / 240)));
+    if (target > (story.views || 0)) {
+        story.views = target;
+        saveMeta();
+    }
+    return story.views || 0;
+}
 export function getOfPosts() { return getSocial().ofPosts; }
 
 export function genId() {
@@ -1148,6 +1231,70 @@ Format: [{"tag":"категория","title":"заголовок","text":"тек
 }
 
 
+// ── Дискорд: серверы и жизнь каналов ──
+export async function generateDiscordServers(existing = []) {
+    const prompt = `${await taskHeader(`invent Discord servers that ${getUserName()} would realistically be a member of.`)}
+Invent 2-4 servers fitting her interests, city, work and the roleplay setting (fandom, hobby, game, neighborhood, professional...). For each: name, one-line description, 2-4 text channels (channel name latin-lowercase-with-dashes, short topic), 8-12 member nicknames (varied and believable; story characters MAY appear under their handles if they'd plausibly be there).
+${existing.length ? `Servers she already has (do NOT duplicate): ${existing.join('; ')}` : ''}
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"name":"...","desc":"...","channels":[{"name":"general","topic":"..."}],"members":["nick1","nick2"]}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"name":"' }));
+}
+
+export async function generateDiscordFeed(server, channel, existingMsgs = [], userText = null) {
+    const ex = existingMsgs.slice(-10).map(x => `${x.author}: ${x.text}`).join('\n');
+    const prompt = `${await taskHeader(`write fresh messages in the «${channel.name}» channel of the «${server.name}» Discord server.`)}
+Server: ${server.desc || server.name}. Channel topic: ${channel.topic || channel.name}. Members: ${(server.members || []).join(', ')}.
+${ex ? `Recent channel history:\n${ex}\n` : ''}${userText ? `${getUserName()} (${handleFor('user', getUserName())}) just posted: "${userText}" — several replies MUST react to her message (agree, argue, joke, @-mention her).` : 'Write a natural slice of ongoing conversation fitting the topic.'}
+4-8 messages, casual internet register matching the server vibe, authors ONLY from the member list, no timestamps. ${uiLangLine()}
+${JSON_RULES}
+Format: [{"author":"nick","text":"..."}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"author":"' }));
+}
+
+// ── Твич: список эфиров и «тики» стрима (сцена меняется от событий/комментов) ──
+export async function generateStreamList(existing = []) {
+    const prompt = `${await taskHeader(`invent live streams currently online in the Twitch-like app on ${getUserName()}'s phone.`)}
+Invent 4-6 live channels fitting the setting: gaming, IRL, music, cooking, talk shows... 1-2 MAY be story-adjacent (a contact or local celebrity streaming) if plausible. For each: streamer nick, stream title, category, viewers (number) and "scene" — ONE vivid sentence describing what is on screen RIGHT NOW (it is used to draw the frame).
+${existing.length ? `Already listed (avoid duplicates): ${existing.join('; ')}` : ''}
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"streamer":"nick","title":"...","category":"...","viewers":1234,"scene":"what the frame shows"}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"streamer":"' }));
+}
+
+export async function generateStreamTick(stream, chatLog = [], userComment = null, donation = null) {
+    const ex = chatLog.slice(-8).map(x => `${x.author}: ${x.text}`).join('\n');
+    const userEvent = donation
+        ? `${getUserName()} just DONATED ${donation.amount} to the streamer${userComment ? ` with the message: "${userComment}"` : ''} — a donation alert popped on stream. The STREAMER MUST notice it and thank/react to her on stream (in their own style); chat reacts too (hype, envy, jokes).`
+        : (userComment
+            ? `${getUserName()} just wrote in the stream chat: "${userComment}" — the STREAMER may notice and react on stream (read it aloud, answer, laugh), and chat may reply to her.`
+            : 'Advance the stream a little: something happens on screen.');
+    const prompt = `${await taskHeader(`continue the live stream «${stream.title}» by ${stream.streamer} that ${getUserName()} is watching.`)}
+Category: ${stream.category}. Current frame: ${stream.scene}
+${ex ? `Recent stream chat:\n${ex}\n` : ''}${userEvent}
+Return: "scene" — NEW one-sentence description of the frame now (changed by events${userComment ? ' and possibly her comment' : ''}); "streamer" — what the streamer says/does (1-2 sentences, their live voice); "chat" — 3-6 viewer messages (short, twitch-style, varied nicks${userComment ? ', some replying to her' : ''}); "viewers" — updated count (drift it slightly).
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"scene":"...","streamer":"...","chat":[{"author":"nick","text":"..."}],"viewers":1234}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"scene":"' }));
+    return Array.isArray(arr) ? arr[0] : null;
+}
+
+export async function generateMyStreamTick(myStream, chatLog = [], userLine = null) {
+    const ex = chatLog.slice(-8).map(x => `${x.author}: ${x.text}`).join('\n');
+    const prompt = `${await taskHeader(`${getUserName()} is LIVE on her own stream «${myStream.title}» — generate her audience.`)}
+Category: ${myStream.category || '—'}. Viewers now: ${myStream.viewers || 0}. On screen: ${myStream.scene || 'she just went live'}
+${ex ? `Recent chat:\n${ex}\n` : ''}${userLine ? `She just said/did on stream: "${userLine}" — the chat REACTS to that.` : 'Chat lives its life: greetings, questions, emote spam, maybe a new follower.'}
+Return: "chat" — 4-8 viewer messages (short, twitch-style; regulars, fans, maybe a troll; story characters MAY appear under recognizable nicks if they'd plausibly watch her); "viewers" — updated count (drifts, grows if the stream is interesting); "scene" — one-sentence description of what her frame shows now${userLine ? ' (reflecting what she just did)' : ''}; "donations" — OPTIONAL 0-2 viewer donations {from, amount, text} in the story's ordinary money scale — include one only when it feels EARNED by the moment (a highlight, a milestone, a viewer moved by her), NOT every time.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"chat":[{"author":"nick","text":"..."}],"viewers":47,"scene":"...","donations":[{"from":"nick","amount":150,"text":"хайп!"}]}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"chat":' }));
+    return Array.isArray(arr) ? arr[0] : null;
+}
+
 export async function generateAdvertisingOffers() {
     const s = getSocial();
     if (s.advertising.active) return [];
@@ -1488,12 +1635,19 @@ export async function isImageGenAvailable() {
     return !!(await loadImageExt());
 }
 
-// Список моделей активного провайдера картинко-расширения (для кнопки ↻)
+// Список моделей провайдера картинко-расширения (для кнопки ↻).
+// Учитывает ТЕЛЕФОННЫЙ профиль подключения: моделей спрашиваем у того
+// endpoint/провайдера, через который телефон реально будет рисовать.
 export async function fetchImageModels() {
     const mod = await loadImageExt();
     if (!mod) throw new Error('картинко-расширение не найдено');
+    const prof = _iigProfile(getSettings().imageGenProfileId);
+    const profFields = prof
+        ? Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== ''))
+        : null;
     if (mod.builtin) {
-        const iig = extension_settings.inline_image_gen;
+        const iigBase = extension_settings.inline_image_gen;
+        const iig = profFields ? { ...iigBase, ...profFields } : iigBase;
         const resp = await fetch(`${String(iig.endpoint).replace(/\/$/, '')}/v1/models`, {
             headers: { 'Authorization': `Bearer ${iig.apiKey}` },
         });
@@ -1506,11 +1660,23 @@ export async function fetchImageModels() {
     const base = `/scripts/extensions/third-party/${mod.folder}`;
     const provMod = await import(`${base}/src/providers.js`);
     const setMod = (typeof mod.settings?.getSettings === 'function') ? mod.settings : await import(`${base}/src/settings.js`);
-    const provider = provMod.resolveActiveProvider(setMod.getSettings());
-    if (!provider) throw new Error('провайдер расширения не настроен');
-    const models = await provider.fetchModels();
-    if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
-    return models;
+    const s = setMod.getSettings();
+    // Временная мутация (provider.fetchModels может сам перечитывать настройки) + откат
+    const saved = {};
+    if (profFields) {
+        for (const k of Object.keys(profFields)) {
+            if (k in s) { saved[k] = s[k]; s[k] = profFields[k]; }
+        }
+    }
+    try {
+        const provider = provMod.resolveActiveProvider(s);
+        if (!provider) throw new Error('провайдер расширения не настроен');
+        const models = await provider.fetchModels();
+        if (!Array.isArray(models) || models.length === 0) throw new Error('список пуст');
+        return models;
+    } finally {
+        for (const k of Object.keys(saved)) s[k] = saved[k];
+    }
 }
 
 // Текст промпта для картинки из данных поста.
@@ -1528,9 +1694,9 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     if (post.imgDesc) parts.push(post.imgDesc);
     if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
     if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
-    const framing = (post.kind === 'of'
+    const framing = (post.framing || (post.kind === 'of'
         ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
-        : (st.imgPromptIg || 'social media post, self-taken candid framing')).trim();
+        : (st.imgPromptIg || 'social media post, self-taken candid framing'))).trim();
     let negLine = '';
     if (anonymous) {
         const neg = ['the protagonist / the main user'];
@@ -1542,6 +1708,11 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     if (post.mms) {
         const un = getUserName();
         negLine += ` This photo was taken and sent by ${post.author} from their own phone to ${un}. ${un} is the RECIPIENT — she is NOT in the photo. Do NOT depict her unless the description explicitly says she is in the frame.`;
+    }
+    // Пост юзерки, где по описанию её самой в кадре нет: она — фотограф
+    if (post._behindCamera) {
+        const un = getUserName();
+        negLine += ` This photo was TAKEN by ${un} for her own account — she is BEHIND the camera, NOT in the frame. Depict exactly what the description says; do NOT add ${un} herself to the picture.`;
     }
     return `${framing}. ${parts.join('. ')}.${negLine}`;
 }
@@ -1559,6 +1730,9 @@ async function sceneToBooruTags(post, { anonymous }) {
         : '';
     if (post.mms) {
         who += ` The photo was taken and sent by ${post.author}; the recipient ${getUserName()} is NOT in the frame — do not add tags describing her unless the scene explicitly includes her.`;
+    }
+    if (post._behindCamera) {
+        who += ` The photo was TAKEN by ${getUserName()} — she is behind the camera, NOT in the frame; tag ONLY what the scene describes, do not add tags describing her.`;
     }
     const prompt = `Convert this scene into ONE line of English Danbooru-style image tags for an anime image model (NovelAI).
 Scene: ${scene}
@@ -1585,6 +1759,35 @@ Output ONLY the comma-separated tags.`;
         console.warn('[GlassPhone] sceneToBooruTags failed:', e);
         return '';
     }
+}
+
+// Профиль подключения картинко-расширения, выбранный ДЛЯ ТЕЛЕФОНА
+// (может отличаться от активного в основном чате). Общее ведро novarakk и форков.
+function _iigProfile(id) {
+    if (!id) return null;
+    try {
+        const iig = extension_settings.inline_image_gen;
+        return (Array.isArray(iig?.connectionProfiles) ? iig.connectionProfiles : []).find(p => p && p.id === id) || null;
+    } catch (e) { return null; }
+}
+
+export function listIigProfiles() {
+    try {
+        const iig = extension_settings.inline_image_gen;
+        return (Array.isArray(iig?.connectionProfiles) ? iig.connectionProfiles : [])
+            .filter(p => p && p.id)
+            .map(p => ({ id: p.id, name: p.name || p.id }));
+    } catch (e) { return []; }
+}
+
+// Стили расширения (глобальные, НЕ входят в профили подключения)
+export function listIigStyles() {
+    try {
+        const iig = extension_settings.inline_image_gen;
+        return (Array.isArray(iig?.styles) ? iig.styles : [])
+            .filter(s => s && s.id)
+            .map(s => ({ id: s.id, name: s.name || s.id }));
+    } catch (e) { return []; }
 }
 
 // Последовательная очередь (мы временно мутируем чужие настройки —
@@ -1616,12 +1819,23 @@ async function _generatePostImage(post, onStatus = null) {
     const st = getSettings();
     const isUserPost = post.ak === 'user';
     const isContactPost = typeof post.ak === 'string' && post.ak.startsWith('contact:');
+    // В кадре ли САМА юзерка на её собственном посте? По умолчанию она — ФОТОГРАФ:
+    // «Тёма ест бургер» — в кадре Тёма, а не она. В кадре она, если описание
+    // упоминает её имя/селфи-слова, описания нет вовсе, это OF или её фейскам-стрим.
+    // (\b не работает с кириллицей — ручные границы)
+    const selfDesc = `${post.imgDesc || ''} ${post.caption || ''}`.trim();
+    const SELF_RE = /(^|[^а-яёa-z0-9])(я|мы|меня|себя|себе|собой|селфи|selfie|me|myself|we)(?=$|[^а-яёa-z0-9])/i;
+    const userInFrame = isUserPost && (
+        !post.imgDesc || post.kind === 'of' || !!post.stream
+        || textMentionsName(selfDesc, getUserName()) || SELF_RE.test(selfDesc)
+    );
+    post._behindCamera = isUserPost && !userInFrame; // для buildImagePrompt/booru
     const charName = mainCharName();
     const charKey = keyOf(charName);
-    // Точное совпадение ИЛИ (для ММС) имя контакта — часть имени карточки:
+    // Точное совпадение ИЛИ (для ММС/стримов) имя контакта — часть имени карточки:
     // контакт «Вадим» vs карточка «Вадим Огнев» — реф должен подтянуться
     const isCharPost = !isUserPost && charKey && (keyOf(post.author) === charKey
-        || (post.mms && !!charName && textMentionsName(charName, post.author)));
+        || ((post.mms || post.stream) && !!charName && textMentionsName(charName, post.author)));
     const mentionsChar = !!charName && textMentionsName(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`, charName);
     const wantChar = isCharPost || mentionsChar;
     // Анонимный рандом-аккаунт = НЕ юзер, НЕ контакт (НПС), НЕ главный персонаж.
@@ -1633,7 +1847,7 @@ async function _generatePostImage(post, onStatus = null) {
         // Booru-режим: стиль/кадр из настроек (может быть тег-строкой) + сцена в теги
         if (onStatus) onStatus('Составляю теги...');
         const tags = await sceneToBooruTags(post, { anonymous });
-        const framing = (post.kind === 'of' ? (st.imgPromptOf || '') : (st.imgPromptIg || '')).trim();
+        const framing = (post.framing || (post.kind === 'of' ? (st.imgPromptOf || '') : (st.imgPromptIg || ''))).trim();
         prompt = [framing, tags].filter(Boolean).join(', ') || buildImagePrompt(post, { anonymous, allowChar: wantChar });
     } else {
         prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
@@ -1641,16 +1855,38 @@ async function _generatePostImage(post, onStatus = null) {
 
     // Встроенный драйвер (форки без экспортов — vish/sillyimages и т.п.)
     if (mod.builtin) {
-        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus });
+        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost: userInFrame, onStatus });
     }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
     const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
+    // Телефонный профиль подключения: временно применяем ЕГО поля (endpoint/
+    // apiKey/model/aspect/...) поверх активных, основной чат не трогаем
+    const phoneProfile = _iigProfile(st.imageGenProfileId);
+    if (phoneProfile && nvSettings) {
+        for (const k of Object.keys(phoneProfile)) {
+            if (k !== 'id' && k !== 'name' && k in nvSettings && !keys.includes(k)) keys.push(k);
+        }
+    }
+    // Телефонный СТИЛЬ: стили глобальные, подменяем activeStyleId на время генерации
+    const phoneStyleId = st.imageGenStyleId && nvSettings && 'activeStyleId' in nvSettings
+        && (nvSettings.styles || []).some(x => x && x.id === st.imageGenStyleId)
+        ? st.imageGenStyleId : '';
+    if (phoneStyleId && !keys.includes('activeStyleId')) keys.push('activeStyleId');
     const saved = {};
     if (nvSettings) {
         for (const k of keys) if (k in nvSettings) saved[k] = nvSettings[k];
-        if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!(wantChar && saved.sendCharAvatar);
-        if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!(isUserPost && saved.sendUserAvatar);
+        if (phoneProfile) {
+            for (const k of Object.keys(phoneProfile)) {
+                if (k !== 'id' && k !== 'name' && k in nvSettings) nvSettings[k] = phoneProfile[k];
+            }
+        }
+        if (phoneStyleId) nvSettings.activeStyleId = phoneStyleId;
+        // ФОРСИРУЕМ намерение, а не уважаем чужие галочки: телефон сам решает,
+        // чей реф нужен этой генерации (свой пост → персона, пост/стрим
+        // главперсонажа → его карточка), и восстанавливает флаги в finally
+        if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!wantChar;
+        if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!userInFrame;
         if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
         if (st.imageGenSquare !== false) {
             if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
@@ -1705,36 +1941,51 @@ async function _fetchB64(url) {
 }
 
 async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
-    const iig = extension_settings.inline_image_gen || {};
+    const iigBase = extension_settings.inline_image_gen || {};
+    const st = getSettings();
+    // Телефонный профиль подключения: его поля поверх активных (фолбэк на базу)
+    const prof = _iigProfile(st.imageGenProfileId);
+    const iig = prof ? { ...iigBase, ...Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== '')) } : iigBase;
     const endpoint = String(iig.endpoint || '').trim().replace(/\/$/, '');
     if (!endpoint || !iig.apiKey || !iig.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const st = getSettings();
     const model = st.imageGenModel || iig.model;
     const aspect = st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1');
 
-    // Активный стиль форка
+    // Стиль форка: телефонный (если выбран) или активный
     let style = '';
     try {
-        const s = (iig.styles || []).find(x => x && x.id === iig.activeStyleId);
+        const styleId = st.imageGenStyleId || iig.activeStyleId;
+        const s = (iig.styles || []).find(x => x && x.id === styleId)
+            || (iig.styles || []).find(x => x && x.id === iig.activeStyleId);
         style = String(s?.value ?? s?.style ?? '').trim();
     } catch (e) { /* ignore */ }
     let fullPrompt = style ? `[STYLE: ${style}]\n\n${prompt}` : prompt;
 
-    // Рефы: аватар чара/персоны (по флажкам форка + наш гейт)
+    // Рефы: телефон сам решает, чей реф нужен (галочки форка не смотрим —
+    // наш гейт wantChar/isUserPost уже отфильтровал, кому реф положен)
     const refs = [];
     try {
         const ctx = SillyTavern.getContext();
-        if (wantChar && iig.sendCharAvatar !== false) {
+        if (wantChar) {
             const ch = ctx?.characters?.[ctx.characterId];
             if (ch?.avatar && ch.avatar !== 'none') {
                 const b = await _fetchB64(`/characters/${encodeURIComponent(ch.avatar)}`);
                 if (b) refs.push(b);
             }
         }
-        if (isUserPost && iig.sendUserAvatar !== false && typeof user_avatar === 'string' && user_avatar) {
+        if (isUserPost && typeof user_avatar === 'string' && user_avatar) {
             const b = await _fetchB64(`/User Avatars/${encodeURIComponent(user_avatar)}`);
             if (b) refs.push(b);
+        }
+        // НПС без карточки (контакт/стример): единственный возможный реф —
+        // аватар контакта, загруженный в телефоне
+        if (!refs.length && typeof post.ak === 'string' && post.ak.startsWith('contact:')) {
+            const av = getContactAvatar(post.ak.slice('contact:'.length));
+            if (av) {
+                const b = String(av).startsWith('data:') ? (String(av).split(',')[1] || null) : await _fetchB64(av);
+                if (b) refs.push(b);
+            }
         }
     } catch (e) { /* без рефов */ }
     if (refs.length > 0) {

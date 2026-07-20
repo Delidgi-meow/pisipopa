@@ -81,7 +81,6 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks">
                     <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
-                    <label><input type="checkbox" id="gp-set-onlineava" ${s.onlineAvatars !== false ? 'checked' : ''}><span>Аватарки НПС из интернета</span></label>
                 </div>
                 <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
             </div>
@@ -237,11 +236,6 @@ function setupSettingsPanel() {
         getSettings().compactRules = this.checked;
         saveSettingsDebounced();
         updatePhoneInjection();
-    });
-    $('#gp-set-onlineava').on('change', function () {
-        getSettings().onlineAvatars = this.checked;
-        saveSettingsDebounced();
-        if (isPhoneOpen()) render();
     });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;

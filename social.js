@@ -65,6 +65,40 @@ export function addStory({ image = null, imgDesc = '', caption = '' }) {
     return story;
 }
 
+// Реакции на сторис юзера: быстрые «огонёчки» + 0-2 директа, которые прилетают
+// СМСками в телефон. Фото прикладывается к запросу — vision-модель реагирует
+// на то, что реально видит, а не на описание.
+export async function generateStoryReactions(story) {
+    const m = getMeta();
+    const names = [...new Set((m.contacts || []).map(c => c.name))].slice(0, 12);
+    const prompt = `${await taskHeader(`react to the Instagram story ${getUserName()} just posted.`)}
+Story: ${story.imgDesc || 'photo'}${story.caption ? ` — text on it: «${story.caption}»` : ''}${story.image ? ' (the ACTUAL image is attached — LOOK at it and react to what you actually SEE, details included)' : ''}
+Her contacts who могли увидеть: ${names.join(', ') || 'random followers'}.
+Return:
+"reactions" — 2-6 quick story reactions [{"author":"Имя","icon":"fire|heart|laugh|wow|sad"}] — authors from her contacts (or 1-2 invented followers); icon matches how THAT person would react in-character.
+"dms" — 0-2 direct replies that arrive as SMS on her phone [{"from":"Имя СТРОГО из её контактов","text":"short in-character reply referencing what's ON the story"}] — ONLY if that person would really slide into DMs (close, flirty, worried, provoked); otherwise [].
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"reactions":[{"author":"Имя","icon":"fire"}],"dms":[{"from":"Имя","text":"..."}]}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 700, image: story.image || null, prefill: '[{"reactions":' }));
+    const r = Array.isArray(arr) ? arr[0] : null;
+    if (!r) return null;
+    const ICONS = ['fire', 'heart', 'laugh', 'wow', 'sad'];
+    const reactions = (Array.isArray(r.reactions) ? r.reactions : [])
+        .filter(x => x && x.author)
+        .map(x => ({ author: String(x.author).slice(0, 32), icon: ICONS.includes(x.icon) ? x.icon : 'heart' }))
+        .slice(0, 6);
+    const dms = (Array.isArray(r.dms) ? r.dms : [])
+        .filter(x => x && x.from && x.text && !isBanned(x.from))
+        .map(x => ({ from: String(x.from).slice(0, 32), text: String(x.text).slice(0, 300) }))
+        .slice(0, 2);
+    if (reactions.length) {
+        story.reacts = reactions;
+        saveMeta();
+    }
+    return { reactions, dms };
+}
+
 // Чужие сторис: знакомые тоже постят (генерятся, когда юзер выкладывает свою).
 // Картинка НЕ рисуется автоматически — в просмотрщике есть кнопка «нарисовать».
 export async function generateContactStories() {
@@ -254,12 +288,23 @@ export function harvestSocialTags() {
         // Теги в CoT-блоках не считаются (иначе дубли постов)
         const text = stripThink(msg.mes);
 
+        // КЛЮЧ: контент + сообщение + ПОРЯДКОВЫЙ номер, НЕ позиция m.index —
+        // позиция съезжает при любой правке текста (реакции/фото/чужие
+        // расширения), и тот же пост добавлялся ПОВТОРНО
+        const occ = {};
         TW_TAG_RE.lastIndex = 0;
         let m;
         while ((m = TW_TAG_RE.exec(text)) !== null) {
             const legacyH = 'tw' + hash32(m[1]);
-            const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
+            const base = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}`;
+            const n = occ[base] = (occ[base] || 0) + 1;
+            const h = `${base}#${n}`;
             if (seen.has(h)) continue;
+            // Миграция с позиционных ключей (base:<позиция>)
+            if (n === 1 && s.seenTags.some(k => k.startsWith(base + ':'))) {
+                seen.add(h); s.seenTags.push(h);
+                continue;
+            }
             if (seen.has(legacyH)) {
                 seen.add(h); s.seenTags.push(h); migratedLegacyKeys = true;
                 continue;
@@ -288,8 +333,14 @@ export function harvestSocialTags() {
         IG_TAG_RE.lastIndex = 0;
         while ((m = IG_TAG_RE.exec(text)) !== null) {
             const legacyH = 'ig' + hash32(m[1]);
-            const h = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}:${m.index}`;
+            const base = `${legacyH}:${String(msg.send_date || msg.extra?.gen_id || msgIndex)}`;
+            const n = occ[base] = (occ[base] || 0) + 1;
+            const h = `${base}#${n}`;
             if (seen.has(h)) continue;
+            if (n === 1 && s.seenTags.some(k => k.startsWith(base + ':'))) {
+                seen.add(h); s.seenTags.push(h);
+                continue;
+            }
             if (seen.has(legacyH)) {
                 seen.add(h); s.seenTags.push(h); migratedLegacyKeys = true;
                 continue;
@@ -1242,11 +1293,16 @@ Format: [{"name":"...","desc":"...","channels":[{"name":"general","topic":"..."}
     return parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"name":"' }));
 }
 
-export async function generateDiscordFeed(server, channel, existingMsgs = [], userText = null) {
+export async function generateDiscordFeed(server, channel, existingMsgs = [], userText = null, replyTo = null) {
     const ex = existingMsgs.slice(-10).map(x => `${x.author}: ${x.text}`).join('\n');
+    const userEvent = userText
+        ? (replyTo
+            ? `${getUserName()} (${handleFor('user', getUserName())}) just REPLIED to ${replyTo.author}'s message «${replyTo.text}» with: "${userText}" — ${replyTo.author} SHOULD answer her back, others may chime in.`
+            : `${getUserName()} (${handleFor('user', getUserName())}) just posted: "${userText}" — several replies MUST react to her message (agree, argue, joke, @-mention her).`)
+        : 'Write a natural slice of ongoing conversation fitting the topic.';
     const prompt = `${await taskHeader(`write fresh messages in the «${channel.name}» channel of the «${server.name}» Discord server.`)}
 Server: ${server.desc || server.name}. Channel topic: ${channel.topic || channel.name}. Members: ${(server.members || []).join(', ')}.
-${ex ? `Recent channel history:\n${ex}\n` : ''}${userText ? `${getUserName()} (${handleFor('user', getUserName())}) just posted: "${userText}" — several replies MUST react to her message (agree, argue, joke, @-mention her).` : 'Write a natural slice of ongoing conversation fitting the topic.'}
+${ex ? `Recent channel history:\n${ex}\n` : ''}${userEvent}
 4-8 messages, casual internet register matching the server vibe, authors ONLY from the member list, no timestamps. ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"nick","text":"..."}]`;
@@ -1888,7 +1944,9 @@ async function _generatePostImage(post, onStatus = null) {
         if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!wantChar;
         if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!userInFrame;
         if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
-        if (st.imageGenSquare !== false) {
+        // Аспект поста (сторис 9:16, стрим 16:9, посты 1:1) должен победить
+        // оверрайды расширения — снимаем их, когда аспект задан
+        if (post.aspect || st.imageGenSquare !== false) {
             if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
             if ('overrideImageSize' in nvSettings) nvSettings.overrideImageSize = false;
         }
@@ -1896,7 +1954,9 @@ async function _generatePostImage(post, onStatus = null) {
     }
 
     const genOptions = {};
-    if (st.imageGenSquare !== false) genOptions.aspectRatio = '1:1';
+    // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
+    const wantAspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : null);
+    if (wantAspect) genOptions.aspectRatio = wantAspect;
 
     try {
         // style = null → расширение подставит СВОЙ активный стиль (resolveEffectiveStyle)
@@ -1950,7 +2010,8 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     if (!endpoint || !iig.apiKey || !iig.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
     const model = st.imageGenModel || iig.model;
-    const aspect = st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1');
+    // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
+    const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1'));
 
     // Стиль форка: телефонный (если выбран) или активный
     let style = '';
@@ -2015,8 +2076,11 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
         if (!img) throw new Error('Gemini не вернул картинку' + (ps.find(p => p.text) ? `: ${ps.find(p => p.text).text.slice(0, 100)}` : ''));
         b64 = img.inlineData.data; mime = img.inlineData.mimeType || 'image/png';
     } else {
-        // OpenAI-совместимый путь
-        const size = aspect === '1:1' ? '1024x1024' : (iig.size || 'auto');
+        // OpenAI-совместимый путь: аспект → ближайший поддерживаемый размер
+        const size = aspect === '1:1' ? '1024x1024'
+            : aspect === '9:16' ? '1024x1536'
+            : aspect === '16:9' ? '1536x1024'
+            : (iig.size || 'auto');
         let resp;
         if (refs.length > 0) {
             const form = new FormData();

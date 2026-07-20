@@ -1991,11 +1991,6 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
     .gp-theme-card { flex-basis: 202px; }
 }
 
-/* Онлайн-аватарки: под фото всегда градиент с инициалом (фолбэк при недоступности) */
-.gp-avatar-img { position: relative; overflow: hidden; }
-.gp-avatar-fb { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.gp-avatar-img img { position: relative; z-index: 1; }
-
 /* ═══ Инста-сторис ═══ */
 .gp-igst-row {
     display: flex;
@@ -2113,15 +2108,30 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 }
 .gp-igst-bottom {
     position: absolute;
-    bottom: 18px; left: 16px;
+    bottom: 18px; left: 16px; right: 16px;
     z-index: 4;
     color: #fff;
     font-size: 12px;
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
 }
+/* реакции-«огонёчки» на своей сторис */
+.gp-igst-reacts { display: flex; gap: 5px; flex-wrap: wrap; margin-left: 8px; }
+.gp-igst-react {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+.gp-igst-react i { color: var(--gp-accent-a); }
 .gp-igst-nav { position: absolute; top: 60px; bottom: 60px; width: 38%; z-index: 3; cursor: pointer; }
 .gp-igst-nav-left { left: 0; }
 .gp-igst-nav-right { right: 0; }
@@ -2465,6 +2475,40 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 .gp-dc-welcome b { font-size: 16px; }
 .gp-dc-welcome span { font-size: 12px; color: var(--dc-text-dim); line-height: 1.45; }
 .gp-dc-welcome-hint { padding-top: 4px; }
+/* реплай: цитата в сообщении и чип над композером */
+.gp-dcmsg { cursor: pointer; }
+.gp-dcmsg-quote {
+    font-size: 11px;
+    color: var(--dc-text-dim);
+    padding-left: 8px;
+    border-left: 2px solid var(--dc-blurple);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gp-dc-replychip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 11.5px;
+    color: var(--dc-text-dim);
+    background: var(--dc-bg-panel);
+    border-top: 1px solid var(--dc-bg-rail);
+    white-space: nowrap;
+    overflow: hidden;
+}
+.gp-dc-replychip button {
+    margin-left: auto;
+    border: none;
+    background: none;
+    color: var(--dc-text-dim);
+    cursor: pointer;
+    font-size: 12px;
+}
+.gp-dc-replychip button:hover { color: #f23f43; }
 .gp-dc-inputwrap {
     flex: 0 0 auto;
     display: flex;

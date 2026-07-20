@@ -73,18 +73,25 @@ export async function refreshDChannel(sid, cid) {
     }
 }
 
-// Пост юзера: сообщение сразу в канал + журнал, ответы участников следом
-export async function postToDChannel(sid, cid, text) {
+// Пост юзера: сообщение сразу в канал + журнал, ответы участников следом.
+// replyTo = {author, text} — она ответила на конкретное сообщение (реплай как в дискорде)
+export async function postToDChannel(sid, cid, text, replyTo = null) {
     const srv = findDServer(sid);
     const ch = findDChannel(sid, cid);
     if (!srv || !ch || !text) return 0;
-    ch.messages = [...ch.messages, { id: genId(), author: getUserName(), text: String(text).slice(0, 500), ts: Date.now(), user: true }].slice(-60);
+    const entry = { id: genId(), author: getUserName(), text: String(text).slice(0, 500), ts: Date.now(), user: true };
+    if (replyTo && replyTo.author) {
+        entry.replyTo = { author: String(replyTo.author).slice(0, 32), text: String(replyTo.text || '').slice(0, 120) };
+    }
+    ch.messages = [...ch.messages, entry].slice(-60);
     saveMeta();
-    logSocialToChat(`${getUserName()} написала в дискорд-канале #${ch.name} сервера «${srv.name}»: «${text}»`);
+    logSocialToChat(entry.replyTo
+        ? `${getUserName()} ответила в дискорд-канале #${ch.name} («${srv.name}») на сообщение ${entry.replyTo.author} «${entry.replyTo.text}»: «${text}»`
+        : `${getUserName()} написала в дискорд-канале #${ch.name} сервера «${srv.name}»: «${text}»`);
     if (_inflight) return 0;
     _inflight = true;
     try {
-        const n = pushMessages(ch, await generateDiscordFeed(srv, ch, ch.messages, text));
+        const n = pushMessages(ch, await generateDiscordFeed(srv, ch, ch.messages, text, entry.replyTo));
         saveMeta();
         return n;
     } finally {

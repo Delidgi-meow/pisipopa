@@ -24,7 +24,7 @@ import {
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
-    getStories, activeStories, addStory, deleteStory, bumpStoryViews, generateContactStories,
+    getStories, activeStories, addStory, deleteStory, bumpStoryViews, generateContactStories, generateStoryReactions,
     generateRepLabel,
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
@@ -89,39 +89,10 @@ function initialOf(name) {
     return esc(t.charAt(0).toUpperCase() || '?');
 }
 
-// Онлайн-аватар для НПС без фото: детерминированный портрет с randomuser.me
-// (хэш имени → номер 0-98; пол — по окончанию первого имени, с исключениями)
-const MALE_A_NAMES = new Set([
-    'никита', 'илья', 'лука', 'фома', 'кузьма', 'данила', 'савва', 'миша', 'паша',
-    'саша', 'гоша', 'лёша', 'леша', 'ваня', 'петя', 'коля', 'толя', 'вася', 'дима',
-    'костя', 'витя', 'юра', 'боря', 'серёжа', 'сережа', 'стёпа', 'степа', 'лёва',
-    'лева', 'гриша', 'тёма', 'тема', 'рома', 'слава', 'жора', 'сеня', 'веня', 'митя',
-]);
-// Женские имена НЕ на -а/-я
-const FEMALE_X_NAMES = new Set([
-    'марго', 'любовь', 'нинель', 'николь', 'мишель', 'рахиль', 'эстер', 'руфь',
-    'кармен', 'ассоль', 'сольвейг', 'ингрид', 'астрид', 'гретхен', 'элен', 'джейн',
-    'кейт', 'мэри', 'энн', 'грейс', 'скарлетт', 'жанетт', 'фло',
-]);
-function onlineAvatarUrl(name) {
-    const first = String(name || '').trim().split(/\s+/)[0].toLowerCase();
-    if (!first || /^\+?\d/.test(first)) return ''; // номера телефонов — без портрета
-    let h = 0;
-    for (const ch of String(name)) h = (Math.imul(h, 31) + ch.codePointAt(0)) | 0;
-    const n = Math.abs(h) % 99;
-    const fem = (/[ая]$/.test(first) && !MALE_A_NAMES.has(first)) || FEMALE_X_NAMES.has(first);
-    return `https://randomuser.me/api/portraits/${fem ? 'women' : 'men'}/${n}.jpg`;
-}
-
-// Аватар: фото если загружено, иначе онлайн-портрет (если включено),
-// под ним всегда градиент с инициалом — если источник недоступен, img прячется
+// Аватар: фото если загружено, иначе градиент с инициалом
 function avatarHtml(name, avatarUrl, cls = 'gp-avatar') {
     if (avatarUrl) {
         return `<div class="${cls} gp-avatar-img"><img src="${esc(avatarUrl)}" alt=""></div>`;
-    }
-    const online = getSettings().onlineAvatars !== false ? onlineAvatarUrl(name) : '';
-    if (online) {
-        return `<div class="${cls} gp-avatar-img" style="${avatarStyle(name)}"><span class="gp-avatar-fb">${initialOf(name)}</span><img src="${esc(online)}" alt="" loading="lazy" onerror="this.style.display='none'"></div>`;
     }
     return `<div class="${cls}" style="${avatarStyle(name)}">${initialOf(name)}</div>`;
 }
@@ -2495,6 +2466,7 @@ let _igDraftImage = null;
 let _storyDraftImage = null;
 let _storyGenBusy = false;
 let _storyIdx = 0;
+const STORY_REACT_ICONS = { fire: 'fa-fire', heart: 'fa-heart', laugh: 'fa-face-laugh-squint', wow: 'fa-face-surprise', sad: 'fa-face-sad-tear' };
 let _storyAuthor = null;   // null = свои сторис, иначе имя автора
 let _othersStoriesBusy = false;
 
@@ -2579,7 +2551,7 @@ function renderIgNewStory(screen) {
         const caption = screen.querySelector('#gp-st-caption')?.value.trim() || '';
         render();
         try {
-            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption });
+            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption, aspect: '9:16' });
             _storyDraftImage = src2;
             toast('Фото готово', 'fa-image');
         } catch (e) {
@@ -2612,16 +2584,26 @@ function renderIgNewStory(screen) {
         _storyAuthor = null;
         _storyIdx = 0;
         goto('igstory');
-        // Знакомые тоже постят: чужие сторис подъезжают следом (без картинок —
-        // рисуются по кнопке в просмотрщике)
+        // Цепочка после публикации: реакции на сторис (огонёчки + директы
+        // смсками) → чужие сторис. Всё фоном, телефон не блокируется.
         if (!_othersStoriesBusy) {
             _othersStoriesBusy = true;
-            generateContactStories().then(n => {
-                if (n > 0) toast('Появились сторис знакомых', 'fa-instagram');
-            }).catch(() => {}).finally(() => {
+            (async () => {
+                try {
+                    const r = await generateStoryReactions(story);
+                    if (r?.reactions?.length) toast(`Реакции на сторис: ${r.reactions.length}`, 'fa-fire');
+                    for (const dm of (r?.dms || [])) {
+                        deliverScamSms(dm); // тот же призрак-канал, что у любых входящих смс
+                    }
+                    if (currentScreen === 'igstory' || currentScreen === 'ig') render();
+                } catch (e) { console.warn('[GlassPhone] story reactions failed:', e); }
+                try {
+                    const n = await generateContactStories();
+                    if (n > 0) toast('Появились сторис знакомых', 'fa-instagram');
+                } catch (e) { /* ignore */ }
                 _othersStoriesBusy = false;
                 if (currentScreen === 'ig' || currentScreen === 'igstory') render();
-            });
+            })();
         }
     });
 }
@@ -2654,7 +2636,7 @@ function renderIgStory(screen) {
             </div>
             ${media}
             ${st.caption ? `<div class="gp-igst-caption">${esc(st.caption)}</div>` : ''}
-            ${isMine ? `<div class="gp-igst-bottom">${ic('fa-eye')} ${views}</div>` : ''}
+            ${isMine ? `<div class="gp-igst-bottom">${ic('fa-eye')} ${views}${(st.reacts || []).length ? `<span class="gp-igst-reacts">${st.reacts.map(r => `<span class="gp-igst-react">${ic(STORY_REACT_ICONS[r.icon] || 'fa-heart')} ${esc(r.author)}</span>`).join('')}</span>` : ''}</div>` : ''}
             <div class="gp-igst-nav gp-igst-nav-left" id="gp-st-prev"></div>
             <div class="gp-igst-nav gp-igst-nav-right" id="gp-st-next"></div>
         </div>`;
@@ -2676,6 +2658,7 @@ function renderIgStory(screen) {
                 imgDesc: st.imgDesc,
                 caption: st.caption,
                 kind: 'ig',
+                aspect: '9:16',
                 stream: !isMine, // частичный неймматч с карточкой для НПС
             });
             st.image = src2;
@@ -3705,6 +3688,7 @@ function renderCasino(screen) {
 let _dServerId = null;
 let _dChannelId = null;
 let _dBusy = false;
+let _dReplyTo = null;   // {author, text} — на какое сообщение отвечаем
 
 function renderDiscord(screen) {
     currentScreen = 'discord';
@@ -3783,9 +3767,10 @@ function renderDChannel(screen) {
     const c = findDChannel(_dServerId, _dChannelId);
     if (!s || !c) { goto('discord'); return; }
     const msgs = c.messages.map(mm => `
-        <div class="gp-dcmsg">
+        <div class="gp-dcmsg" data-dmsg="${mm.id}">
             <span class="gp-dcmsg-ava" style="${avatarStyle(mm.user ? 'user' + mm.author : mm.author)}">${esc(String(mm.author).slice(0, 1).toUpperCase())}</span>
             <div class="gp-dcmsg-body">
+                ${mm.replyTo ? `<div class="gp-dcmsg-quote">${ic('fa-reply')} <b style="color:${senderColor(mm.replyTo.author)}">${esc(mm.replyTo.author)}</b> ${esc(mm.replyTo.text)}</div>` : ''}
                 <b style="color:${mm.user ? 'var(--dc-blurple-light)' : senderColor(mm.author)}">${esc(mm.author)}</b>
                 <span>${esc(mm.text)}</span>
             </div>
@@ -3805,14 +3790,15 @@ function renderDChannel(screen) {
                 ${msgs || `<div class="gp-dc-welcome"><span class="gp-dc-hash-big">#</span><b>Добро пожаловать в #${esc(c.name)}!</b><span>${esc(c.topic || 'Начало канала.')}</span><span class="gp-dc-welcome-hint">Нажми ↻ — канал оживёт, или напиши первой</span></div>`}
                 ${_dBusy ? `<div class="gp-dcmsg gp-dmsg-typing"><span></span><span></span><span></span></div>` : ''}
             </div>
+            ${_dReplyTo ? `<div class="gp-dc-replychip">${ic('fa-reply')} Отвечаешь <b style="color:${senderColor(_dReplyTo.author)}">${esc(_dReplyTo.author)}</b>: ${esc(_dReplyTo.text.slice(0, 60))}<button id="gp-d-reply-clear">${ic('fa-xmark')}</button></div>` : ''}
             <div class="gp-dc-inputwrap">
-                <textarea id="gp-d-input" rows="1" placeholder="Написать в #${esc(c.name)}"></textarea>
+                <textarea id="gp-d-input" rows="1" placeholder="${_dReplyTo ? `Ответить ${esc(_dReplyTo.author)}` : `Написать в #${esc(c.name)}`}"></textarea>
                 <button class="gp-dc-send" id="gp-d-send" ${_dBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
             </div>
         </div>`);
     const scroll = screen.querySelector('#gp-dmsg-scroll');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
-    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('discord'));
+    screen.querySelector('#gp-back')?.addEventListener('click', () => { _dReplyTo = null; goto('discord'); });
     const dRun = async (fn) => {
         if (_dBusy) return;
         _dBusy = true;
@@ -3828,12 +3814,32 @@ function renderDChannel(screen) {
         }
     };
     screen.querySelector('#gp-dc-refresh')?.addEventListener('click', () => dRun(() => refreshDChannel(s.id, c.id)));
+    // Тап по сообщению = ответить на него (свои — нет смысла)
+    screen.querySelectorAll('[data-dmsg]').forEach(el => el.addEventListener('click', () => {
+        const mm = c.messages.find(x => x.id === el.getAttribute('data-dmsg'));
+        if (!mm || mm.user) return;
+        const draft = document.getElementById('gp-d-input')?.value || '';
+        _dReplyTo = { author: mm.author, text: mm.text };
+        render();
+        const inp = document.getElementById('gp-d-input');
+        if (inp) { inp.value = draft; inp.focus(); }
+    }));
+    screen.querySelector('#gp-d-reply-clear')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const draft = document.getElementById('gp-d-input')?.value || '';
+        _dReplyTo = null;
+        render();
+        const inp = document.getElementById('gp-d-input');
+        if (inp) { inp.value = draft; inp.focus(); }
+    });
     const input = screen.querySelector('#gp-d-input');
     const send = () => {
         const v = (input?.value || '').trim();
         if (!v) return;
         input.value = '';
-        dRun(() => postToDChannel(s.id, c.id, v));
+        const rt = _dReplyTo;
+        _dReplyTo = null;
+        dRun(() => postToDChannel(s.id, c.id, v, rt));
     };
     screen.querySelector('#gp-d-send')?.addEventListener('click', send);
     input?.addEventListener('keydown', (e) => {
@@ -3876,6 +3882,7 @@ async function drawStreamFrame(target, streamer, isMine) {
             ak: isMine ? 'user' : `contact:${keyOf(streamer)}`,
             kind: 'ig',
             stream: true, // рефы: частичный матч имени с карточкой + аватар контакта
+            aspect: '16:9',
             framing: isMine
                 ? (getSettings().imgPromptTwMy || 'live webcam stream frame, streamer facecam view, stream overlay vibe')
                 : (getSettings().imgPromptTwWatch || 'livestream video frame, what the stream camera shows, stream overlay vibe'),

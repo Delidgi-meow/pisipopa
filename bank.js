@@ -405,7 +405,18 @@ export function harvestBankTags() {
             const rpBalance = parseRpBalance(msg.mes, userName);
             if (rpBalance) {
                 const source = String(msg.send_date || msg.extra?.gen_id || msgIndex);
-                const h = `br${hash32(`${userName}:${rpBalance.value}`)}:${source}:${rpBalance.index}`;
+                const brBase = `br${hash32(`${userName}:${rpBalance.value}`)}:${source}`;
+                // КЛЮЧ БЕЗ позиции: rpBalance.index съезжал при любой правке
+                // текста (реакции/фото в теги) → СТАРОЕ значение инфоблока
+                // переприменялось как свежая дельта и баланс улетал
+                const h = `${brBase}#1`;
+                // Миграция с позиционных ключей: то же значение в том же
+                // сообщении уже обрабатывалось — только переключаем ключ
+                if (!seenRpBalances.has(h) && b.seenRpBalances.some(k => k.startsWith(brBase + ':'))) {
+                    seenRpBalances.add(h);
+                    b.seenRpBalances.push(h);
+                    rpBaseline = rpBalance.value;
+                }
                 if (!seenRpBalances.has(h)) {
                     seenRpBalances.add(h);
                     b.seenRpBalances.push(h);

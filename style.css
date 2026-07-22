@@ -2411,6 +2411,8 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 }
 .gp-dc-add { background: var(--dc-bg-panel); color: #23a559; font-weight: 400; }
 .gp-dc-add:hover { background: #23a559; color: #fff; }
+.gp-dc-create { background: var(--dc-bg-panel); color: #e6a935; font-weight: 400; font-size: 13px; }
+.gp-dc-create:hover { background: #e6a935; color: #fff; }
 .gp-dc-panel { flex: 1; min-width: 0; overflow-y: auto; padding: 12px 10px 16px; display: flex; flex-direction: column; gap: 2px; }
 .gp-dc-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 8px; border-bottom: 1px solid var(--dc-bg-rail); margin-bottom: 6px; }
 .gp-dc-head b { font-size: 15px; }
@@ -2815,4 +2817,3 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 .gp-note-meta { display: flex; align-items: center; gap: 8px; }
 .gp-note-meta .gp-tw-time { flex: 1 1 auto; }
 .gp-note-eye { width: 28px; height: 28px; font-size: 11px; }
-

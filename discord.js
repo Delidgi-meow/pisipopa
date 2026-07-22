@@ -2,7 +2,7 @@
 // хранится per-chat в meta. Нагрузки на инжект нет — только строки журнала.
 
 import { getMeta, saveMeta } from './state.js';
-import { generateDiscordServers, generateDiscordFeed, logSocialToChat, getUserName } from './social.js';
+import { generateDiscordServers, generateOwnDiscordServer, generateDiscordFeed, logSocialToChat, getUserName } from './social.js';
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
@@ -40,6 +40,43 @@ export async function refreshDiscordServers() {
         d.servers = [...d.servers, ...fresh].slice(0, 8);
         saveMeta();
         return fresh.length;
+    } finally {
+        _inflight = false;
+    }
+}
+
+// Свой сервер: юзер задаёт имя+тему, модель наполняет каналами/участниками.
+// mine:true — она владелец (в UI отдельная пометка, кнопка выхода = удалить).
+export async function createOwnDServer(name, theme) {
+    name = String(name || '').trim();
+    if (!name) throw new Error('Назови сервер');
+    if (_inflight) throw new Error('уже генерируется');
+    _inflight = true;
+    try {
+        const d = getDiscord();
+        const gen = await generateOwnDiscordServer(name, theme);
+        const channels = (gen && Array.isArray(gen.channels) ? gen.channels : [])
+            .filter(c => c && c.name).slice(0, 6).map(c => ({
+                id: genId(),
+                name: String(c.name).replace(/^#/, '').slice(0, 40),
+                topic: String(c.topic || '').slice(0, 120),
+                messages: [],
+            }));
+        // Фолбэк: хотя бы один канал, даже если модель не расщедрилась
+        if (!channels.length) channels.push({ id: genId(), name: 'general', topic: '', messages: [] });
+        const srv = {
+            id: genId(),
+            name: name.slice(0, 60),
+            desc: String(gen?.desc || theme || '').slice(0, 160),
+            mine: true,
+            members: (gen && Array.isArray(gen.members) ? gen.members : [])
+                .map(x => String(x).slice(0, 32)).slice(0, 16),
+            channels,
+        };
+        d.servers = [srv, ...d.servers].slice(0, 10);
+        saveMeta();
+        logSocialToChat(`${getUserName()} создала свой Discord-сервер «${srv.name}»${srv.desc ? ` (${srv.desc})` : ''}`);
+        return srv;
     } finally {
         _inflight = false;
     }

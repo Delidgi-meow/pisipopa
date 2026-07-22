@@ -25,13 +25,13 @@ import {
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, generateContactStories, generateStoryReactions,
-    generateRepLabel,
+    generateRepLabel, generateGroupChats,
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
-import { getDiscord, findDServer, findDChannel, refreshDiscordServers, refreshDChannel, postToDChannel, deleteDServer } from './discord.js';
+import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer } from './discord.js';
 import { getTwitch, findStream, refreshStreams, tickStream, donateToStream, startMyStream, tickMyStream, endMyStream } from './twitch.js';
 import { getNotes, addNote, updateNote, deleteNote, toggleNoteShared } from './notes.js';
 import { tr, trDom, lang, DAYS_I18N, MONTHS_I18N } from './i18n.js';
@@ -1237,6 +1237,47 @@ function renderAppearance(screen) {
 }
 
 // ── Экран «Сообщения» ──
+// Генерация групп-чатов (как ТГ): модель придумывает чаты + участников +
+// стартовую переписку. Группа создаётся через addGroup, а сообщения засеваются
+// ОДНИМ призраком с tel:sms-тегами (chat-поле) — они попадают в треды как обычные
+// групповые смс и в контекст модели по месту истории.
+let _chatsGenBusy = false;
+async function genGroupChats() {
+    if (_chatsGenBusy) return;
+    _chatsGenBusy = true;
+    render();
+    try {
+        const existing = getThreadList().filter(t => t.isGroup).map(t => t.name);
+        const arr = await generateGroupChats(existing);
+        if (!Array.isArray(arr) || !arr.length) throw new Error('Чаты не сгенерировались — попробуй ещё раз');
+        let seedTags = '';
+        let created = 0;
+        for (const g of arr.slice(0, 3)) {
+            if (!g || !g.name) continue;
+            const members = (Array.isArray(g.members) ? g.members : []).map(x => String(x).trim()).filter(Boolean).slice(0, 6);
+            if (!members.length) continue;
+            addGroup(String(g.name).slice(0, 40), members);
+            created++;
+            for (const msg of (Array.isArray(g.messages) ? g.messages : []).slice(0, 6)) {
+                if (!msg || !msg.author || !msg.text) continue;
+                seedTags += `<!--tel:sms:${JSON.stringify({ from: String(msg.author).slice(0, 40), chat: String(g.name).slice(0, 40), text: String(msg.text).slice(0, 400) })}-->\n`;
+            }
+        }
+        if (!created) throw new Error('Чаты не сгенерировались — попробуй ещё раз');
+        if (seedTags.trim()) await insertGhostReply('GlassPhone', seedTags.trim());
+        updatePhoneInjection();
+        applyChatHiding();
+        toast(`Новых чатов: ${created}`, 'fa-comments');
+    } catch (e) {
+        console.error('[GlassPhone] genGroupChats failed:', e);
+        toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+    } finally {
+        _chatsGenBusy = false;
+        if (currentScreen === 'list') render();
+        updateFabBadge();
+    }
+}
+
 function renderList(screen) {
     currentScreen = 'list';
     const list = getThreadList();
@@ -1273,6 +1314,7 @@ function renderList(screen) {
         <div class="gp-header">
             <button class="gp-iconbtn" id="gp-home-btn">${ic('fa-chevron-left')}</button>
             <div class="gp-title">Сообщения</div>
+            <button class="gp-iconbtn" id="gp-gen-chats" title="Сгенерировать чаты" ${_chatsGenBusy ? 'disabled' : ''}>${ic(_chatsGenBusy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button>
             <button class="gp-iconbtn" id="gp-add-btn" title="Добавить контакт">${ic('fa-plus')}</button>
         </div>
         <div class="gp-list">
@@ -1289,6 +1331,7 @@ function renderList(screen) {
         currentScreen = 'add';
         render();
     });
+    screen.querySelector('#gp-gen-chats')?.addEventListener('click', () => genGroupChats());
     screen.querySelectorAll('.gp-row').forEach(row => {
         row.addEventListener('click', () => {
             currentThreadKey = row.getAttribute('data-key');
@@ -3699,8 +3742,8 @@ function renderDiscord(screen) {
         <button class="gp-dc-srv${s.id === _dServerId ? ' gp-active' : ''}" data-dserver="${s.id}" title="${esc(s.name)}" style="${avatarStyle('ds' + s.name)}">${esc(s.name.slice(0, 2).toUpperCase())}</button>`).join('');
     const panel = srv ? `
         <div class="gp-dc-head">
-            <b>${esc(srv.name)}</b>
-            <button class="gp-dc-leave" data-ddel="${srv.id}" title="Покинуть сервер">${ic('fa-right-from-bracket')}</button>
+            <b>${srv.mine ? `${ic('fa-crown')} ` : ''}${esc(srv.name)}</b>
+            <button class="gp-dc-leave" data-ddel="${srv.id}" title="${srv.mine ? 'Удалить сервер' : 'Покинуть сервер'}">${ic(srv.mine ? 'fa-trash-can' : 'fa-right-from-bracket')}</button>
         </div>
         ${srv.desc ? `<div class="gp-dc-desc">${esc(srv.desc)}</div>` : ''}
         <div class="gp-dc-cat">Текстовые каналы</div>
@@ -3716,7 +3759,7 @@ function renderDiscord(screen) {
         </div>` : `
         <div class="gp-empty">
             <div class="gp-empty-icon">${brand('fa-discord')}</div>
-            <div class="gp-empty-text">Нажми «+» — модель придумает серверы,<br>где ты могла бы состоять</div>
+            <div class="gp-empty-text">${ic('fa-plus')} — найти серверы, где ты могла бы состоять<br>${ic('fa-crown')} — создать свой сервер</div>
         </div>`;
     screen.innerHTML = `
         <div class="gp-dc-skin">
@@ -3725,6 +3768,7 @@ function renderDiscord(screen) {
                 <div class="gp-dc-sep"></div>
                 ${rail}
                 <button class="gp-dc-srv gp-dc-add" id="gp-d-refresh" title="Найти серверы" ${_dBusy ? 'disabled' : ''}>${ic(_dBusy ? 'fa-spinner fa-spin' : 'fa-plus')}</button>
+                <button class="gp-dc-srv gp-dc-create" id="gp-d-create" title="Создать свой сервер" ${_dBusy ? 'disabled' : ''}>${ic('fa-crown')}</button>
             </div>
             <div class="gp-dc-panel">${panel}</div>
         </div>`;
@@ -3743,6 +3787,24 @@ function renderDiscord(screen) {
             render();
         }
     });
+    screen.querySelector('#gp-d-create')?.addEventListener('click', async () => {
+        if (_dBusy) return;
+        const name = prompt('Название твоего сервера:', '');
+        if (name === null || !name.trim()) return;
+        const theme = prompt('О чём сервер? (тема, вайб):', '') || '';
+        _dBusy = true;
+        render();
+        try {
+            const srv2 = await createOwnDServer(name.trim(), theme.trim());
+            _dServerId = srv2?.id || _dServerId;
+            toast('Сервер создан', 'fa-crown');
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        } finally {
+            _dBusy = false;
+            render();
+        }
+    });
     screen.querySelectorAll('[data-dserver]').forEach(b => b.addEventListener('click', () => {
         _dServerId = b.getAttribute('data-dserver');
         render();
@@ -3754,7 +3816,7 @@ function renderDiscord(screen) {
     screen.querySelectorAll('[data-ddel]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
         const s = findDServer(b.getAttribute('data-ddel'));
-        if (!s || !confirm(`Выйти с сервера «${s.name}»?`)) return;
+        if (!s || !confirm(s.mine ? `Удалить свой сервер «${s.name}»?` : `Выйти с сервера «${s.name}»?`)) return;
         deleteDServer(s.id);
         _dServerId = null;
         render();

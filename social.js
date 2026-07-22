@@ -1293,6 +1293,33 @@ Format: [{"name":"...","desc":"...","channels":[{"name":"general","topic":"..."}
     return parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"name":"' }));
 }
 
+// Свой сервер: юзер даёт название и тему, модель наполняет каналами/участниками
+export async function generateOwnDiscordServer(name, theme) {
+    const prompt = `${await taskHeader(`${getUserName()} is creating her OWN Discord server called «${name}».`)}
+Server theme / what it's about: ${theme || name}.
+Flesh it out as its OWNER would set it up: a one-line description, 3-5 text channels (name latin-lowercase-with-dashes, short topic), and 8-14 members who would join — her friends/contacts from the roleplay MAY be here under nicknames, plus fitting strangers. She is the owner (do NOT list her among members).
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"desc":"...","channels":[{"name":"general","topic":"..."}],"members":["nick1","nick2"]}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"desc":"' }));
+    return Array.isArray(arr) ? arr[0] : null;
+}
+
+// Группы-чаты в «Сообщениях» (как в ТГ): семейный/рабочий/дворовый/фандомный.
+// Каждый — с участниками и живой стартовой перепиской.
+export async function generateGroupChats(existing = []) {
+    const m = getMeta();
+    const contactNames = [...new Set((m.contacts || []).map(c => c.name))].slice(0, 14);
+    const prompt = `${await taskHeader(`invent group chats on ${getUserName()}'s phone messenger (like Telegram/WhatsApp groups).`)}
+Her known contacts (реальные участники, use their EXACT names): ${contactNames.join(', ') || '—'}.
+Invent 2-3 group chats that fit her life and the roleplay: e.g. family chat, work team, close friends, neighbours, a hobby/fandom group. Each chat MUST include 2-5 members — prefer her real contacts by exact name, you may add 1-2 fitting new people per chat. Give each a short lively opening exchange (3-6 messages) between the members (NOT ${getUserName()} herself), in their voices, fitting the current story moment.
+${existing.length ? `Chats she already has (do NOT duplicate): ${existing.join('; ')}` : ''}
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"name":"Название чата","members":["Имя1","Имя2"],"messages":[{"author":"Имя1","text":"..."}]}]`;
+    return parseJsonArray(await socialGen(prompt, { maxTokens: 1800, prefill: '[{"name":"' }));
+}
+
 export async function generateDiscordFeed(server, channel, existingMsgs = [], userText = null, replyTo = null) {
     const ex = existingMsgs.slice(-10).map(x => `${x.author}: ${x.text}`).join('\n');
     const userEvent = userText

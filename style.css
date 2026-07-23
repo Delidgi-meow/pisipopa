@@ -1827,6 +1827,55 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
     background: var(--gp-glass-strong);
 }
 
+/* ── Оверлей выбора участников (добавление в групповой чат) ── */
+.gp-member-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0,0,0,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: gp-fade-in .15s ease;
+}
+@keyframes gp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.gp-member-overlay-panel {
+    width: 85%;
+    max-width: 320px;
+    max-height: 70%;
+    display: flex;
+    flex-direction: column;
+    background: var(--gp-glass-strong, rgba(30,30,40,0.92));
+    border: 1px solid var(--gp-border-soft);
+    border-radius: var(--gp-radius, 18px);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    overflow: hidden;
+    animation: gp-slide-up .2s ease;
+}
+@keyframes gp-slide-up { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.gp-member-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.92);
+}
+.gp-member-overlay-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px 14px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.gp-member-overlay-panel .gp-primary {
+    margin: 0 14px 12px;
+    flex: 0 0 auto;
+}
+
 /* ═══ v1.5: фото в смс ═══ */
 .gp-bubble-img {
     position: relative; /* якорь для кнопки генерации/перегена (.gp-mms-gen) */

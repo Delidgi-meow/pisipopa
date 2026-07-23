@@ -4,7 +4,7 @@ import { saveBase64AsFile } from '../../../utils.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
-    addGroup, delGroup, attachImageToMessage, renameContact, banAccount,
+    addGroup, delGroup, updateGroupMembers, attachImageToMessage, renameContact, banAccount,
     isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
@@ -1496,6 +1496,7 @@ function renderThread(screen) {
             </div>
             ${!t.isGroup ? `<button class="gp-iconbtn" id="gp-nick" title="Ник для соцсетей">${ic('fa-at')}</button>` : ''}
             ${!t.isGroup ? `<button class="gp-iconbtn${blocked ? ' gp-danger' : ''}" id="gp-sms-block" title="${blocked ? 'Разблокировать SMS' : 'Заблокировать SMS'}">${ic(blocked ? 'fa-lock-open' : 'fa-ban')}</button>` : ''}
+            ${t.isGroup ? `<button class="gp-iconbtn" id="gp-add-member" title="Добавить участника">${ic('fa-user-plus')}</button>` : ''}
             <button class="gp-iconbtn gp-danger" id="gp-del" title="Удалить ${t.isGroup ? 'чат' : 'контакт'}">${ic('fa-trash-can')}</button>
         </div>
         <div class="gp-msgs" id="gp-msgs">
@@ -1613,6 +1614,45 @@ function renderThread(screen) {
             }, dur * 1000);
         }
     }));
+
+    // Добавить участника из телефонной книги в групповой чат
+    screen.querySelector('#gp-add-member')?.addEventListener('click', () => {
+        const allContacts = getThreadList().filter(x => !x.isGroup);
+        const currentMembers = new Set((t.members || []).map(m => keyOf(m)));
+        const available = allContacts.filter(c => !currentMembers.has(keyOf(c.name)));
+        if (!available.length) {
+            toast('Все контакты уже в чате', 'fa-circle-check');
+            return;
+        }
+        // Создаём оверлей с выбором контактов
+        const overlay = document.createElement('div');
+        overlay.className = 'gp-member-overlay';
+        const list = available.map(c =>
+            `<label class="gp-member-check"><input type="checkbox" value="${esc(c.name)}"><span>${esc(c.name)}</span></label>`
+        ).join('');
+        overlay.innerHTML = `
+            <div class="gp-member-overlay-panel">
+                <div class="gp-member-overlay-header">
+                    <span>Добавить участника</span>
+                    <button class="gp-iconbtn" id="gp-member-close">${ic('fa-xmark')}</button>
+                </div>
+                <div class="gp-member-overlay-list">${list}</div>
+                <button class="gp-primary" id="gp-member-confirm">${ic('fa-check')} Добавить</button>
+            </div>`;
+        screen.appendChild(overlay);
+        overlay.querySelector('#gp-member-close').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        overlay.querySelector('#gp-member-confirm').addEventListener('click', () => {
+            const selected = [...overlay.querySelectorAll('input:checked')].map(i => i.value);
+            if (!selected.length) { toast('Выбери хотя бы одного', 'fa-circle-exclamation'); return; }
+            const newMembers = [...(t.members || []), ...selected];
+            updateGroupMembers(t.key, newMembers);
+            overlay.remove();
+            updatePhoneInjection();
+            toast(`Добавлено: ${selected.join(', ')}`, 'fa-user-plus');
+            render();
+        });
+    });
 
     screen.querySelector('#gp-del')?.addEventListener('click', () => {
         if (!confirm(`Удалить ${t.isGroup ? 'групповой чат' : 'контакт'} «${t.name}» из телефона?\n(Сообщения в самом чате останутся.)`)) return;

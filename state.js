@@ -240,6 +240,14 @@ export function delGroup(groupKey) {
     m.groups = m.groups.filter(g => `group:${keyOf(g.name)}` !== groupKey);
     saveMeta();
 }
+export function updateGroupMembers(groupKey, members) {
+    const m = getMeta();
+    const g = m.groups.find(g => `group:${keyOf(g.name)}` === groupKey);
+    if (!g) return false;
+    g.members = (members || []).map(x => String(x).trim()).filter(Boolean);
+    saveMeta();
+    return true;
+}
 
 export function saveMeta() {
     try { saveMetadataDebounced(); } catch (e) { console.warn('[GlassPhone] saveMeta failed:', e); }

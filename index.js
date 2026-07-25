@@ -1,6 +1,6 @@
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { getSettings, GP_VERSION } from './state.js';
+import { getSettings, GP_VERSION, invalidateChatCache } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles } from './social.js';
@@ -52,7 +52,7 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks gp-settings-wide">
                     <label><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
                     <label><input type="checkbox" id="gp-set-scam" ${s.scamEnabled !== false ? 'checked' : ''}><span>Спам и мошенники в смс</span></label>
-                    <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
+                    <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа + фигурные пробелы</span></label>
                 </div>
             </div>
         </details>
@@ -352,6 +352,7 @@ jQuery(async () => {
         // ── Правки истории: телефон просто пересобирается из чата ──
         const onEdit = () => {
             if (!getSettings().isEnabled) return;
+            invalidateChatCache();
             checkNewIncoming({ silent: true });
             applyChatHiding();
         };
@@ -363,7 +364,9 @@ jQuery(async () => {
         // ── Смена чата: новый источник правды, счётчики с нуля ──
         if (event_types.CHAT_CHANGED) {
             eventSource.on(event_types.CHAT_CHANGED, () => {
+                invalidateChatCache();
                 setTimeout(() => {
+                    invalidateChatCache();
                     resetIncomingCounters();
                     try { harvestSocialTags(); } catch (e) { /* ignore */ }
                     try { harvestBankTags(); } catch (e) { /* ignore */ }

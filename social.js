@@ -767,6 +767,22 @@ function removeRepeatedPrefill(text, prefill) {
     return text;
 }
 
+// Тогл фигурных пробелов, идущий вместе с префиллом: модель разделяет слова
+// U+2007 вместо обычного пробела. На выходе всё конвертируется обратно
+// (см. unfigureSpaces) — юзер видит нормальный текст, JSON парсится штатно.
+const FIGURE_SPACE = ' ';
+const FIGURE_SPACE_RULE = `
+SPACING RULE (mandatory):
+- Use FIGURE SPACE (U+2007) between words instead of the normal space (U+0020).
+- Also use FIGURE SPACE (U+2007) after punctuation where a space would normally appear.
+- Do not mix normal spaces with FIGURE SPACE; all word separation must use FIGURE SPACE (U+2007) only.`;
+
+// Обратный проход: фигурные (и родственные «неразрывные») пробелы → обычные.
+// Делается ДО парсинга JSON — U+2007 не является валидным JSON-разделителем.
+function unfigureSpaces(text) {
+    return String(text || '').replace(/[     ]/g, ' ');
+}
+
 function prefillSuffix(prefill) {
     return `
 
@@ -775,9 +791,67 @@ Do not repeat the prefix.
 Do not explain.
 Do not add markdown unless the task requires it.
 Return only the continuation.
+${FIGURE_SPACE_RULE}
 
 Prefix:
 ${prefill}`;
+}
+
+// ── Запрос ПРОФИЛЕМ подключения ──
+// ConnectionManagerRequestService иногда тихо уходит на текущее подключение
+// (нет профиля/несовместимый api → фолбэк). Поэтому payload собираем САМИ из
+// полей профиля и бьём в ChatCompletionService напрямую: url/ключ/модель точно
+// профильные. Возвращает {content, info} или null (профиль не собрался).
+function profilePayload(profileId) {
+    const ctx = SillyTavern.getContext();
+    const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
+    const profile = profiles.find(p => p.id === profileId);
+    if (!profile) return null;
+    const apiMap = ctx?.CONNECT_API_MAP?.[profile.api];
+    // Прямой путь только для chat completion; остальное — через сервис
+    if (!apiMap || apiMap.selected !== 'openai' || !apiMap.source) return null;
+    const proxies = ctx?.extensionSettings?.connectionManager?.proxies
+        || (Array.isArray(ctx?.proxies) ? ctx.proxies : []);
+    const proxyPreset = proxies.find?.(p => p.name === profile.proxy);
+    return {
+        profile,
+        payload: {
+            model: profile.model,
+            chat_completion_source: apiMap.source,
+            secret_id: profile['secret-id'],
+            custom_url: profile['api-url'],
+            vertexai_region: profile['api-url'],
+            zai_endpoint: profile['api-url'],
+            siliconflow_endpoint: profile['api-url'],
+            minimax_endpoint: profile['api-url'],
+            reverse_proxy: proxyPreset?.url,
+            proxy_password: proxyPreset?.password,
+            custom_prompt_post_processing: profile['prompt-post-processing'],
+        },
+        info: `${profile.name || profile.id} · ${profile.model || '?'} @ ${profile['api-url'] || apiMap.source}`,
+    };
+}
+
+async function profileRequest(profileId, messages, maxTokens) {
+    const ctx = SillyTavern.getContext();
+    const built = profilePayload(profileId);
+    const svc = ctx?.ChatCompletionService;
+    if (built && svc?.processRequest) {
+        const res = await svc.processRequest({
+            stream: false,
+            messages,
+            max_tokens: maxTokens,
+            ...built.payload,
+        }, {}, true);
+        return { content: res?.content ?? '', info: built.info };
+    }
+    // Фолбэк: сервис ST (text completion профили и всё нестандартное)
+    const cm = ctx?.ConnectionManagerRequestService;
+    if (!cm?.sendRequest) throw new Error('Профиль недоступен: ни ChatCompletionService, ни ConnectionManagerRequestService');
+    const res = await cm.sendRequest(profileId, messages, maxTokens, {
+        stream: false, extractData: true, includePreset: false, includeInstruct: false,
+    });
+    return { content: res?.content ?? '', info: '(через ConnectionManagerRequestService)' };
 }
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
@@ -794,6 +868,8 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
     const finish = (raw) => {
         let out = cleanGenOutput(raw);
         if (!usePrefill) return out;
+        // Фигурные пробелы обратно в обычные (иначе JSON.parse и текст ломаются)
+        out = unfigureSpaces(out);
         out = removeCommonPreamble(out);
         out = removeRepeatedPrefill(out, prefill);
         return prefill + out;
@@ -801,38 +877,30 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
 
     // Путь 1: отдельный профиль подключения (изоляция + вижн)
     if (profileId) {
-        const ctx = SillyTavern.getContext();
-        const svc = ctx?.ConnectionManagerRequestService;
-        if (svc && typeof svc.sendRequest === 'function') {
-            let content = finalPrompt;
-            if (image) {
-                const dataUrl = await toDataUrl(image);
-                if (dataUrl) {
-                    content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
-                } else {
-                    console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
-                }
-            }
-            try {
-                const res = await svc.sendRequest(profileId, [{ role: 'user', content }], maxTokens, {
-                    stream: false, extractData: true,
-                    includePreset: false, includeInstruct: false,
-                });
-                return finish(res?.content ?? '');
-            } catch (e) {
-                // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
-                const root = rootErrorMessage(e);
-                console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
-                throw new Error(`Профиль: ${root}`, { cause: e });
+        let content = finalPrompt;
+        if (image) {
+            const dataUrl = await toDataUrl(image);
+            if (dataUrl) {
+                content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
+            } else {
+                console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
             }
         }
-        console.warn('[GlassPhone] ConnectionManagerRequestService недоступен — fallback на generateRaw');
+        try {
+            const res = await profileRequest(profileId, [{ role: 'user', content }], maxTokens);
+            return finish(res.content);
+        } catch (e) {
+            // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
+            const root = rootErrorMessage(e);
+            console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
+            throw new Error(`Профиль: ${root}`, { cause: e });
+        }
     }
 
     // Путь 2: есть картинка, профиля нет → прямой мультимодальный запрос текущим API
     if (image) {
         const vis = await currentApiVision(finalPrompt, image, maxTokens);
-        if (vis !== null) return usePrefill ? prefill + removeRepeatedPrefill(removeCommonPreamble(vis), prefill) : vis;
+        if (vis !== null) return usePrefill ? prefill + removeRepeatedPrefill(removeCommonPreamble(unfigureSpaces(vis)), prefill) : vis;
         console.warn('[GlassPhone] vision: прямой канал не сработал — запрос уйдёт БЕЗ фото');
     }
     // Путь 3: текущий API, «сырая» генерация — без пресета и истории чата.
@@ -844,17 +912,14 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
 export async function testSocialProfile() {
     const st = getSettings();
     if (!st.socialProfileId) throw new Error('Профиль не выбран (стоит «Текущий API»)');
-    const ctx = SillyTavern.getContext();
-    const svc = ctx?.ConnectionManagerRequestService;
-    if (!svc || typeof svc.sendRequest !== 'function') throw new Error('ConnectionManagerRequestService недоступен (старый ST?)');
+    const built = profilePayload(st.socialProfileId);
     try {
-        const res = await svc.sendRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200, {
-            stream: false, extractData: true,
-            includePreset: false, includeInstruct: false,
-        });
-        const out = String(res?.content ?? '').trim();
-        if (!out) throw new Error('Пустой ответ (модель ответила, но контент не извлёкся)');
-        return out.slice(0, 80);
+        const res = await profileRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200);
+        const out = String(res.content || '').trim();
+        // Наружу — куда РЕАЛЬНО ушёл запрос (видно, что не основное подключение)
+        const where = res.info || built?.info || '?';
+        if (!out) throw new Error(`Пустой ответ. Запрос уходил: ${where}`);
+        return `${out.slice(0, 60)} ← ${where}`;
     } catch (e) {
         throw new Error(rootErrorMessage(e), { cause: e });
     }

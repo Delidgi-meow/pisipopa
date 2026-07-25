@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.23.1';
+export const GP_VERSION = '1.25.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -249,8 +249,34 @@ export function updateGroupMembers(groupKey, members) {
     return true;
 }
 
+// Версия метаданных: любое сохранение инвалидирует кэш scanChat
+let _metaVersion = 0;
 export function saveMeta() {
+    _metaVersion++;
     try { saveMetadataDebounced(); } catch (e) { console.warn('[GlassPhone] saveMeta failed:', e); }
+}
+
+// ── Кэш тяжёлых проходов по чату ──
+// scanChat/getHiddenMessageIndexes читают ВЕСЬ чат со stripThink-регэкспами на
+// каждом сообщении. Их дёргают рендер, инжект, харвест тегов и MutationObserver —
+// а resolveAuthorKey звал scanChat внутри цикла по тегам, давая O(n²)
+// (чат 1000 сообщений ≈ 400+ мс на событие → заметные фризы).
+// Сигнатура дешёвая: длина чата + хвост последнего сообщения + версия метаданных.
+function chatSignature() {
+    let chat = [];
+    try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return 'x'; }
+    const last = chat.length ? chat[chat.length - 1] : null;
+    const tail = last ? String(last.mes || '').slice(-160) : '';
+    const swipe = last?.swipe_id ?? '';
+    return `${chat.length}|${swipe}|${tail}|${_metaVersion}`;
+}
+
+let _scanCache = null, _scanSig = null;
+let _hiddenCache = null, _hiddenSig = null;
+
+// Принудительный сброс (правки сообщений, смена чата)
+export function invalidateChatCache() {
+    _scanSig = null; _hiddenSig = null;
 }
 
 // ── Ключ треда/контакта: нормализованное имя ──
@@ -775,6 +801,14 @@ export function getRpDateTime() {
 // Возвращает { contacts: Map(key → {name, number, source}), threads: Map(key → {name, messages[]}) }
 // messages: {dir:'in'|'out', text, idx, time}
 export function scanChat() {
+    const sig = chatSignature();
+    if (_scanSig === sig && _scanCache) return _scanCache;
+    const res = scanChatUncached();
+    _scanSig = sig; _scanCache = res;
+    return res;
+}
+
+function scanChatUncached() {
     const contacts = new Map();
     const threads = new Map();
 
@@ -1079,6 +1113,14 @@ export function hideContact(key) {
 // (бот ответил только тегами tel:sms / tel:silent + служебные теги других расширений).
 // Обычные RP-посты, где смс вплетена в повествование, НЕ прячутся никогда.
 export function getHiddenMessageIndexes() {
+    const sig = chatSignature();
+    if (_hiddenSig === sig && _hiddenCache) return _hiddenCache;
+    const res = hiddenMessageIndexesUncached();
+    _hiddenSig = sig; _hiddenCache = res;
+    return res;
+}
+
+function hiddenMessageIndexesUncached() {
     const out = [];
     let chat = [];
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return out; }

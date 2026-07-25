@@ -246,7 +246,7 @@ const DICT = {
     'Включено': 'Enabled', 'Плавающая кнопка': 'Floating button',
     'Инструкции для модели (теги смс/контактов)': 'Model instructions (sms/contact tags)',
     'Скрывать смс-переписку из ленты чата': 'Hide texting from the chat feed',
-    'Профиль для соцсетей:': 'Social profile:', 'Префилл ответа': 'Response prefill',
+    'Профиль для соцсетей:': 'Social profile:', 'Префилл ответа': 'Response prefill', 'Префилл ответа + фигурные пробелы': 'Response prefill + figure spaces',
     'Контекст соцсетей:': 'Social context:', 'История + лорбук + карточка бота': 'History + lorebook + char card',
     'Изолированно (только срез чата)': 'Isolated (chat slice only)',
     'Макс. длина ответа:': 'Max response length:', '0 = авто': '0 = auto',

@@ -4,6 +4,7 @@ import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext } from './state.js';
 import { lang } from './i18n.js';
+import { logReq, logOk, logFail } from './debug-log.js';
 
 // Язык генерируемого UI-контента (ачивки, статусы репутации): следует выбору
 // языка ИНТЕРФЕЙСА, а не языку ролевой (контент лент/смс остаётся на языке РП)
@@ -142,6 +143,22 @@ export function deleteStory(id) {
     saveMeta();
 }
 // Ленивый рост просмотров: доля подписчиков, добирается за ~4 часа
+// Лайк чужой сторис. Первый лайк уходит строкой в журнал — автор в ролевой
+// узнаёт, что она отреагировала (снятие лайка молча, чтобы не спамить).
+export function toggleStoryLike(story) {
+    if (!story) return false;
+    story.liked = !story.liked;
+    if (story.liked && !story.likeLogged) {
+        story.likeLogged = true;
+        try {
+            const what = story.caption || story.imgDesc || 'сторис';
+            logSocialToChat(`${getUserName()} лайкнула сторис ${story.author} («${String(what).slice(0, 60)}»)`);
+        } catch (e) { /* ignore */ }
+    }
+    saveMeta();
+    return story.liked;
+}
+
 export function bumpStoryViews(story) {
     if (!story) return 0;
     const followers = getSocial().socialProfiles?.instagram?.followers || 40;
@@ -887,12 +904,16 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             }
         }
         try {
+            const built = profilePayload(profileId);
+            logReq('запрос (профиль)', `${built?.info || profileId}${image ? ' + фото' : ''} · max ${maxTokens}`);
             const res = await profileRequest(profileId, [{ role: 'user', content }], maxTokens);
+            logOk('ответ (профиль)', `${String(res.content || '').length} симв.`);
             return finish(res.content);
         } catch (e) {
             // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
             const root = rootErrorMessage(e);
             console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
+            logFail('запрос (профиль)', root);
             throw new Error(`Профиль: ${root}`, { cause: e });
         }
     }
@@ -904,7 +925,9 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
         console.warn('[GlassPhone] vision: прямой канал не сработал — запрос уйдёт БЕЗ фото');
     }
     // Путь 3: текущий API, «сырая» генерация — без пресета и истории чата.
+    logReq('запрос (текущий API)', `max ${maxTokens}${image ? ' · фото не приложено' : ''}`);
     const res = await generateRaw({ prompt: finalPrompt, responseLength: maxTokens });
+    logOk('ответ (текущий API)', `${String(res || '').length} симв.`);
     return finish(res);
 }
 

@@ -24,7 +24,7 @@ import {
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
-    getStories, activeStories, addStory, deleteStory, bumpStoryViews, generateContactStories, generateStoryReactions,
+    getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
     generateRepLabel, generateGroupChats,
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
@@ -35,6 +35,7 @@ import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwn
 import { getTwitch, findStream, refreshStreams, tickStream, donateToStream, startMyStream, tickMyStream, endMyStream } from './twitch.js';
 import { getNotes, addNote, updateNote, deleteNote, toggleNoteShared } from './notes.js';
 import { tr, trDom, lang, DAYS_I18N, MONTHS_I18N } from './i18n.js';
+import { logAct, logOk, logFail } from './debug-log.js';
 
 // Все confirm/prompt модуля идут через перевод (шэдоуинг браузерных диалогов)
 const confirm = (msg) => window.confirm(tr(msg));
@@ -1361,17 +1362,29 @@ async function rewriteSmsTag(m, t, mutate) {
     try {
         const ctx = SillyTavern.getContext();
         const chatMsg = ctx?.chat?.[m.idx];
-        if (!chatMsg || !Number.isInteger(m.tagStart) || !Number.isInteger(m.tagEnd)) return false;
-        const tag = chatMsg.mes.slice(m.tagStart, m.tagEnd);
+        if (!chatMsg) { logFail('перезапись тега', `нет сообщения #${m.idx}`); return false; }
+        // Позиция тега: сначала по точному тексту (индексы из scanChat посчитаны
+        // по stripThink-версии и смещены, если модель писала в <think>),
+        // затем — по сохранённым индексам как запасной вариант
+        let start = -1, end = -1;
+        if (m.tagText) {
+            const at = chatMsg.mes.indexOf(m.tagText);
+            if (at !== -1) { start = at; end = at + m.tagText.length; }
+        }
+        if (start === -1 && Number.isInteger(m.tagStart) && Number.isInteger(m.tagEnd)) {
+            start = m.tagStart; end = m.tagEnd;
+        }
+        if (start === -1) { logFail('перезапись тега', 'тег не найден в сообщении (правка/свайп?)'); return false; }
+        const tag = chatMsg.mes.slice(start, end);
         const re = m.dir === 'out'
             ? /<!--\s*tel:out:(\{[\s\S]*?\})\s*-->/i
             : /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/i;
         const jm = tag.match(re);
-        if (!jm) return false; // индексы съехали — не портим чужой текст
+        if (!jm) { logFail('перезапись тега', `по позиции не тег: «${String(tag).slice(0, 40)}»`); return false; }
         let j = null;
         try { j = JSON.parse(jm[1]); } catch (e) { /* битый JSON от модели — соберём заново */ }
         if (!j) {
-            if (m.dir === 'out') return false; // свои маркеры пишем мы, они всегда валидны
+            if (m.dir === 'out') { logFail('перезапись тега', 'битый JSON в своём маркере'); return false; }
             j = { from: m.from, text: m.text || '' };
             if (t?.isGroup) j.chat = t.name;
             if (m.photoDesc) j.photo = m.photoDesc;
@@ -1380,11 +1393,13 @@ async function rewriteSmsTag(m, t, mutate) {
         }
         mutate(j);
         const kind = m.dir === 'out' ? 'out' : 'sms';
-        chatMsg.mes = chatMsg.mes.slice(0, m.tagStart) + `<!--tel:${kind}:${JSON.stringify(j)}-->` + chatMsg.mes.slice(m.tagEnd);
+        chatMsg.mes = chatMsg.mes.slice(0, start) + `<!--tel:${kind}:${JSON.stringify(j)}-->` + chatMsg.mes.slice(end);
         await saveChatConditional();
+        logOk('перезапись тега', `${kind} #${m.idx}`);
         return true;
     } catch (e) {
         console.warn('[GlassPhone] rewriteSmsTag failed:', e);
+        logFail('перезапись тега', String(e?.message || e));
         return false;
     }
 }
@@ -1696,6 +1711,7 @@ function renderThread(screen) {
         if (!m || !r) return;
         const removing = m.react === r.id;
         _reactPickerFor = null;
+        logAct('реакция', `${removing ? 'снять' : r.id} · ${m.dir === 'in' ? 'входящее' : 'своё'} #${m.idx}`);
         const ok = await rewriteSmsTag(m, t, (j) => {
             if (removing) delete j.react;
             else j.react = r.id;
@@ -2550,7 +2566,24 @@ let _storyDraftImage = null;
 let _storyGenBusy = false;
 let _storyIdx = 0;
 const STORY_REACT_ICONS = { fire: 'fa-fire', heart: 'fa-heart', laugh: 'fa-face-laugh-squint', wow: 'fa-face-surprise', sad: 'fa-face-sad-tear' };
-let _storyAuthor = null;   // null = свои сторис, иначе имя автора
+let _storyAuthor = null;   // выставляется при входе с аватарки: на чью сторис встать
+
+// Все активные сторис в порядке листания: свои первыми, дальше чужие —
+// сгруппированы по автору (как в инсте) и отсортированы по свежести
+function allStoriesOrdered() {
+    const all = activeStories();
+    const mine = all.filter(s => s.ak === 'user').sort((a, b) => a.time - b.time);
+    const others = all.filter(s => s.ak !== 'user');
+    const byAuthor = new Map();
+    for (const s of others) {
+        const k = s.author || '?';
+        if (!byAuthor.has(k)) byAuthor.set(k, []);
+        byAuthor.get(k).push(s);
+    }
+    const groups = [...byAuthor.values()].map(g => g.sort((a, b) => a.time - b.time));
+    groups.sort((a, b) => b[0].time - a[0].time); // свежий автор выше
+    return [...mine, ...groups.flat()];
+}
 let _othersStoriesBusy = false;
 
 function igStoriesRow() {
@@ -2693,12 +2726,20 @@ function renderIgNewStory(screen) {
 
 function renderIgStory(screen) {
     currentScreen = 'igstory';
-    const isMine = !_storyAuthor;
-    const stories = activeStories().filter(s => isMine ? s.ak === 'user' : s.author === _storyAuthor);
+    // Листаем ВСЕ активные сторис подряд (свои первыми, затем чужие по свежести):
+    // правая стрелка ведёт к сторис следующего автора, а не закрывает просмотр
+    const stories = allStoriesOrdered();
+    if (_storyAuthor) {
+        // Вход с аватарки автора — встаём на его первую сторис
+        const at = stories.findIndex(s => s.author === _storyAuthor);
+        if (at !== -1) { _storyIdx = at; }
+        _storyAuthor = null;
+    }
     if (!stories.length) { goto('ig'); return; }
     if (_storyIdx >= stories.length) _storyIdx = stories.length - 1;
     const st = stories[_storyIdx];
-    const authorName = isMine ? getUserName() : (st.author || _storyAuthor);
+    const isMine = st.ak === 'user';
+    const authorName = isMine ? getUserName() : (st.author || '?');
     const authorAva = avatarHtml(authorName, avatarForAuthor(isMine ? 'user' : st.ak), 'gp-avatar gp-avatar-sm');
     const views = isMine ? bumpStoryViews(st) : 0;
     const ageMin = Math.max(1, Math.round((Date.now() - st.time) / 60000));
@@ -2713,15 +2754,19 @@ function renderIgStory(screen) {
                 ${authorAva}
                 <b>${esc(authorName)}</b>
                 <span>${esc(ageLabel)}</span>
-                ${!st.image && st.imgDesc ? `<button class="gp-iconbtn" id="gp-st-draw2" title="Нарисовать" ${_storyGenBusy ? 'disabled' : ''}>${ic(_storyGenBusy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button>` : ''}
-                <button class="gp-iconbtn gp-danger" id="gp-st-del" title="Удалить сторис">${ic('fa-trash-can')}</button>
+                ${st.imgDesc ? `<button class="gp-iconbtn" id="gp-st-draw2" title="${st.image ? 'Перегенерировать фото' : 'Нарисовать'}" ${_storyGenBusy ? 'disabled' : ''}>${ic(_storyGenBusy ? 'fa-spinner fa-spin' : (st.image ? 'fa-rotate-right' : 'fa-wand-magic-sparkles'))}</button>` : ''}
+                ${isMine ? `<button class="gp-iconbtn gp-danger" id="gp-st-del" title="Удалить сторис">${ic('fa-trash-can')}</button>` : ''}
                 <button class="gp-iconbtn" id="gp-st-close">${ic('fa-xmark')}</button>
             </div>
             ${media}
             ${st.caption ? `<div class="gp-igst-caption">${esc(st.caption)}</div>` : ''}
-            ${isMine ? `<div class="gp-igst-bottom">${ic('fa-eye')} ${views}${(st.reacts || []).length ? `<span class="gp-igst-reacts">${st.reacts.map(r => `<span class="gp-igst-react">${ic(STORY_REACT_ICONS[r.icon] || 'fa-heart')} ${esc(r.author)}</span>`).join('')}</span>` : ''}</div>` : ''}
+            ${isMine
+                ? `<div class="gp-igst-bottom">${ic('fa-eye')} ${views}${(st.reacts || []).length ? `<span class="gp-igst-reacts">${st.reacts.map(r => `<span class="gp-igst-react">${ic(STORY_REACT_ICONS[r.icon] || 'fa-heart')} ${esc(r.author)}</span>`).join('')}</span>` : ''}</div>`
+                : `<div class="gp-igst-bottom gp-igst-bottom-other"><button class="gp-igst-like${st.liked ? ' gp-on' : ''}" id="gp-st-like" title="Нравится" aria-label="Нравится"><i class="${st.liked ? 'fa-solid' : 'fa-regular'} fa-heart"></i></button></div>`}
             <div class="gp-igst-nav gp-igst-nav-left" id="gp-st-prev"></div>
             <div class="gp-igst-nav gp-igst-nav-right" id="gp-st-next"></div>
+            <button class="gp-igst-arrow gp-igst-arrow-left${_storyIdx <= 0 ? ' gp-off' : ''}" id="gp-st-arrow-prev" title="Назад">${ic('fa-chevron-left')}</button>
+            <button class="gp-igst-arrow gp-igst-arrow-right${_storyIdx >= stories.length - 1 ? ' gp-off' : ''}" id="gp-st-arrow-next" title="Вперёд">${ic('fa-chevron-right')}</button>
         </div>`;
     screen.querySelector('#gp-st-close')?.addEventListener('click', () => goto('ig'));
     screen.querySelector('#gp-st-draw2')?.addEventListener('click', async (e) => {
@@ -2758,16 +2803,25 @@ function renderIgStory(screen) {
         if (!confirm('Удалить эту сторис?')) return;
         deleteStory(st.id);
         if (_storyIdx > 0) _storyIdx--;
-        const left = activeStories().filter(s => isMine ? s.ak === 'user' : s.author === _storyAuthor);
-        if (!left.length) goto('ig');
+        if (!allStoriesOrdered().length) goto('ig');
         else render();
     });
-    screen.querySelector('#gp-st-prev')?.addEventListener('click', () => {
-        if (_storyIdx > 0) { _storyIdx--; render(); }
-    });
-    screen.querySelector('#gp-st-next')?.addEventListener('click', () => {
+    const goPrev = (e) => { e?.stopPropagation(); if (_storyIdx > 0) { _storyIdx--; render(); } };
+    const goNext = (e) => {
+        e?.stopPropagation();
         if (_storyIdx < stories.length - 1) { _storyIdx++; render(); }
         else goto('ig');
+    };
+    screen.querySelector('#gp-st-prev')?.addEventListener('click', goPrev);
+    screen.querySelector('#gp-st-next')?.addEventListener('click', goNext);
+    screen.querySelector('#gp-st-arrow-prev')?.addEventListener('click', goPrev);
+    screen.querySelector('#gp-st-arrow-next')?.addEventListener('click', goNext);
+    // Лайк чужой сторис (первый лайк уходит строкой в журнал для ролевой)
+    screen.querySelector('#gp-st-like')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const on = toggleStoryLike(st);
+        render();
+        if (on) toast(`Нравится: сторис ${authorName}`, 'fa-heart');
     });
 }
 

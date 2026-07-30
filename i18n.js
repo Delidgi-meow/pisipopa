@@ -28,7 +28,7 @@ const DICT = {
     'Разблокировать': 'Unblock', 'Заблокировать': 'Block', 'Заблокировать аккаунт': 'Block account',
     'Обновить ленту': 'Refresh feed', 'Обновить каталог': 'Refresh catalog', 'Обновить предложения': 'Refresh offers',
     'Перегенерировать': 'Regenerate', 'Другой ответ': 'Another reply', 'Не сейчас': 'Not now',
-    'Сбросить кнопку': 'Reset button', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
+    'Сбросить кнопку': 'Reset button', 'Отчёт: последние действия': 'Report: recent activity', 'Отчёт скопирован в буфер': 'Report copied to clipboard', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
     'Пусто': 'Empty', 'случайный': 'random', 'авто': 'auto', 'Сегодня': 'Today', 'сейчас': 'now',
     'Имя': 'Name', 'Номер': 'Number', 'Название': 'Title', 'Описание': 'Description',
     'Категория': 'Category', 'Сумма': 'Amount', 'Цена': 'Price', 'Стиль': 'Style',
@@ -90,7 +90,7 @@ const DICT = {
     'Стиль картинок телефона': 'Phone image style',
     // Сторис
     'Новая сторис': 'New story', 'Твоя сторис': 'Your story', 'Ещё': 'More',
-    'Нарисовать по описанию': 'Draw from description', 'Текст на сторис': 'Story text',
+    'Нарисовать по описанию': 'Draw from description', 'Лайк': 'Like', 'Нравится': 'Liked', 'Назад': 'Back', 'Вперёд': 'Forward', 'Текст на сторис': 'Story text',
     'Подпись поверх фото': 'Text over the photo', 'Для генерации и реакций в ролевой': 'For generation and roleplay reactions',
     'Сторис опубликована': 'Story published', 'Удалить сторис': 'Delete story',
     'Удалить эту сторис?': 'Delete this story?',

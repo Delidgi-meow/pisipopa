@@ -2184,6 +2184,32 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 .gp-igst-nav { position: absolute; top: 60px; bottom: 60px; width: 38%; z-index: 3; cursor: pointer; }
 .gp-igst-nav-left { left: 0; }
 .gp-igst-nav-right { right: 0; }
+/* Видимые стрелки листания сторис + счётчик + лайк чужой сторис */
+.gp-igst-arrow {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 5;
+    width: 34px; height: 34px; display: grid; place-items: center;
+    cursor: pointer; font-size: 20px; color: rgba(255,255,255,.62);
+    background: none; border: 0; padding: 0;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,.55));
+    transition: opacity .2s, transform .15s, color .2s;
+}
+.gp-igst-arrow:hover { color: rgba(255,255,255,.92); }
+.gp-igst-arrow:active { transform: translateY(-50%) scale(.9); }
+.gp-igst-arrow-left { left: 10px; }
+.gp-igst-arrow-right { right: 10px; }
+.gp-igst-arrow.gp-off { opacity: .25; pointer-events: none; }
+.gp-igst-bottom-other { display: flex; justify-content: center; }
+.gp-igst-like {
+    display: grid; place-items: center; cursor: pointer;
+    width: 44px; height: 44px; padding: 0; font-size: 26px;
+    color: rgba(255,255,255,.92); background: none; border: 0;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,.5));
+    transition: transform .15s, color .2s;
+}
+.gp-igst-like:active { transform: scale(.9); }
+.gp-igst-like.gp-on { color: #ff4d6d; }
+.gp-igst-like.gp-on i { animation: gp-like-pop .35s cubic-bezier(.34,1.6,.64,1); }
+@keyframes gp-like-pop { 0%,100% { transform: scale(1); } 45% { transform: scale(1.35); } }
 /* вторичная кнопка (сторис/заметки) */
 .gp-secondary {
     display: flex;
@@ -2866,3 +2892,13 @@ body.gp-theme-zephyr .gp-toast { background: rgba(255,255,255,.96); color: #1c23
 .gp-note-meta { display: flex; align-items: center; gap: 8px; }
 .gp-note-meta .gp-tw-time { flex: 1 1 auto; }
 .gp-note-eye { width: 28px; height: 28px; font-size: 11px; }
+
+/* Отчёт последних действий телефона (панель настроек) */
+.gp-report-box {
+    max-height: 260px; overflow: auto; margin: 6px 0 0;
+    padding: 8px 10px; border-radius: 8px;
+    background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.12);
+    color: var(--SmartThemeBodyColor, #ddd);
+    font-family: Consolas, monospace; font-size: 10px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+}

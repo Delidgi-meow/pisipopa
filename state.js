@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.25.0';
+export const GP_VERSION = '1.28.1';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -900,7 +900,7 @@ function scanChatUncached() {
                 // полное описание остаётся в mes (для модели и саммари)
                 const displayBody = body.replace(/\*(?:фото|photo):[^*]*\*\s*/i, '').replace(/\*(?:фото|photo)\*\s*/i, '').trim();
                 const tagStart = text.indexOf(om[0]);
-                const entry = { dir: 'out', text: displayBody, idx: i, time, tagStart, tagEnd: tagStart + om[0].length };
+                const entry = { dir: 'out', text: displayBody, idx: i, time, tagStart, tagEnd: tagStart + om[0].length, tagText: om[0] };
                 if (isVoice) entry.voice = true;
                 if (j.react) entry.react = String(j.react);
                 // Фото: путь из маркера (надёжно — часть текста) ИЛИ из extra.media (ST-нативно)
@@ -949,6 +949,9 @@ function scanChatUncached() {
                 const entry = {
                     dir: 'in', from: String(j.from), text: String(j.text || ''), idx: i, time,
                     tagStart: tm.index, tagEnd: tm.index + tm[0].length,
+                    // Точный текст тега: индексы посчитаны по stripThink-версии и
+                    // съезжают, если в сообщении был <think> — перезапись ищет по нему
+                    tagText: tm[0],
                     eventId: `${i}:${tm.index}`,
                 };
                 // ММС от персонажа: описание фото → стеклянная заглушка в пузыре

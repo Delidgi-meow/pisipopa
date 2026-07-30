@@ -7,6 +7,7 @@ import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listI
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
+import { buildReport, clearLog } from './debug-log.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -83,6 +84,8 @@ function setupSettingsPanel() {
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
                 </div>
                 <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
+                <button class="menu_button gp-settings-reset" id="gp-show-report" type="button">Отчёт: последние действия</button>
+                <pre id="gp-report-box" class="gp-report-box" hidden></pre>
             </div>
         </details>
 
@@ -236,6 +239,22 @@ function setupSettingsPanel() {
         getSettings().compactRules = this.checked;
         saveSettingsDebounced();
         updatePhoneInjection();
+    });
+    // Отчёт: последние запросы/действия телефона (когда в консоли пусто)
+    $('#gp-show-report').on('click', function () {
+        const box = document.getElementById('gp-report-box');
+        if (!box) return;
+        if (!box.hidden) { box.hidden = true; return; }
+        box.textContent = buildReport(14);
+        box.hidden = false;
+        try {
+            navigator.clipboard?.writeText(box.textContent);
+            toast('Отчёт скопирован в буфер', 'fa-clipboard-check');
+        } catch (e) { /* без буфера — просто показываем */ }
+    });
+    $('#gp-report-box').on('dblclick', function () {
+        clearLog();
+        this.textContent = buildReport(14);
     });
     $('#gp-reset-fab').on('click', function () {
         getSettings().fabPos = null;

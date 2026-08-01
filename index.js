@@ -15,7 +15,9 @@ if (!document.getElementById(cssId)) {
     const link = document.createElement('link');
     link.id = cssId;
     link.rel = 'stylesheet';
-    link.href = '/scripts/extensions/third-party/GlassPhone/style.css?t=' + Date.now();
+    // Путь берём от самого модуля: папку расширения можно переименовать,
+    // стили всё равно найдутся (жёсткий путь ломался после переименования)
+    link.href = new URL('./style.css', import.meta.url).href + '?t=' + Date.now();
     document.head.appendChild(link);
 }
 
@@ -42,7 +44,7 @@ function setupSettingsPanel() {
             <label><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
         </div>
 
-        <details class="gp-settings-group" open>
+        <details class="gp-settings-group">
             <summary><i class="fa-solid fa-layer-group"></i><span><b>Модель и контекст</b><small>Профиль, история и параметры ответа</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
             <div class="gp-settings-group-body gp-settings-grid">
                 <label class="gp-settings-field"><span>Глубина инжекта</span><input type="number" id="gp-set-depth" class="text_pole gp-settings-number" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}"><small>0 — перед последним ходом</small></label>
@@ -90,7 +92,7 @@ function setupSettingsPanel() {
             </div>
         </details>
 
-        <div class="gp-settings-footer"><small>Обои и свой CSS — в приложении «Оформление» внутри телефона.</small><small id="gp-version-label"></small></div>
+        <div class="gp-settings-footer"><small id="gp-version-label"></small></div>
     </div>
 </div>`;
     $('#extensions_settings2').append(html);

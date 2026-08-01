@@ -5,7 +5,7 @@ import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
     addGroup, delGroup, updateGroupMembers, attachImageToMessage, renameContact, banAccount,
-    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta,
+    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
@@ -50,6 +50,41 @@ let typingKey = null;           // тред, в котором «печатае�
 let sending = false;
 let _smsDraftImage = null;      // фото, приложенное к смс (dataURL до отправки)
 let _smsDraftVoice = false;     // режим голосового: текст уйдёт как расшифровка
+
+// Черновики полей ввода. Живут ВНЕ DOM, поэтому переживают и перерисовку
+// (генерация картинки, публикация, новое сообщение), и закрытие телефона.
+const _drafts = new Map();
+let _lastFocusKey = null;       // автофокус — только при смене экрана
+
+// Ключ привязан к экрану и объекту: черновик треда Вадима не подставится Алисе
+function draftScope() {
+    return `${currentScreen}:${currentThreadKey || currentPostId || currentTweetId || ''}`;
+}
+
+function captureDrafts(root) {
+    if (!root) return;
+    const scope = draftScope();
+    root.querySelectorAll('textarea[id], input[id]').forEach(el => {
+        if (el.type === 'file' || el.type === 'checkbox' || el.type === 'radio' || el.type === 'color') return;
+        _drafts.set(`${scope}:${el.id}`, el.value);
+    });
+}
+
+function restoreDrafts(root) {
+    if (!root) return;
+    const scope = draftScope();
+    root.querySelectorAll('textarea[id], input[id]').forEach(el => {
+        if (el.type === 'file' || el.type === 'checkbox' || el.type === 'radio' || el.type === 'color') return;
+        const saved = _drafts.get(`${scope}:${el.id}`);
+        // Только в пустое поле: не затираем значения, выставленные рендером
+        if (saved !== undefined && saved !== '' && !el.value) el.value = saved;
+    });
+}
+
+// Поле очищено осознанно (отправка/публикация) — забыть черновик
+export function clearDraft(id) {
+    _drafts.delete(`${draftScope()}:${id}`);
+}
 let _mmsGenBusy = new Set();    // ММС в процессе генерации фото (по eventId)
 let genBusy = false;            // идёт генерация ленты/комментов
 let selectedStoryEventId = null;
@@ -530,6 +565,8 @@ export function openPhone(threadKey = null) {
 
 export function closePhone() {
     flushCasinoSession(); // если закрыли телефон прямо из казино — итог всё равно уходит в журнал
+    // Недописанный текст переживает закрытие телефона
+    try { captureDrafts(document.getElementById('gp-screen')); } catch (e) { /* ignore */ }
     const ov = document.getElementById('gp-overlay');
     if (ov) ov.classList.remove('gp-open');
     if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
@@ -560,6 +597,7 @@ function tickClock() {
 export function render() {
     const screen = document.getElementById('gp-screen');
     if (!screen || !isPhoneOpen()) return;
+    captureDrafts(screen);
     if (currentScreen === 'thread' && currentThreadKey) renderThread(screen);
     else if (currentScreen === 'add') renderAdd(screen);
     else if (currentScreen === 'list') renderList(screen);
@@ -594,6 +632,9 @@ export function render() {
     else if (currentScreen === 'notes') renderNotes(screen);
     else if (currentScreen === 'appearance') renderAppearance(screen);
     else renderHome(screen);
+    // Возвращаем набранный текст: перерисовка (генерация картинки, публикация,
+    // новое сообщение) больше не стирает то, что юзер печатает
+    restoreDrafts(screen);
     // Перевод отрендеренного экрана (en) / восстановление оригиналов (ru)
     try { trDom(screen); } catch (e) { /* ignore */ }
 }
@@ -1394,6 +1435,10 @@ async function rewriteSmsTag(m, t, mutate) {
         mutate(j);
         const kind = m.dir === 'out' ? 'out' : 'sms';
         chatMsg.mes = chatMsg.mes.slice(0, start) + `<!--tel:${kind}:${JSON.stringify(j)}-->` + chatMsg.mes.slice(end);
+        // Подпись чата считается по длине и хвосту последнего сообщения:
+        // правка в середине её не меняет, и кэш отдал бы дорисованное фото
+        // как «ещё не готово». Сбрасываем явно.
+        invalidateChatCache();
         await saveChatConditional();
         logOk('перезапись тега', `${kind} #${m.idx}`);
         return true;
@@ -1758,26 +1803,18 @@ function renderThread(screen) {
                     if (el) el.textContent = status;
                 },
             );
-            // Персистим: перезаписываем тег по позиции (как deleteSmsFromChat)
-            const ctx = SillyTavern.getContext();
-            const chatMsg = ctx?.chat?.[m.idx];
-            if (chatMsg && Number.isInteger(m.tagStart) && Number.isInteger(m.tagEnd)) {
-                const tag = chatMsg.mes.slice(m.tagStart, m.tagEnd);
-                const jm = tag.match(/<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/i);
-                let j = null;
-                if (jm) { try { j = JSON.parse(jm[1]); } catch (err) { /* битый JSON — соберём заново */ } }
-                if (!j) {
-                    j = { from: m.from, text: m.text || '', photo: m.photoDesc };
-                    if (t.isGroup) j.chat = t.name;
-                    if (m.voice) j.voice = true;
-                }
-                if (jm) {
-                    j.img = src;
-                    chatMsg.mes = chatMsg.mes.slice(0, m.tagStart) + `<!--tel:sms:${JSON.stringify(j)}-->` + chatMsg.mes.slice(m.tagEnd);
-                    await saveChatConditional();
-                }
+            // Персистим через общий rewriteSmsTag: он ищет тег по его ТЕКСТУ.
+            // (Раньше здесь была своя копия логики, резавшая по индексам —
+            // а они посчитаны по stripThink-версии и съезжают, если модель
+            // писала в <think>: картинка генерилась, но молча терялась.)
+            const saved = await rewriteSmsTag(m, t, (j) => { j.img = src; });
+            if (saved) {
+                m.img = src;              // мгновенно, до пересканирования
+                toast('Фото готово', 'fa-image');
+            } else {
+                logFail('ММС-фото', 'тег не найден — картинка не сохранена');
+                toast('Фото сгенерилось, но не привязалось к сообщению', 'fa-circle-exclamation');
             }
-            toast('Фото готово', 'fa-image');
         } catch (err) {
             console.error('[GlassPhone] MMS image gen failed:', err);
             toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
@@ -1800,7 +1837,13 @@ function renderThread(screen) {
         applyChatHiding();
         updateFabBadge();
     }));
-    input?.focus();
+    // Фокус только при первом входе в тред: при перерисовке (реакция, тап по
+    // фото, новое сообщение) экран больше не прыгает к полю ввода
+    const focusKey = draftScope();
+    if (_lastFocusKey !== focusKey) {
+        _lastFocusKey = focusKey;
+        input?.focus();
+    }
 }
 
 // ── Перегенерация последнего ответа персонажа (замена свайпа для скрытых смс) ──
@@ -2031,6 +2074,7 @@ function renderTw(screen) {
     const doPost = async () => {
         const v = input?.value.trim();
         if (!v || genBusy) return;
+        clearDraft('gp-tw-input');
         const userPost = postTweet(v);
         const ad = attachActiveAd('twitter', userPost);
         if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
@@ -2688,6 +2732,7 @@ function renderIgNewStory(screen) {
             toast('Выбери фото или опиши, что на нём', 'fa-circle-exclamation');
             return;
         }
+        clearDraft('gp-st-desc'); clearDraft('gp-st-caption');
         const story = addStory({ image: _storyDraftImage, imgDesc: desc, caption });
         _storyDraftImage = null;
         // Журнал: ролевая знает про сторис (с фото — vision-модель видит сама)
@@ -2871,6 +2916,7 @@ function renderIgNew(screen) {
             toast('Выбери фото или опиши, что на нём', 'fa-circle-exclamation');
             return;
         }
+        clearDraft('gp-ig-desc'); clearDraft('gp-ig-caption');
         const post = postIg({ image: _igDraftImage, imgDesc: desc, caption });
         const ad = attachActiveAd('instagram', post);
         if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
@@ -3132,6 +3178,7 @@ function renderOfNew(screen) {
             toast('Выбери фото или опиши, что на нём', 'fa-circle-exclamation');
             return;
         }
+        clearDraft('gp-of-desc'); clearDraft('gp-of-caption'); clearDraft('gp-of-price');
         const post = postOf({ image: _ofDraftImage, imgDesc: desc, caption, price });
         _ofDraftImage = null;
         updatePhoneInjection();
@@ -4422,11 +4469,15 @@ function deleteSmsFromChat(msg) {
         if (msg.dir === 'out') {
             // Юзерское сообщение: вырезаем tel:out тег + видимую часть [СМС → ...]
             text = text.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->\s*/i, '');
-            text = text.replace(/\[СМС\s*→\s*[^\]]+\]\s*[\s\S]*/i, '');
+            text = text.replace(/\[(?:СМС|SMS)\s*→\s*[^\]]+\]\s*[\s\S]*/i, '');
         } else {
-            // Позиция тега получена парсером до декодирования JSON, поэтому
-            // кавычки, переносы и одинаковые тексты не мешают точному удалению.
-            if (Number.isInteger(msg.tagStart) && Number.isInteger(msg.tagEnd)) {
+            // Ищем тег по его тексту: индексы посчитаны по версии без <think>,
+            // и при мыслях модели съезжают — вырезался бы кусок сообщения.
+            const at = msg.tagText ? text.indexOf(msg.tagText) : -1;
+            if (at !== -1) {
+                text = text.slice(0, at) + text.slice(at + msg.tagText.length);
+            } else if (Number.isInteger(msg.tagStart) && Number.isInteger(msg.tagEnd)
+                && /^<!--\s*tel:sms:/i.test(text.slice(msg.tagStart, msg.tagEnd))) {
                 text = text.slice(0, msg.tagStart) + text.slice(msg.tagEnd);
             } else {
                 // Совместимость с объектом сообщения, открытым до обновления.
@@ -4455,6 +4506,7 @@ function deleteSmsFromChat(msg) {
         } else {
             // Обновляем текст сообщения
             chatMsg.mes = text;
+            invalidateChatCache();
             if (typeof ctx.saveChat === 'function') ctx.saveChat();
         }
     } catch (e) {
@@ -4550,6 +4602,7 @@ async function doSend(key) {
                     // Надёжный путь миниатюры: img в маркере tel:out (mes переживает всё)
                     const markerJson = JSON.stringify({ ...markerBase, img: src });
                     lastMsg.mes = lastMsg.mes.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->/, `<!--tel:out:${markerJson}-->`);
+                    invalidateChatCache();
                     await saveChatConditional();
 
                     // Миниатюра на экране НЕМЕДЛЕННО, до вижна
@@ -4565,6 +4618,7 @@ async function doSend(key) {
                     if (combo) {
                         if (combo.desc) {
                             lastMsg.mes = lastMsg.mes.replace(photoTok, `${photoTok.slice(0, -1)}: ${combo.desc}*`);
+                            invalidateChatCache();
                             await saveChatConditional();
                         }
                         const botMes = combo.replies.length

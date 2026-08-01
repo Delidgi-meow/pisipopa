@@ -1,4 +1,3 @@
-
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
@@ -1032,60 +1031,37 @@ function isMessageCompatibilityError(message) {
 }
 
 // ── Запрос ПРОФИЛЕМ подключения ──
-// ConnectionManagerRequestService иногда тихо уходит на текущее подключение
-// (нет профиля/несовместимый api → фолбэк). Поэтому payload собираем САМИ из
-// полей профиля и бьём в ChatCompletionService напрямую: url/ключ/модель точно
-// профильные. Возвращает {content, info} или null (профиль не собрался).
-function profilePayload(profileId) {
+// ВАЖНО: прокси-пресеты SillyTavern хранятся во внутреннем массиве `proxies`
+// модуля openai.js и не обязаны быть доступны через getContext(). Раньше здесь
+// payload собирался вручную, из-за чего связанный с профилем reverse proxy мог
+// потеряться. Тогда запрос шёл напрямую к официальному endpoint с secret_id.
+// Теперь профиль всегда выполняет штатный ConnectionManagerRequestService:
+// именно он имеет доступ к настоящим proxy presets и корректно связывает
+// профиль, endpoint, secret-id и reverse proxy. Никакого фолбэка на текущий API.
+function profileInfo(profileId) {
     const ctx = SillyTavern.getContext();
     const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
     const profile = profiles.find(p => p.id === profileId);
     if (!profile) return null;
     const apiMap = ctx?.CONNECT_API_MAP?.[profile.api];
-    // Прямой путь только для chat completion; остальное — через сервис
-    if (!apiMap || apiMap.selected !== 'openai' || !apiMap.source) return null;
-    const proxies = ctx?.extensionSettings?.connectionManager?.proxies
-        || (Array.isArray(ctx?.proxies) ? ctx.proxies : []);
-    const proxyPreset = proxies.find?.(p => p.name === profile.proxy);
     return {
         profile,
-        payload: {
-            model: profile.model,
-            chat_completion_source: apiMap.source,
-            secret_id: profile['secret-id'],
-            custom_url: profile['api-url'],
-            vertexai_region: profile['api-url'],
-            zai_endpoint: profile['api-url'],
-            siliconflow_endpoint: profile['api-url'],
-            minimax_endpoint: profile['api-url'],
-            reverse_proxy: proxyPreset?.url,
-            proxy_password: proxyPreset?.password,
-            custom_prompt_post_processing: profile['prompt-post-processing'],
-        },
-        info: `${profile.name || profile.id} · ${profile.model || '?'} @ ${profile['api-url'] || apiMap.source}`,
+        info: `${profile.name || profile.id} · ${profile.model || '?'} @ ${profile.proxy ? `proxy:${profile.proxy}` : (profile['api-url'] || apiMap?.source || '?')}`,
     };
 }
 
 async function profileRequest(profileId, messages, maxTokens) {
     const ctx = SillyTavern.getContext();
-    const built = profilePayload(profileId);
-    const svc = ctx?.ChatCompletionService;
-    if (built && svc?.processRequest) {
-        const res = await svc.processRequest({
-            stream: false,
-            messages,
-            max_tokens: maxTokens,
-            ...built.payload,
-        }, {}, true);
-        return { content: await extractGeneratedText(res), info: built.info };
-    }
-    // Фолбэк: сервис ST (text completion профили и всё нестандартное)
     const cm = ctx?.ConnectionManagerRequestService;
-    if (!cm?.sendRequest) throw new Error('Профиль недоступен: ни ChatCompletionService, ни ConnectionManagerRequestService');
+    if (!cm?.sendRequest) {
+        throw new Error('ConnectionManagerRequestService недоступен. Обновите SillyTavern: выбранный профиль не будет заменён текущим API.');
+    }
+    const built = profileInfo(profileId);
+    if (!built) throw new Error(`Профиль подключения не найден: ${profileId}`);
     const res = await cm.sendRequest(profileId, messages, maxTokens, {
         stream: false, extractData: true, includePreset: false, includeInstruct: false,
     });
-    return { content: await extractGeneratedText(res), info: '(через ConnectionManagerRequestService)' };
+    return { content: await extractGeneratedText(res), info: `${built.info} · Connection Manager` };
 }
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
@@ -1122,7 +1098,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             }
         }
         try {
-            const built = profilePayload(profileId);
+            const built = profileInfo(profileId);
             logReq('запрос (профиль)', `${built?.info || profileId}${image ? ' + фото' : ''}${usePrefill ? ' · assistant-prefill' : ''}${useFigureSpaces ? ' · U+2007' : ''} · max ${maxTokens}`);
             const res = await profileRequest(profileId, requestMessages, maxTokens);
             logOk('ответ (профиль)', `${String(res.content || '').length} симв.`);
@@ -1211,7 +1187,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
 export async function testSocialProfile() {
     const st = getSettings();
     if (!st.socialProfileId) throw new Error('Профиль не выбран (стоит «Текущий API»)');
-    const built = profilePayload(st.socialProfileId);
+    const built = profileInfo(st.socialProfileId);
     try {
         const res = await profileRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200);
         const out = String(res.content || '').trim();

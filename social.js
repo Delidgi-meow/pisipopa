@@ -651,6 +651,189 @@ function cleanGenOutput(raw) {
     return t.trim();
 }
 
+
+// Некоторые провайдеры успевают вернуть текст candidate, а затем ST выбрасывает
+// ошибку из-за finishReason / safety metadata. Ищем только известные поля
+// генерации и используем текст, когда он действительно пригоден.
+function textFromContentValue(value, depth = 0, seen = new Set()) {
+    if (value === null || value === undefined || depth > 9) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value !== 'object') return '';
+    if (seen.has(value)) return '';
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+        // Массив content/parts — последовательные куски одного ответа.
+        return value.map(v => textFromContentValue(v, depth + 1, seen)).filter(Boolean).join('');
+    }
+
+    // OpenAI Responses API / content parts / Gemini parts.
+    if (value.thought === true || value.type === 'reasoning') return '';
+    if (typeof value.output_text === 'string') return value.output_text;
+    if (typeof value.generated_text === 'string') return value.generated_text;
+    if (typeof value.completion === 'string') return value.completion;
+    if (typeof value.text === 'string' && ['text', 'output_text', 'text_delta'].includes(String(value.type || 'text'))) return value.text;
+
+    const read = (v) => textFromContentValue(v, depth + 1, seen);
+
+    // Приоритет нормализованному content. Не склеиваем content с raw data:
+    // сервисы ST нередко кладут один и тот же ответ в оба поля.
+    if ('content' in value) {
+        const found = read(value.content);
+        if (found) return found;
+    }
+    if ('output' in value) {
+        const found = read(value.output);
+        if (found) return found;
+    }
+    if (Array.isArray(value.parts)) {
+        const found = value.parts
+            .filter(part => part?.thought !== true)
+            .map(part => typeof part?.text === 'string' ? part.text : read(part))
+            .filter(Boolean).join('');
+        if (found) return found;
+    }
+    if (value.message && typeof value.message === 'object') {
+        const found = read(value.message.content);
+        if (found) return found;
+    }
+
+    // OpenAI-compatible chat/text completion: choices — альтернативы, берём
+    // первый непустой вариант, а не склеиваем их между собой.
+    if (Array.isArray(value.choices)) {
+        for (const choice of value.choices) {
+            const found = read(choice?.message?.content)
+                || read(choice?.delta?.content)
+                || (typeof choice?.text === 'string' ? choice.text : '');
+            if (found) return found;
+        }
+    }
+
+    // Gemini / Vertex candidate. Даже при PROHIBITED_CONTENT/SAFETY в parts
+    // иногда уже лежит завершённый JSON, который ST успел вывести в консоль.
+    if (Array.isArray(value.candidates)) {
+        for (const candidate of value.candidates) {
+            const parts = candidate?.content?.parts;
+            if (Array.isArray(parts)) {
+                const found = parts
+                    .filter(part => part?.thought !== true)
+                    .map(part => typeof part?.text === 'string' ? part.text : read(part))
+                    .filter(Boolean).join('');
+                if (found) return found;
+            } else {
+                const found = read(candidate?.content);
+                if (found) return found;
+            }
+        }
+    }
+
+    if (value.candidate && typeof value.candidate === 'object') {
+        const found = read(value.candidate);
+        if (found) return found;
+    }
+
+    // Обёртки fetch/axios/ST. message намеренно НЕ читаем: там обычно текст
+    // ошибки («Candidate blocked»), а не результат модели.
+    for (const key of ['data', 'body', 'result', 'responseData', 'rawResponse', 'partialResponse', 'details']) {
+        if (!(key in value)) continue;
+        const nested = value[key];
+        if (typeof nested === 'string') {
+            const decoded = textFromSerializedPayload(nested);
+            if (decoded) return decoded;
+            // result иногда является уже готовым plain-text ответом. body/data/details
+            // строкой чаще содержат сериализованный ответ или сообщение ошибки.
+            if (key === 'result' && !ERROR_ONLY_OUTPUT.test(nested.trim())) return nested;
+        } else {
+            const found = read(nested);
+            if (found) return found;
+        }
+    }
+
+    return '';
+}
+
+function textFromSerializedPayload(raw) {
+    const text = String(raw || '').trim();
+    if (!text || !/^[{\[]/.test(text)) return '';
+    try { return textFromContentValue(JSON.parse(text)); }
+    catch (e) { return ''; }
+}
+
+async function readFetchResponsePayload(response) {
+    if (!response || typeof response !== 'object') return '';
+    try {
+        if (typeof response.clone === 'function') {
+            const copy = response.clone();
+            try {
+                const json = await copy.json();
+                const found = textFromContentValue(json);
+                if (found) return found;
+            } catch (e) { /* не JSON или body уже прочитан */ }
+        }
+    } catch (e) { /* clone() может упасть при bodyUsed */ }
+    try {
+        if (typeof response.clone === 'function') {
+            const text = await response.clone().text();
+            return textFromSerializedPayload(text);
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
+async function extractGeneratedText(value) {
+    const direct = textFromContentValue(value);
+    if (direct) return direct;
+
+    // Error.cause и Response часто non-enumerable, поэтому идём по ним явно.
+    let cur = value;
+    const seen = new Set();
+    for (let depth = 0; cur && depth < 8 && !seen.has(cur); depth++) {
+        seen.add(cur);
+        for (const key of ['response', 'res', 'rawResponse', 'partialResponse']) {
+            const response = cur?.[key];
+            const nested = textFromContentValue(response) || await readFetchResponsePayload(response);
+            if (nested) return nested;
+        }
+        for (const key of ['data', 'body', 'details']) {
+            const nestedValue = cur?.[key];
+            const nested = typeof nestedValue === 'string'
+                ? textFromSerializedPayload(nestedValue)
+                : textFromContentValue(nestedValue);
+            if (nested) return nested;
+        }
+        cur = cur?.cause;
+    }
+    return '';
+}
+
+const ERROR_ONLY_OUTPUT = /^(?:error\b|api request failed\b|prohibited(?:_content)?\b|blocked\b|content[_ -]?filter\b|candidate\b.*(?:blocked|prohibited|safety|finish)|response blocked\b|moderation\b)/i;
+
+function isUsableGeneratedText(raw) {
+    const text = cleanGenOutput(raw);
+    if (!text) return false;
+    // Не превращаем сам текст исключения в «успешный ответ».
+    if (ERROR_ONLY_OUTPUT.test(text) && !/[{\[]/.test(text)) return false;
+    return true;
+}
+
+function isParsableForPrefill(text, prefill) {
+    const start = String(prefill || '').trimStart()[0];
+    if (start === '[') return Array.isArray(parseJsonArray(text));
+    if (start === '{') return !!parseJsonObject(text);
+    return true;
+}
+
+async function recoverGeneratedText(error, finish, prefill = '') {
+    const raw = await extractGeneratedText(error);
+    if (!isUsableGeneratedText(raw)) return null;
+    const complete = finish(raw);
+    if (!isUsableGeneratedText(complete)) return null;
+    // Для структурированных генераций подавляем ошибку только если после
+    // склейки префилла действительно получается читаемый JSON.
+    if (prefill && !isParsableForPrefill(complete, prefill)) return null;
+    return complete;
+}
+
 // Компактный срез последних сообщений чата — вместо полного контекста
 export function rpContextBlock(count = 12) {
     try {
@@ -693,12 +876,9 @@ async function toDataUrl(src) {
     }
 }
 
-// ── Прямой мультимодальный запрос ТЕКУЩИМ подключением (без профиля, без пресета) ──
-// Зачем: generateQuietPrompt с quietImage зависит от ST-настройки «Send inline images»
-// и allowlist моделей — картинка молча выбрасывалась. Здесь мы бьём в бэкенд напрямую
-// через ChatCompletionService с настройками текущего подключения — прокси сам решает,
-// умеет ли модель вижн.
-async function currentApiVision(prompt, image, maxTokens = 1024) {
+// ── Прямой запрос ТЕКУЩИМ chat-completion подключением (без профиля/пресета) ──
+// Принимает готовый массив messages, поэтому поддерживает финальный assistant-prefill.
+async function currentApiRequest(messages, maxTokens = 1024) {
     try {
         const ctx = SillyTavern.getContext();
         if (ctx?.mainApi !== 'openai') return null; // только chat completion
@@ -711,18 +891,10 @@ async function currentApiVision(prompt, image, maxTokens = 1024) {
             if (typeof oaiMod.getChatCompletionModel === 'function') model = oaiMod.getChatCompletionModel();
         } catch (e) { /* ignore */ }
         if (!model) model = oai.custom_model || oai.openai_model || '';
-        const dataUrl = await toDataUrl(image);
-        if (!dataUrl) return null;
 
         const res = await svc.processRequest({
             stream: false,
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'text', text: prompt },
-                    { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } },
-                ],
-            }],
+            messages,
             max_tokens: maxTokens,
             model,
             chat_completion_source: oai.chat_completion_source,
@@ -731,8 +903,45 @@ async function currentApiVision(prompt, image, maxTokens = 1024) {
             proxy_password: oai.proxy_password,
         }, {}, true);
 
-        const out = cleanGenOutput(res?.content ?? '');
+        const raw = await extractGeneratedText(res);
+        const out = cleanGenOutput(raw);
         return out || null;
+    } catch (e) {
+        const rescued = cleanGenOutput(await extractGeneratedText(e));
+        if (isUsableGeneratedText(rescued)) {
+            console.warn('[GlassPhone] currentApiRequest: ST сообщил об ошибке, но candidate восстановлен:', rootErrorMessage(e));
+            return rescued;
+        }
+        console.warn('[GlassPhone] currentApiRequest failed:', e);
+        return null;
+    }
+}
+
+function attachImageToMessages(messages, dataUrl) {
+    const out = messages.map(m => ({ ...m }));
+    const userIndex = out.findIndex(m => m?.role === 'user');
+    if (userIndex < 0) return out;
+    const original = out[userIndex].content;
+    const textPart = Array.isArray(original)
+        ? original.filter(x => x?.type === 'text')
+        : [{ type: 'text', text: String(original ?? '') }];
+    out[userIndex].content = [
+        ...textPart,
+        { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } },
+    ];
+    return out;
+}
+
+// Мультимодальная обёртка: картинка добавляется в user-сообщение, а финальное
+// assistant-сообщение с префиллом остаётся последним.
+async function currentApiVision(promptOrMessages, image, maxTokens = 1024) {
+    try {
+        const dataUrl = await toDataUrl(image);
+        if (!dataUrl) return null;
+        const messages = Array.isArray(promptOrMessages)
+            ? promptOrMessages
+            : [{ role: 'user', content: String(promptOrMessages || '') }];
+        return await currentApiRequest(attachImageToMessages(messages, dataUrl), maxTokens);
     } catch (e) {
         console.warn('[GlassPhone] currentApiVision failed:', e);
         return null;
@@ -751,8 +960,10 @@ export function rootErrorMessage(e) {
     return msg;
 }
 
-// ── Префилл (опция): начало ответа пишется «за модель» через инструкцию —
-// не зависит от API/пресета/модели. JSON стартует сразу, без преамбул и отказов.
+// ── Префилл и фигурные пробелы: две независимые опции ──
+// Префилл отправляется настоящим финальным assistant-сообщением там, где API
+// принимает chat messages. Для старых text-completion путей остаётся безопасная
+// текстовая эмуляция без Unicode-обфускации.
 const PREAMBLES = [
     'Sure.', 'Sure,', 'Okay.', 'Okay,', 'Understood.', 'Understood,',
     'Here is the result:', "Here's the result:", 'Here is the output:',
@@ -784,15 +995,10 @@ function removeRepeatedPrefill(text, prefill) {
     return text;
 }
 
-// Тогл фигурных пробелов, идущий вместе с префиллом: модель разделяет слова
-// U+2007 вместо обычного пробела. На выходе всё конвертируется обратно
-// (см. unfigureSpaces) — юзер видит нормальный текст, JSON парсится штатно.
-const FIGURE_SPACE = ' ';
-const FIGURE_SPACE_RULE = `
-SPACING RULE (mandatory):
-- Use FIGURE SPACE (U+2007) between words instead of the normal space (U+0020).
-- Also use FIGURE SPACE (U+2007) after punctuation where a space would normally appear.
-- Do not mix normal spaces with FIGURE SPACE; all word separation must use FIGURE SPACE (U+2007) only.`;
+const FIGURE_SPACE_RULE = `OUTPUT SPACING:
+Use FIGURE SPACE (U+2007) wherever ordinary spaces would normally separate words.
+Do not alter JSON punctuation, quotation marks, keys, numbers, or structure.
+Return only the requested output.`;
 
 // Обратный проход: фигурные (и родственные «неразрывные») пробелы → обычные.
 // Делается ДО парсинга JSON — U+2007 не является валидным JSON-разделителем.
@@ -800,18 +1006,29 @@ function unfigureSpaces(text) {
     return String(text || '').replace(/[     ]/g, ' ');
 }
 
-function prefillSuffix(prefill) {
-    return `
+function buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces) {
+    let userPrompt = String(prompt || '').trim();
+    if (useFigureSpaces) userPrompt += `\n\n${FIGURE_SPACE_RULE}`;
+    const messages = [{ role: 'user', content: userPrompt }];
+    // ВАЖНО: assistant-prefill обязан быть последним сообщением. Любая инструкция
+    // после него создаст новый turn и превратит префилл в обычный прошлый ответ.
+    if (usePrefill) messages.push({ role: 'assistant', content: String(prefill || '') });
+    return messages;
+}
 
-You must continue the text after the prefix below.
-Do not repeat the prefix.
-Do not explain.
-Do not add markdown unless the task requires it.
-Return only the continuation.
-${FIGURE_SPACE_RULE}
+// Фолбэк только для путей, которые физически не умеют принимать messages.
+function legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces) {
+    let out = String(prompt || '').trim();
+    if (useFigureSpaces) out += `\n\n${FIGURE_SPACE_RULE}`;
+    if (usePrefill) {
+        out += `\n\nOUTPUT FORMAT:\nThe response has already begun with the JSON prefix below. Write only the remaining continuation, without repeating the prefix or adding Markdown. The prefix plus your continuation must form one valid JSON value.\n\nJSON prefix:\n${prefill}`;
+    }
+    return out;
+}
 
-Prefix:
-${prefill}`;
+function isMessageCompatibilityError(message) {
+    return /(assistant|message|messages|role|alternate|alternating|last\s+message|prefill|conversation)/i.test(String(message || ''))
+        && !/(prohibited|moderation|safety|policy|blocked|content filter)/i.test(String(message || ''));
 }
 
 // ── Запрос ПРОФИЛЕМ подключения ──
@@ -860,7 +1077,7 @@ async function profileRequest(profileId, messages, maxTokens) {
             max_tokens: maxTokens,
             ...built.payload,
         }, {}, true);
-        return { content: res?.content ?? '', info: built.info };
+        return { content: await extractGeneratedText(res), info: built.info };
     }
     // Фолбэк: сервис ST (text completion профили и всё нестандартное)
     const cm = ctx?.ConnectionManagerRequestService;
@@ -868,7 +1085,7 @@ async function profileRequest(profileId, messages, maxTokens) {
     const res = await cm.sendRequest(profileId, messages, maxTokens, {
         stream: false, extractData: true, includePreset: false, includeInstruct: false,
     });
-    return { content: res?.content ?? '', info: '(через ConnectionManagerRequestService)' };
+    return { content: await extractGeneratedText(res), info: '(через ConnectionManagerRequestService)' };
 }
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
@@ -880,13 +1097,14 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
     const floor = parseInt(st.socialMaxTokens) || 0;
     if (floor > 0) maxTokens = Math.max(maxTokens, floor);
     const usePrefill = !!(st.usePrefill && prefill);
-    const finalPrompt = usePrefill ? String(prompt).trim() + prefillSuffix(prefill) : prompt;
+    const useFigureSpaces = !!st.useFigureSpaces;
+    const messages = buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces);
+    const fallbackPrompt = legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces);
 
     const finish = (raw) => {
         let out = cleanGenOutput(raw);
+        if (useFigureSpaces) out = unfigureSpaces(out);
         if (!usePrefill) return out;
-        // Фигурные пробелы обратно в обычные (иначе JSON.parse и текст ломаются)
-        out = unfigureSpaces(out);
         out = removeCommonPreamble(out);
         out = removeRepeatedPrefill(out, prefill);
         return prefill + out;
@@ -894,24 +1112,57 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
 
     // Путь 1: отдельный профиль подключения (изоляция + вижн)
     if (profileId) {
-        let content = finalPrompt;
+        let requestMessages = messages;
         if (image) {
             const dataUrl = await toDataUrl(image);
             if (dataUrl) {
-                content = [{ type: 'text', text: finalPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
+                requestMessages = attachImageToMessages(messages, dataUrl);
             } else {
                 console.warn('[GlassPhone] vision: не удалось прочитать картинку — запрос без фото');
             }
         }
         try {
             const built = profilePayload(profileId);
-            logReq('запрос (профиль)', `${built?.info || profileId}${image ? ' + фото' : ''} · max ${maxTokens}`);
-            const res = await profileRequest(profileId, [{ role: 'user', content }], maxTokens);
+            logReq('запрос (профиль)', `${built?.info || profileId}${image ? ' + фото' : ''}${usePrefill ? ' · assistant-prefill' : ''}${useFigureSpaces ? ' · U+2007' : ''} · max ${maxTokens}`);
+            const res = await profileRequest(profileId, requestMessages, maxTokens);
             logOk('ответ (профиль)', `${String(res.content || '').length} симв.`);
             return finish(res.content);
         } catch (e) {
-            // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
             const root = rootErrorMessage(e);
+            const rescued = await recoverGeneratedText(e, finish, usePrefill ? prefill : '');
+            if (rescued !== null) {
+                console.warn(`[GlassPhone] профиль вернул ошибку «${root}», но candidate пригоден — используем его.`);
+                logOk('ответ восстановлен из candidate', `${rescued.length} симв. · ${root}`);
+                return rescued;
+            }
+            // Некоторые text-completion/прокси-профили не принимают финальную роль
+            // assistant. Для них повторяем запрос один раз с безопасной эмуляцией.
+            if (usePrefill && isMessageCompatibilityError(root)) {
+                try {
+                    let content = fallbackPrompt;
+                    if (image) {
+                        const dataUrl = await toDataUrl(image);
+                        if (dataUrl) content = [{ type: 'text', text: fallbackPrompt }, { type: 'image_url', image_url: { url: dataUrl, detail: 'auto' } }];
+                    }
+                    console.warn('[GlassPhone] профиль не принял assistant-prefill; fallback к текстовой эмуляции:', root);
+                    logReq('повтор (эмуляция префилла)', `${profileId} · max ${maxTokens}`);
+                    const retry = await profileRequest(profileId, [{ role: 'user', content }], maxTokens);
+                    logOk('ответ (эмуляция префилла)', `${String(retry.content || '').length} симв.`);
+                    return finish(retry.content);
+                } catch (retryError) {
+                    const retryRoot = rootErrorMessage(retryError);
+                    const rescuedRetry = await recoverGeneratedText(retryError, finish, usePrefill ? prefill : '');
+                    if (rescuedRetry !== null) {
+                        console.warn(`[GlassPhone] fallback вернул ошибку «${retryRoot}», но candidate пригоден — используем его.`);
+                        logOk('ответ восстановлен из candidate', `${rescuedRetry.length} симв. · ${retryRoot}`);
+                        return rescuedRetry;
+                    }
+                    console.error(`[GlassPhone] профиль подключения: fallback упал — ${retryRoot}`, retryError);
+                    logFail('повтор (эмуляция префилла)', retryRoot);
+                    throw new Error(`Профиль: ${retryRoot}`, { cause: retryError });
+                }
+            }
+            // Разворачиваем cause-цепочку: «API request failed» сам по себе бесполезен
             console.error(`[GlassPhone] профиль подключения: запрос упал — ${root}`, e);
             logFail('запрос (профиль)', root);
             throw new Error(`Профиль: ${root}`, { cause: e });
@@ -920,15 +1171,40 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
 
     // Путь 2: есть картинка, профиля нет → прямой мультимодальный запрос текущим API
     if (image) {
-        const vis = await currentApiVision(finalPrompt, image, maxTokens);
-        if (vis !== null) return usePrefill ? prefill + removeRepeatedPrefill(removeCommonPreamble(unfigureSpaces(vis)), prefill) : vis;
+        const vis = await currentApiVision(messages, image, maxTokens);
+        if (vis !== null) return finish(vis);
         console.warn('[GlassPhone] vision: прямой канал не сработал — запрос уйдёт БЕЗ фото');
     }
-    // Путь 3: текущий API, «сырая» генерация — без пресета и истории чата.
-    logReq('запрос (текущий API)', `max ${maxTokens}${image ? ' · фото не приложено' : ''}`);
-    const res = await generateRaw({ prompt: finalPrompt, responseLength: maxTokens });
-    logOk('ответ (текущий API)', `${String(res || '').length} симв.`);
-    return finish(res);
+
+    // Путь 3: текущий chat-completion API. При включённом префилле сначала
+    // пробуем настоящий массив user + assistant, без пресета и истории ST.
+    if (usePrefill) {
+        logReq('запрос (текущий API)', `assistant-prefill · max ${maxTokens}${useFigureSpaces ? ' · U+2007' : ''}`);
+        const direct = await currentApiRequest(messages, maxTokens);
+        if (direct !== null) {
+            logOk('ответ (текущий API)', `${String(direct || '').length} симв.`);
+            return finish(direct);
+        }
+        console.warn('[GlassPhone] текущий API не принял messages-prefill; используется текстовая эмуляция');
+    }
+
+    // Путь 4: text-completion/несовместимый API через generateRaw.
+    logReq('запрос (текущий API)', `max ${maxTokens}${image ? ' · фото не приложено' : ''}${usePrefill ? ' · эмуляция префилла' : ''}${useFigureSpaces ? ' · U+2007' : ''}`);
+    try {
+        const res = await generateRaw({ prompt: fallbackPrompt, responseLength: maxTokens });
+        logOk('ответ (текущий API)', `${String(res || '').length} симв.`);
+        return finish(res);
+    } catch (e) {
+        const root = rootErrorMessage(e);
+        const rescued = await recoverGeneratedText(e, finish, usePrefill ? prefill : '');
+        if (rescued !== null) {
+            console.warn(`[GlassPhone] generateRaw вернул ошибку «${root}», но candidate пригоден — используем его.`);
+            logOk('ответ восстановлен из candidate', `${rescued.length} симв. · ${root}`);
+            return rescued;
+        }
+        logFail('запрос (текущий API)', root);
+        throw e;
+    }
 }
 
 // ── Проверка профиля из настроек: маленький запрос, наружу — реальная причина ──

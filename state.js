@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '1.28.1';
+export const GP_VERSION = '1.28.2';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -23,9 +23,12 @@ const defaultSettings = () => ({
     // Профиль подключения для генерации соцсетей ('' = текущий API через generateRaw,
     // изолированно от пресета). Отдельный профиль дополнительно включает вижн.
     socialProfileId: '',
-    // Префилл ответа: начало ответа пишется за модель (JSON стартует сразу,
-    // без болтовни/отказов). Эмуляция через инструкцию — работает с любым API.
+    // Префилл ответа: отдельное финальное assistant-сообщение с началом JSON.
+    // Для несовместимых text-completion путей используется безопасная эмуляция.
     usePrefill: false,
+    // Отдельная опция: просить модель использовать U+2007 между словами.
+    // На выходе эти пробелы всегда нормализуются обратно в обычные.
+    useFigureSpaces: false,
     // Контекст для генерации соцсетей:
     // 'rich' — карточка бота + персона + триггернутый лорбук + история чата (дефолт)
     // 'lite' — только короткий срез чата (максимальная изоляция)
@@ -98,7 +101,11 @@ export function getSettings() {
     }
     const s = extension_settings[EXT_NAME];
     const def = defaultSettings();
+    // Миграция со старой объединённой опции «префилл + фигурные пробелы»:
+    // если отдельного флага ещё нет, сохраняем прежнее поведение пользователя.
+    const hadFigureSpacesSetting = Object.prototype.hasOwnProperty.call(s, 'useFigureSpaces');
     for (const k in def) if (s[k] === undefined) s[k] = def[k];
+    if (!hadFigureSpacesSetting) s.useFigureSpaces = !!s.usePrefill;
     if (!s.themeCustom || typeof s.themeCustom !== 'object' || Array.isArray(s.themeCustom)) {
         s.themeCustom = { ...def.themeCustom };
     } else {

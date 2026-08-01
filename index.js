@@ -53,7 +53,8 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks gp-settings-wide">
                     <label><input type="checkbox" id="gp-set-hide" ${s.hideSmsInChat !== false ? 'checked' : ''}><span>Скрывать смс-переписку из ленты чата</span></label>
                     <label><input type="checkbox" id="gp-set-scam" ${s.scamEnabled !== false ? 'checked' : ''}><span>Спам и мошенники в смс</span></label>
-                    <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа + фигурные пробелы</span></label>
+                    <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
+                    <label><input type="checkbox" id="gp-set-figspaces" ${s.useFigureSpaces ? 'checked' : ''}><span>Фигурные пробелы в ответе</span></label>
                 </div>
             </div>
         </details>
@@ -296,6 +297,10 @@ function setupSettingsPanel() {
     });
     $('#gp-set-prefill').on('change', function () {
         getSettings().usePrefill = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-figspaces').on('change', function () {
+        getSettings().useFigureSpaces = this.checked;
         saveSettingsDebounced();
     });
     // Проверка профиля подключения — показывает РЕАЛЬНУЮ ошибку (а не «API request failed»)

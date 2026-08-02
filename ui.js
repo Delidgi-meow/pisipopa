@@ -5,7 +5,7 @@ import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
     addGroup, delGroup, updateGroupMembers, attachImageToMessage, renameContact, banAccount,
-    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache,
+    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache, getMeta,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import {
@@ -13,14 +13,14 @@ import {
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency, convertCurrency,
 } from './bank.js';
-import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat } from './shop.js';
+import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
     getOfPosts, postOf, likeOf, delOf, addOfComment, delOfComment, generateOfComments, getSocial,
     withdrawOf, setOfWallet,
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
-    compressImage, setContactAvatar, getContactAvatar, avatarForAuthor,
+    compressImage, setContactAvatar, getContactAvatar, avatarForAuthor, setUserAvatar, getUserAvatar,
     timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
@@ -31,7 +31,7 @@ import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOff
 import { maybeScamSms } from './scam.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
-import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer } from './discord.js';
+import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer, addDMember, delDMember } from './discord.js';
 import { getTwitch, findStream, refreshStreams, tickStream, donateToStream, startMyStream, tickMyStream, endMyStream } from './twitch.js';
 import { getNotes, addNote, updateNote, deleteNote, toggleNoteShared } from './notes.js';
 import { tr, trDom, lang, DAYS_I18N, MONTHS_I18N } from './i18n.js';
@@ -58,7 +58,7 @@ let _lastFocusKey = null;       // автофокус — только при с
 
 // Ключ привязан к экрану и объекту: черновик треда Вадима не подставится Алисе
 function draftScope() {
-    return `${currentScreen}:${currentThreadKey || currentPostId || currentTweetId || ''}`;
+    return `${currentScreen}:${currentThreadKey || currentPostId || currentTweetId || _ordChatId || ''}`;
 }
 
 function captureDrafts(root) {
@@ -337,7 +337,6 @@ function createPhone() {
     ov.id = 'gp-overlay';
     ov.innerHTML = `
         <div id="gp-phone">
-            <div class="gp-glass-sheen"></div>
             <div class="gp-island"></div>
             <div class="gp-statusbar">
                 <span id="gp-clock">--:--</span>
@@ -363,7 +362,19 @@ function createPhone() {
 }
 
 // ═══ Скины и кастомный CSS ═══
-const SKINS = ['indigo', 'sunset', 'zephyr', 'neon', 'noir', 'fern', 'lcd', 'void', 'porcelain'];
+const SKINS = ['indigo', 'sunset', 'zephyr', 'neon', 'noir', 'fern', 'lcd', 'void', 'porcelain', 'minimal'];
+
+// Варианты уведомлений. Разметка у всех одна — отличается только оформление,
+// поэтому переключение не трогает ни один из ~40 вызовов toast().
+const TOAST_STYLES = [
+    { id: 'aurora', name: 'Аврора' },
+    { id: 'ring', name: 'Кольцо-таймер' },
+    { id: 'avatar', name: 'Аватар' },
+    { id: 'bubble', name: 'Пузырь' },
+    { id: 'plain', name: 'Чистый текст' },
+    { id: 'timed', name: 'Со временем' },
+    { id: 'editorial', name: 'Редакторский' },
+];
 const LEGACY_SKINS = { rose: 'sunset', emerald: 'fern', mono: 'lcd' };
 const THEME_BODY_CLASSES = [...SKINS, ...Object.values(LEGACY_SKINS)].map(sk => `gp-theme-${sk}`);
 const THEME_INFO = [
@@ -376,6 +387,7 @@ const THEME_INFO = [
     { id: 'lcd', name: 'LCD 3310', note: 'Пиксельное ретро', colors: ['#242e12', '#56642c', '#a7bd5e'] },
     { id: 'void', name: 'Void', note: 'True AMOLED', colors: ['#00ff9d', '#00d984', '#303030'] },
     { id: 'porcelain', name: 'Porcelain', note: 'Светлый день', colors: ['#5a92ff', '#3a7bfd', '#a9c2ff'] },
+    { id: 'minimal', name: 'Минимал', note: 'Строгие грани', colors: ['#8e8e93', '#c7c7cc', '#3a3a3c'] },
 ];
 
 function hexRgb(hex) {
@@ -532,9 +544,15 @@ export function openPhone(threadKey = null) {
     applySkin();
     const ov = document.getElementById('gp-overlay');
     ov.classList.add('gp-open');
+    // Стадии заказов двигает время ролевой: пока телефон был закрыт, курьер мог
+    // выехать. Догоняем при открытии, иначе заказ висел бы «в сборке».
+    notifyDeliveries();
     if (threadKey) {
+        // Пришли по тосту в конкретный тред — экран блокировки только мешает
         currentScreen = 'thread';
         currentThreadKey = threadKey;
+    } else if (getSettings().lockScreen !== false) {
+        currentScreen = 'lock';
     }
     render();
     tickClock();
@@ -565,6 +583,7 @@ export function openPhone(threadKey = null) {
 
 export function closePhone() {
     flushCasinoSession(); // если закрыли телефон прямо из казино — итог всё равно уходит в журнал
+    flushOrderToast();    // и про срок доставки собранной корзины скажем сразу
     // Недописанный текст переживает закрытие телефона
     try { captureDrafts(document.getElementById('gp-screen')); } catch (e) { /* ignore */ }
     const ov = document.getElementById('gp-overlay');
@@ -597,8 +616,13 @@ function tickClock() {
 export function render() {
     const screen = document.getElementById('gp-screen');
     if (!screen || !isPhoneOpen()) return;
+    // «Оформление» — экран настроек: ему нечего показывать из ролевой, а
+    // перерисовка приходит на каждое сообщение и сбивает прокрутку каруселей
+    // и ползунков. Свои изменения он рисует сам, вызывая renderAppearance.
+    if (currentScreen === 'appearance' && screen.querySelector('.gp-appearance-scroll')) return;
     captureDrafts(screen);
-    if (currentScreen === 'thread' && currentThreadKey) renderThread(screen);
+    if (currentScreen === 'lock') renderLock(screen);
+    else if (currentScreen === 'thread' && currentThreadKey) renderThread(screen);
     else if (currentScreen === 'add') renderAdd(screen);
     else if (currentScreen === 'list') renderList(screen);
     else if (currentScreen === 'tw') renderTw(screen);
@@ -622,6 +646,7 @@ export function render() {
     else if (currentScreen === 'shop') renderShop(screen);
     else if (currentScreen === 'shopcat') renderShopCat(screen);
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
+    else if (currentScreen === 'ordchat') renderCourierChat(screen);
     else if (currentScreen === 'casino') renderCasino(screen);
     else if (currentScreen === 'news') renderNews(screen);
     else if (currentScreen === 'discord') renderDiscord(screen);
@@ -639,7 +664,11 @@ export function render() {
     try { trDom(screen); } catch (e) { /* ignore */ }
 }
 
+const SHOP_SCREENS = new Set(['shop', 'shopcat', 'shoporders']);
+
 function goto(screenName) {
+    // Ушла из магазина — значит корзина собрана, пора сказать про доставку
+    if (SHOP_SCREENS.has(currentScreen) && !SHOP_SCREENS.has(screenName)) flushOrderToast();
     currentScreen = screenName;
     render();
 }
@@ -922,6 +951,148 @@ function renderSocialJournal(screen) {
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('socialhub'));
 }
 
+// ── Экран блокировки ──
+// Часы по времени ролевой и всё непрочитанное одним списком. Отметки
+// «просмотрено» для лент держим в meta: у постов своих счётчиков нет.
+
+function feedSeen() {
+    const m = getMeta();
+    if (!m.feedSeen || typeof m.feedSeen !== 'object') m.feedSeen = {};
+    return m.feedSeen;
+}
+
+// Лента просмотрена — запоминаем длину, дальше считаем прирост
+export function markFeedSeen(kind, count) {
+    const s = feedSeen();
+    if (s[kind] === count) return;      // без лишнего saveMeta: он сбрасывает кэш чата
+    s[kind] = count;
+    saveMeta();
+}
+
+function feedNew(kind, count) {
+    const seen = feedSeen()[kind];
+    // Первый заход: показывать «всё новое» бессмысленно — считаем прочитанным
+    if (seen === undefined) return 0;
+    return Math.max(0, count - seen);
+}
+
+// Всё непрочитанное для локскрина: {icon, title, text, time, go}
+function lockNotifications() {
+    const out = [];
+    try {
+        for (const t of getThreadList()) {
+            if (!t.unread || !t.last) continue;
+            out.push({
+                icon: t.isGroup ? 'fa-user-group' : 'fa-comment-dots',
+                title: t.name,
+                text: t.last.photoDesc && !t.last.text ? 'Фото' : (t.last.text || ''),
+                count: t.unread,
+                go: () => { currentThreadKey = t.key; goto('thread'); },
+            });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        for (const o of getOrders()) {
+            const n = courierUnread(o);
+            if (!n) continue;
+            const last = orderChat(o).filter(m => !m.user).slice(-1)[0];
+            out.push({
+                icon: 'fa-truck-fast',
+                title: o.courier?.name || 'Курьер',
+                text: last?.text || '',
+                count: n,
+                go: () => { _ordChatId = o.id; goto('ordchat'); },
+            });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        for (const r of getBankReminders()) {
+            out.push({
+                icon: r.kind === 'loan' ? 'fa-landmark' : 'fa-file-invoice-dollar',
+                title: r.overdue ? 'Просрочен платёж' : 'Пора оплатить',
+                text: `${r.name} — ${fmtMoney(r.amount)}`,
+                go: () => goto('bank'),
+            });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        const feeds = [
+            { kind: 'tw', n: feedNew('tw', getTweets().length), icon: 'fa-x-twitter', title: 'Twitter', text: 'Новое в ленте' },
+            { kind: 'ig', n: feedNew('ig', getIgPosts().length), icon: 'fa-instagram', title: 'Instagram', text: 'Новое в ленте' },
+            { kind: 'of', n: feedNew('of', getOfPosts().length), icon: 'fa-heart', title: 'OnlyFans', text: 'Новое в ленте' },
+        ];
+        for (const f of feeds) {
+            if (f.n > 0) out.push({ icon: f.icon, title: f.title, text: f.text, count: f.n, go: () => goto(f.kind) });
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        if (getSystemsView().storyEvents.active) {
+            out.push({ icon: 'fa-wand-sparkles', title: 'Ивент', text: 'Ждёт твоего решения', go: () => goto('storyevent') });
+        }
+    } catch (e) { /* ignore */ }
+    return out;
+}
+
+export function lockUnreadCount() {
+    try { return lockNotifications().reduce((s, n) => s + (n.count || 1), 0); } catch (e) { return 0; }
+}
+
+function renderLock(screen) {
+    currentScreen = 'lock';
+    const rpDt = getRpDateTime();
+    const d = new Date();
+    const DAYS = DAYS_I18N[lang()];
+    const MONTHS = MONTHS_I18N[lang()];
+    const h = rpDt?.hours ?? d.getHours();
+    const mi = rpDt?.minutes ?? d.getMinutes();
+    const dateStr = rpDt
+        ? `${DAYS[new Date(rpDt.year, rpDt.month - 1, rpDt.day).getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`
+        : `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+    const notes = lockNotifications();
+
+    screen.innerHTML = `
+        <div class="gp-lock" id="gp-lock">
+            <div class="gp-lock-top">
+                <div class="gp-lock-clock">${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}</div>
+                <div class="gp-lock-date">${esc(dateStr)}</div>
+            </div>
+            <div class="gp-lock-notes">
+                ${notes.map((n, i) => `
+                    <div class="gp-lock-note" data-lock-note="${i}" style="animation-delay:${Math.min(i * 60, 300)}ms">
+                        <span class="gp-lock-note-icon">${/^fa-(x-twitter|instagram)$/.test(n.icon) ? brand(n.icon) : ic(n.icon)}</span>
+                        <span class="gp-lock-note-body">
+                            <span class="gp-lock-note-title">${esc(n.title)}${n.count > 1 ? ` <b>${n.count}</b>` : ''}</span>
+                            ${n.text ? `<span class="gp-lock-note-text">${esc(String(n.text).slice(0, 90))}</span>` : ''}
+                        </span>
+                    </div>`).join('')}
+            </div>
+            <div class="gp-lock-bottom">
+                <div class="gp-lock-hint">${ic('fa-chevron-up')} Смахни вверх</div>
+            </div>
+        </div>`;
+
+    const unlock = () => { goto('home'); };
+    screen.querySelectorAll('[data-lock-note]').forEach(el => el.addEventListener('click', () => {
+        const n = notes[parseInt(el.getAttribute('data-lock-note'))];
+        if (n) n.go(); else unlock();
+    }));
+    screen.querySelector('.gp-lock-hint')?.addEventListener('click', unlock);
+
+    // Смахивание вверх — пальцем и мышью
+    const lock = screen.querySelector('#gp-lock');
+    let startY = null;
+    const onDown = (y) => { startY = y; };
+    const onUp = (y) => {
+        if (startY !== null && startY - y > 55) unlock();
+        startY = null;
+    };
+    lock?.addEventListener('touchstart', (e) => onDown(e.touches[0].clientY), { passive: true });
+    lock?.addEventListener('touchend', (e) => onUp(e.changedTouches[0]?.clientY ?? 0), { passive: true });
+    lock?.addEventListener('mousedown', (e) => onDown(e.clientY));
+    lock?.addEventListener('mouseup', (e) => onUp(e.clientY));
+    lock?.addEventListener('wheel', (e) => { if (e.deltaY > 0) unlock(); }, { passive: true });
+}
+
 // ── Домашний экран ──
 function renderHome(screen) {
     currentScreen = 'home';
@@ -974,7 +1145,7 @@ function renderHome(screen) {
                     <div class="gp-app-name">Банк</div>
                 </div>
                 <div class="gp-app" data-app="shop">
-                    <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}</div>
+                    <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}${pendingOrders() > 0 ? `<span class="gp-app-badge">${pendingOrders()}</span>` : ''}</div>
                     <div class="gp-app-name">Магазин</div>
                 </div>
                 <div class="gp-app" data-app="casino">
@@ -1013,6 +1184,9 @@ function renderHome(screen) {
 // Режим «Свой CSS» — последний слайд карусели тем (редактор показывается
 // ТОЛЬКО когда выбран этот слайд, у обычных тем его нет)
 let _appearanceCssMode = false;
+// Разовый флаг: после выбора темы карусель центрируется на ней, а не
+// сохраняет прежнюю прокрутку
+let _centerActiveTheme = false;
 
 function renderAppearance(screen) {
     currentScreen = 'appearance';
@@ -1057,7 +1231,13 @@ function renderAppearance(screen) {
                 <button class="gp-save-preset" id="gp-app-css-apply" type="button">${ic('fa-check')} Применить CSS</button>
             </section>`;
 
-    screen.innerHTML = `
+    // Карусель тем живёт своей прокруткой: её позицию тоже надо перенести,
+    // иначе любая перерисовка утаскивает обратно к активной теме и до дальних
+    // слайдов не долистать
+    const prevCarousel = screen.querySelector('#gp-theme-carousel')?.scrollLeft ?? null;
+    // Через setHtmlKeepScroll: выбор темы/стиля перерисовывает весь экран,
+    // и без этого список каждый раз отскакивал к самому верху
+    setHtmlKeepScroll(screen, '.gp-appearance-scroll', `
         <div class="gp-header gp-appearance-header">
             <button class="gp-iconbtn" id="gp-home-btn">${ic('fa-chevron-left')}</button>
             <div class="gp-title">Оформление</div>
@@ -1129,6 +1309,35 @@ function renderAppearance(screen) {
             </section>
 
             <section class="gp-theme-section">
+                <h3>Уведомления</h3>
+                <div class="gp-toast-styles">
+                    ${TOAST_STYLES.map(t => `
+                        <button class="gp-toast-style${toastStyleId() === t.id ? ' gp-active' : ''}" data-toaststyle="${t.id}" type="button">
+                            <span class="gp-toast-style-demo gp-tsd-${t.id}"><i></i><b></b></span>
+                            <span>${esc(t.name)}</span>
+                        </button>`).join('')}
+                </div>
+                <label class="gp-theme-control">
+                    <span>Экран блокировки</span>
+                    <input id="gp-set-lock" type="checkbox" ${s.lockScreen !== false ? 'checked' : ''}>
+                </label>
+                <label class="gp-theme-control">
+                    <span>Метка времени в ответах</span>
+                    <input id="gp-set-timetag" type="checkbox" ${s.timeTag !== false ? 'checked' : ''}>
+                </label>
+            </section>
+
+            <section class="gp-theme-section">
+                <h3>Мой аватар</h3>
+                <div class="gp-theme-wall-row">
+                    <span class="gp-me-ava">${avatarHtml(getUserName(), avatarForAuthor('user'), 'gp-avatar gp-avatar-sm')}</span>
+                    <button class="gp-save-preset" id="gp-me-ava-pick" type="button">${ic('fa-image')} ${getUserAvatar() ? 'Сменить фото' : 'Загрузить фото'}</button>
+                    ${getUserAvatar() ? `<button class="gp-iconbtn gp-danger" id="gp-me-ava-clear" title="Убрать аватар" type="button">${ic('fa-xmark')}</button>` : ''}
+                    <input type="file" id="gp-me-ava-file" accept="image/*" style="display:none">
+                </div>
+            </section>
+
+            <section class="gp-theme-section">
                 <h3>Обои</h3>
                 <div class="gp-theme-wall-row">
                     <button class="gp-save-preset" id="gp-app-wall-pick" type="button">${ic('fa-image')} ${s.wallpaper ? 'Сменить фото' : 'Загрузить фото'}</button>
@@ -1137,15 +1346,28 @@ function renderAppearance(screen) {
                     <input type="file" id="gp-app-wall-file" accept="image/*" style="display:none">
                 </div>
             </section>`}
-        </div>`;
+        </div>`);
 
     screen.querySelector('#gp-home-btn')?.addEventListener('click', () => goto('home'));
     const carousel = screen.querySelector('#gp-theme-carousel');
     const activeCard = carousel?.querySelector('.gp-theme-card.gp-active');
-    requestAnimationFrame(() => activeCard?.scrollIntoView({ inline: 'center', block: 'nearest' }));
+    // Двигаем карусель вручную: scrollIntoView тащит за собой и вертикальный
+    // скролл, поэтому клик по стилю уведомлений отбрасывал экран наверх.
+    // Центрируем ТОЛЬКО при первом заходе — дальше листает она сама.
+    requestAnimationFrame(() => {
+        if (!carousel) return;
+        const center = _centerActiveTheme;
+        _centerActiveTheme = false;
+        // Прокрутку переносим как есть — кроме первого захода и момента
+        // выбора: тогда активная карточка встаёт по центру
+        if (!center && prevCarousel !== null) { carousel.scrollLeft = prevCarousel; return; }
+        if (!activeCard) return;
+        carousel.scrollLeft = Math.max(0, activeCard.offsetLeft - (carousel.clientWidth - activeCard.clientWidth) / 2);
+    });
 
     const chooseSkin = (nextSkin) => {
         if (!SKINS.includes(nextSkin)) return;
+        _centerActiveTheme = true;   // выбранная карточка встаёт по центру
         _appearanceCssMode = false; // выбор обычной темы выходит из CSS-режима
         getSettings().skin = nextSkin;
         saveSettingsDebounced();
@@ -1156,7 +1378,7 @@ function renderAppearance(screen) {
     };
     screen.querySelectorAll('[data-skin]').forEach(el => el.addEventListener('click', () => chooseSkin(el.dataset.skin)));
     // Последний слайд «Свой CSS»: тема не меняется, снизу открывается редактор
-    const enterCssMode = () => { _appearanceCssMode = true; renderAppearance(screen); };
+    const enterCssMode = () => { _appearanceCssMode = true; _centerActiveTheme = true; renderAppearance(screen); };
     screen.querySelector('#gp-css-card')?.addEventListener('click', enterCssMode);
     screen.querySelector('#gp-css-dot')?.addEventListener('click', enterCssMode);
 
@@ -1187,6 +1409,46 @@ function renderAppearance(screen) {
     screen.querySelector('#gp-theme-icon-b')?.addEventListener('input', e => updateCustom({ iconB: e.target.value }));
     screen.querySelector('#gp-theme-icons-clear')?.addEventListener('click', () => updateCustom({ iconA: null, iconB: null }, true));
     screen.querySelector('#gp-theme-font')?.addEventListener('change', e => updateCustom({ font: e.target.value }));
+
+    // ── Стиль уведомлений: выбрала — сразу показываем, как выглядит ──
+    screen.querySelectorAll('[data-toaststyle]').forEach(b => b.addEventListener('click', () => {
+        getSettings().toastStyle = b.getAttribute('data-toaststyle');
+        saveSettingsDebounced();
+        renderAppearance(screen);
+        // Демо на живом контакте: у стилей с аватаром иначе нечего показать
+        const demo = getThreadList().find(x => !x.isGroup && x.name);
+        if (demo) toast(`${demo.name}: так выглядят уведомления`, 'fa-comment-dots', demo.key);
+        else toast('Курьер в пути · Артём К., ~15 мин', 'fa-truck-fast');
+    }));
+    screen.querySelector('#gp-set-lock')?.addEventListener('change', function () {
+        getSettings().lockScreen = this.checked;
+        saveSettingsDebounced();
+    });
+    screen.querySelector('#gp-set-timetag')?.addEventListener('change', function () {
+        getSettings().timeTag = this.checked;
+        saveSettingsDebounced();
+        updatePhoneInjection();
+    });
+
+    // ── Свой аватар (иначе тянется из персоны ST) ──
+    const meAvaFile = screen.querySelector('#gp-me-ava-file');
+    screen.querySelector('#gp-me-ava-pick')?.addEventListener('click', () => meAvaFile?.click());
+    meAvaFile?.addEventListener('change', async function () {
+        const f = this.files?.[0];
+        if (!f) return;
+        try {
+            setUserAvatar(await compressImage(f, 256, 0.85));
+            renderAppearance(screen);
+            toast('Аватар обновлён', 'fa-user');
+        } catch (e) {
+            toast('Не удалось загрузить фото', 'fa-circle-exclamation');
+        } finally { this.value = ''; }
+    });
+    screen.querySelector('#gp-me-ava-clear')?.addEventListener('click', () => {
+        setUserAvatar('');
+        renderAppearance(screen);
+        toast('Аватар убран', 'fa-check');
+    });
 
     // ── Обои (перенесены из панели расширения) ──
     const wallFile = screen.querySelector('#gp-app-wall-file');
@@ -1787,7 +2049,7 @@ function renderThread(screen) {
         if (!_imgGenReady) {
             const ready = await isImageGenAvailable();
             if (!ready) {
-                toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation');
+                toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation');
                 return;
             }
             _imgGenReady = true;
@@ -2039,6 +2301,7 @@ function bindTwCardActions(root, rerender) {
 function renderTw(screen) {
     currentScreen = 'tw';
     const tweets = getTweets();
+    markFeedSeen('tw', tweets.length);
 
     setHtmlKeepScroll(screen, '.gp-feed', `
         <div class="gp-header gp-thread-header">
@@ -2301,7 +2564,7 @@ function logNewReplies(kindLabel, postText, arr, beforeLen) {
     line += ` прокомментировали: ${parts.join('; ')}`;
     logSocialToChat(line);
 }
-// Доступен ли novarakk (кэш; уточняется асинхронно при первом рендере инсты)
+// Доступна ли генерация картинок (кэш; уточняется асинхронно при первом рендере инсты)
 let _imgGenReady = false;
 isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
 
@@ -2319,7 +2582,7 @@ function igImageHtml(p) {
     }
     const busy = _imgGenBusy.has(p.id);
     // Сгенерированный «снимок»: стеклянная заглушка с описанием кадра.
-    // Кнопка «нарисовать» всегда видна — при клике проверяется доступность novarakk.
+    // Кнопка «нарисовать» всегда видна — доступность проверяется при клике.
     return `<div class="gp-ig-img gp-ig-img-gen" style="${avatarStyle(p.author + (p.imgDesc || ''))}">
         <div class="gp-ig-img-inner">
             ${busy ? ic('fa-spinner fa-spin') : ic('fa-image')}
@@ -2361,7 +2624,7 @@ function bindIgCardActions(root) {
     root.querySelectorAll('[data-like-ig]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); likeIg(b.getAttribute('data-like-ig')); render();
     }));
-    // Генерация/перегенерация картинки через novarakk
+    // Генерация/перегенерация картинки через картинко-расширение
     const doGenImage = async (id) => {
         const post = getIgPosts().find(x => x.id === id) || getOfPosts().find(x => x.id === id);
         if (!post || _imgGenBusy.has(id)) return;
@@ -2369,7 +2632,7 @@ function bindIgCardActions(root) {
         if (!_imgGenReady) {
             const ready = await isImageGenAvailable();
             if (!ready) {
-                toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation');
+                toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation');
                 return;
             }
             _imgGenReady = true;
@@ -2426,6 +2689,7 @@ function bindIgCardActions(root) {
 function renderIg(screen) {
     currentScreen = 'ig';
     const posts = getIgPosts();
+    markFeedSeen('ig', posts.length);
 
     setHtmlKeepScroll(screen, '.gp-feed', `
         <div class="gp-header gp-thread-header">
@@ -2704,7 +2968,7 @@ function renderIgNewStory(screen) {
         if (!desc) { toast('Опиши, что на фото — по этому и рисуем', 'fa-circle-exclamation'); return; }
         if (!_imgGenReady) {
             const ready = await isImageGenAvailable();
-            if (!ready) { toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation'); return; }
+            if (!ready) { toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation'); return; }
             _imgGenReady = true;
         }
         _storyGenBusy = true;
@@ -2819,7 +3083,7 @@ function renderIgStory(screen) {
         if (_storyGenBusy) return;
         if (!_imgGenReady) {
             const ready = await isImageGenAvailable();
-            if (!ready) { toast('novarakk не установлен — генерация картинок недоступна', 'fa-circle-exclamation'); return; }
+            if (!ready) { toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation'); return; }
             _imgGenReady = true;
         }
         _storyGenBusy = true;
@@ -3000,6 +3264,7 @@ function bindOfCardActions(root) {
 function renderOf(screen) {
     currentScreen = 'of';
     const posts = getOfPosts();
+    markFeedSeen('of', posts.length);
     const s = getSocial();
 
     setHtmlKeepScroll(screen, '.gp-feed', `
@@ -3532,7 +3797,7 @@ function renderShop(screen) {
             </div>
         </div>`;
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
-    screen.querySelector('#gp-shop-orders')?.addEventListener('click', () => goto('shoporders'));
+    screen.querySelector('#gp-shop-orders')?.addEventListener('click', () => { notifyDeliveries(); goto('shoporders'); });
     screen.querySelectorAll('.gp-shop-cat[data-cat]').forEach(el => el.addEventListener('click', () => {
         currentShopCat = el.getAttribute('data-cat');
         goto('shopcat');
@@ -3616,9 +3881,176 @@ function renderShopCat(screen) {
         if (order) {
             updatePhoneInjection();
             render();
-            toast(`Куплено: ${order.item} — ${fmtMoney(order.price)}`, 'fa-bag-shopping');
+            const bought = order.merged ? orderItems(order).slice(-1)[0] : order;
+            toast(`Куплено: ${bought.name || bought.item} — ${fmtMoney(bought.price)}`, 'fa-bag-shopping');
+            // Про срок скажем одним тостом, когда корзина собрана
+            // (у брони отелей/туров доставки нет — и тоста тоже)
+            if (order.eta) scheduleOrderToast(order.id);
         }
     }));
+}
+
+// ── Чат с курьером ──
+// Переписка живёт в самом заказе: удалила заказ — ушла и она.
+
+let _ordChatId = null;
+let _courierBusy = false;
+const _courierTried = new Set();   // по заказу — одна попытка доназначить курьера
+
+function renderCourierChat(screen) {
+    currentScreen = 'ordchat';
+    const o = findOrder(_ordChatId);
+    if (!o) { goto('shoporders'); return; }
+    // Только когда есть что отмечать: saveMeta на каждую перерисовку сбрасывал бы
+    // кэш скана чата и заставлял пересканировать всю ролевую
+    if (courierUnread(o)) markCourierRead(o.id);
+    // Курьера могло не назначиться (запрос не прошёл) — доназначаем при входе.
+    // Ровно одна попытка на заказ: иначе неудача крутила бы генерацию по кругу,
+    // ведь finally перерисовывает экран, а курьера так и нет.
+    if (!o.courier && !_courierBusy && !_courierTried.has(o.id)) {
+        _courierTried.add(o.id);
+        _courierBusy = true;
+        ensureCourier(o.id)
+            .catch(e => toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation'))
+            .finally(() => { _courierBusy = false; if (isPhoneOpen()) render(); });
+    }
+    const assigning = !o.courier && _courierBusy;
+    const name = o.courier?.name || (assigning ? 'Назначаем курьера...' : 'Курьер');
+    const bubbles = orderChat(o).map(m => `
+        <div class="gp-bubble-wrap ${m.user ? 'gp-out' : 'gp-in'}">
+            <div class="gp-bubble">${esc(m.text)}</div>
+        </div>`).join('');
+    const empty = assigning
+        ? `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-spinner fa-spin')}</div><div class="gp-empty-text">Магазин ищет курьера</div></div>`
+        : `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-truck-fast')}</div><div class="gp-empty-text">Напиши курьеру — он ответит</div></div>`;
+    const sub = o.stage === 'done'
+        ? 'заказ доставлен'
+        : `${orderItems(o).map(x => x.name).join(', ')} · ${fmtEta(orderLeft(o))}`;
+    setHtmlKeepScroll(screen, '.gp-msgs', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            ${avatarHtml(name, '', 'gp-avatar gp-avatar-sm')}
+            <div class="gp-thread-title">
+                <div class="gp-row-name">${esc(name)}</div>
+                <div class="gp-thread-number">${esc(sub)}</div>
+            </div>
+            <span style="width:32px"></span>
+        </div>
+        <div class="gp-msgs" id="gp-msgs">
+            ${bubbles || empty}
+            ${_courierBusy ? `<div class="gp-bubble-wrap gp-in gp-typing-wrap"><div class="gp-bubble gp-typing"><span></span><span></span><span></span></div></div>` : ''}
+        </div>
+        <div class="gp-inputbar">
+            <textarea id="gp-ord-input" rows="1" placeholder="Сообщение курьеру..."></textarea>
+            <button class="gp-send" id="gp-ord-send" ${_courierBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+        </div>`);
+
+    const msgs = screen.querySelector('#gp-msgs');
+    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shoporders'));
+
+    const send = async () => {
+        const input = screen.querySelector('#gp-ord-input');
+        const text = input?.value.trim();
+        if (!text || _courierBusy) return;
+        input.value = '';
+        clearDraft('gp-ord-input');
+        _courierBusy = true;
+        render();
+        try {
+            await writeToCourier(o.id, text);
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        } finally {
+            _courierBusy = false;
+            render();
+        }
+    };
+    screen.querySelector('#gp-ord-send')?.addEventListener('click', send);
+    screen.querySelector('#gp-ord-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+}
+
+// ── Отложенное уведомление о доставке ──
+// Пока она набирает корзину, срок называть рано: на каждый товар прилетал бы
+// свой тост. Ждём, когда она выйдет из магазина (или просто перестанет
+// докладывать в корзину), и говорим один раз — про весь заказ.
+let _orderToast = null;      // id заказа, о котором ещё не сказали
+let _orderToastTimer = null;
+const ORDER_TOAST_DELAY = 9000;
+
+function scheduleOrderToast(orderId) {
+    _orderToast = orderId;
+    if (_orderToastTimer) clearTimeout(_orderToastTimer);
+    _orderToastTimer = setTimeout(flushOrderToast, ORDER_TOAST_DELAY);
+}
+
+function flushOrderToast() {
+    if (_orderToastTimer) { clearTimeout(_orderToastTimer); _orderToastTimer = null; }
+    const id = _orderToast;
+    _orderToast = null;
+    if (!id) return;
+    const o = findOrder(id);
+    if (!o || !o.eta) return;
+    const n = orderItems(o).length;
+    const what = n > 1 ? `Заказ принят: ${n} ${plural(n, 'позиция', 'позиции', 'позиций')} · доставка` : 'Заказ принят, доставка';
+    toast(`${what} ${fmtEta(orderLeft(o))}`, 'fa-truck');
+}
+
+function plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+}
+
+// Позиции заказа. У заказов до появления корзины списка нет — там одна позиция.
+function orderItems(o) {
+    return Array.isArray(o.items) && o.items.length ? o.items : [{ name: o.item, price: o.price }];
+}
+
+// Сколько заказов ещё едет — бейдж на иконке магазина
+function pendingOrders() {
+    try { return getOrders().filter(o => o.stage === 'placed' || o.stage === 'way').length; } catch (e) { return 0; }
+}
+
+// Строка состояния заказа. Старые заказы (без stage) статуса не имеют —
+// они оформлялись до появления доставки.
+function orderStatusHtml(o) {
+    if (o.stage === 'booked') return `<span class="gp-order-stage gp-stage-done">${ic('fa-calendar-check')} Забронировано</span>`;
+    if (o.stage === 'done') return `<span class="gp-order-stage gp-stage-done">${ic('fa-box-open')} Доставлен</span>`;
+    if (o.stage === 'way') {
+        const who = o.courier?.name ? `${esc(o.courier.name)} · ` : '';
+        return `<span class="gp-order-stage gp-stage-way">${ic('fa-truck-fast')} Везёт ${who}${esc(fmtEta(orderLeft(o)))}</span>`;
+    }
+    if (o.stage === 'placed') return `<span class="gp-order-stage">${ic('fa-clock')} В сборке · ${esc(fmtEta(orderLeft(o)))}</span>`;
+    return '';
+}
+
+// Уведомления о доставке — по событию ролевой (как напоминания банка)
+export function notifyDeliveries() {
+    if (!getSettings().isEnabled) return;
+    try {
+        for (const { order, stage } of advanceOrders()) {
+            if (stage === 'way') {
+                toast(`Курьер в пути: ${order.item} · ${fmtEta(orderLeft(order))}`, 'fa-truck-fast');
+                // Курьера придумываем только сейчас: до выезда его нет.
+                // Фоном — уведомление не должно ждать модель.
+                ensureCourier(order.id).then(c => {
+                    if (!c) return;
+                    toast(`Заказ везёт ${c.name}`, 'fa-user');
+                    if (isPhoneOpen()) render();
+                }).catch(e => logFail('курьер', String(e?.message || e)));
+            } else if (stage === 'done') {
+                toast(`Заказ доставлен: ${order.item}`, 'fa-box-open');
+                if (order.courier) {
+                    courierArrived(order.id).then(() => { if (isPhoneOpen()) render(); })
+                        .catch(e => logFail('курьер у двери', String(e?.message || e)));
+                }
+            }
+        }
+    } catch (e) { /* ignore */ }
 }
 
 function renderShopOrders(screen) {
@@ -3637,14 +4069,23 @@ function renderShopOrders(screen) {
                     <div class="gp-shop-order">
                         <span class="gp-bank-tx-i">${ic((catById(o.cat) || {}).icon || 'fa-bag-shopping')}</span>
                         <span class="gp-bank-tx-body">
-                            <span class="gp-bank-tx-label">${esc(o.item)}</span>
+                            <span class="gp-bank-tx-label" title="${esc(orderItems(o).map(x => x.name).join(', '))}">${esc(o.item)}${orderItems(o).length > 1 ? ` <b class="gp-order-more">+${orderItems(o).length - 1}</b>` : ''}</span>
+                            ${orderItems(o).length > 1
+                                ? `<span class="gp-bank-tx-cat">${esc(orderItems(o).slice(1).map(x => x.name).join(', '))}</span>` : ''}
                             <span class="gp-bank-tx-cat">${esc(o.store)} · ${esc(timeAgo(o.time))}</span>
+                            ${orderStatusHtml(o)}
                         </span>
                         <span class="gp-bank-tx-amt gp-neg">${esc(fmtMoney(o.price))}</span>
+                        ${(o.eta && o.stage !== 'done') || o.courier ? `<button class="gp-iconbtn gp-order-chat" data-ordchat="${esc(o.id)}" title="Чат с курьером">${ic('fa-comment-dots')}${courierUnread(o) ? `<span class="gp-app-badge">${courierUnread(o)}</span>` : ''}</button>` : ''}
                         <button class="gp-bank-tx-del" data-del-order="${esc(o.id)}" title="Убрать из истории">${ic('fa-xmark')}</button>
                     </div>`).join('')}
         </div>`);
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shop'));
+    screen.querySelectorAll('[data-ordchat]').forEach(btn => btn.addEventListener('click', () => {
+        _ordChatId = btn.getAttribute('data-ordchat');
+        _courierTried.delete(_ordChatId);   // заход в чат = новая попытка назначить курьера
+        goto('ordchat');
+    }));
     screen.querySelectorAll('[data-del-order]').forEach(btn => btn.addEventListener('click', () => {
         deleteOrder(btn.getAttribute('data-del-order')); render();
     }));
@@ -3894,9 +4335,17 @@ function renderDiscord(screen) {
                 <span class="gp-dc-chan-name">${esc(c.name)}</span>
                 ${c.messages.length ? `<span class="gp-dc-chan-count">${c.messages.length}</span>` : ''}
             </button>`).join('')}
-        <div class="gp-dc-cat">Участники — ${srv.members.length}</div>
+        <div class="gp-dc-cat gp-dc-cat-row">
+            <span>Участники — ${srv.members.length}</span>
+            <button class="gp-dc-cat-add" id="gp-d-member-add" title="Пригласить участника">${ic('fa-user-plus')}</button>
+        </div>
         <div class="gp-dc-members">
-            ${srv.members.map(mb => `<span class="gp-dc-member"><i class="gp-dc-dot"></i><b style="color:${senderColor(mb)}">${esc(mb)}</b></span>`).join('')}
+            ${srv.members.map(mb => `
+                <span class="gp-dc-member">
+                    <i class="gp-dc-dot"></i>
+                    <b style="color:${senderColor(mb)}">${esc(mb)}</b>
+                    <button class="gp-dc-member-del" data-dmemdel="${esc(mb)}" title="Убрать с сервера">${ic('fa-xmark')}</button>
+                </span>`).join('')}
         </div>` : `
         <div class="gp-empty">
             <div class="gp-empty-icon">${brand('fa-discord')}</div>
@@ -3953,6 +4402,24 @@ function renderDiscord(screen) {
     screen.querySelectorAll('[data-dchan]').forEach(b => b.addEventListener('click', () => {
         _dChannelId = b.getAttribute('data-dchan');
         goto('dchannel');
+    }));
+    // Пригласить: подсказываем контактами из телефона, но принимаем любое имя
+    screen.querySelector('#gp-d-member-add')?.addEventListener('click', () => {
+        if (!srv) return;
+        const known = getThreadList().filter(t => !t.isGroup).map(t => t.name).filter(Boolean);
+        const hint = known.length ? `\n\nИз контактов: ${known.slice(0, 8).join(', ')}` : '';
+        const name = prompt(`Кого пригласить на «${srv.name}»?${hint}`, '');
+        if (name === null || !name.trim()) return;
+        if (!addDMember(srv.id, name.trim())) { toast('Такой участник уже есть', 'fa-circle-exclamation'); return; }
+        toast(`Приглашён: ${name.trim()}`, 'fa-user-plus');
+        render();
+    });
+    screen.querySelectorAll('[data-dmemdel]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = b.getAttribute('data-dmemdel');
+        if (!srv || !confirm(srv.mine ? `Выгнать ${name} с сервера?` : `Убрать ${name} из списка участников?`)) return;
+        delDMember(srv.id, name);
+        render();
     }));
     screen.querySelectorAll('[data-ddel]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -4675,13 +5142,70 @@ export function setTyping(key) {
 
 // ═══ Тосты и детект новых входящих ═══
 
+// Тип события по иконке — от него цвет ребра в стиле «плашка»
+function toastKind(icon) {
+    if (/^fa-(building-columns|landmark|file-invoice-dollar|money|coins|wallet)/.test(icon)) return 'money';
+    if (/^fa-(truck|box-open|bag-shopping|user$)/.test(icon)) return 'delivery';
+    if (/^fa-(instagram|x-twitter|twitter|heart|wand-sparkles|image)/.test(icon)) return 'social';
+    return 'sms';
+}
+
+// Заголовок и вторую строку берём из самого текста: тосты про сообщения
+// приходят как «Имя: текст», остальные — одной фразой.
+function splitToast(text, threadKey) {
+    if (threadKey) {
+        const at = text.indexOf(': ');
+        if (at > 0 && at < 42) return { title: text.slice(0, at), sub: text.slice(at + 2) };
+    }
+    const dot = text.indexOf(' · ');
+    if (dot > 0) return { title: text.slice(0, dot), sub: text.slice(dot + 3) };
+    // «Заказ доставлен: Диван Осло» — тоже две строки, но только если слева
+    // короткая шапка, иначе разрежет фразу пополам
+    const colon = text.indexOf(': ');
+    if (colon > 0 && colon <= 24) return { title: text.slice(0, colon), sub: text.slice(colon + 2) };
+    return { title: text, sub: '' };
+}
+
+// Часы ролевой — для стиля со временем справа
+function toastClock() {
+    try {
+        const d = getRpDateTime();
+        if (d && d.hours !== undefined) return `${String(d.hours).padStart(2, '0')}:${String(d.minutes || 0).padStart(2, '0')}`;
+    } catch (e) { /* ignore */ }
+    const n = new Date();
+    return `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`;
+}
+
+// Выбранный стиль. Старые значения (island/glass/bar/accent) больше не
+// существуют — такие настройки молча падают на «Аврору».
+function toastStyleId() {
+    const id = getSettings().toastStyle;
+    return TOAST_STYLES.some(t => t.id === id) ? id : 'aurora';
+}
+
 export function toast(text, icon = 'fa-comment-dots', threadKey = null) {
     text = tr(text); // перевод тостов (точный словарь + regex-правила)
+    const style = toastStyleId();
     const el = document.createElement('div');
-    el.className = 'gp-toast';
+    el.className = `gp-toast gp-toast-${style} gp-toast-k-${toastKind(icon)}`;
+    const { title, sub } = splitToast(text, threadKey);
     // Бренд-иконки (twitter/instagram) — семейство fa-brands, остальные fa-solid
     const fam = /^fa-(x-twitter|twitter|instagram)$/.test(icon) ? 'fa-brands' : 'fa-solid';
-    el.innerHTML = `<span class="gp-toast-icon"><i class="${fam} ${icon}"></i></span><span class="gp-toast-text">${esc(text)}</span>`;
+    // У сообщения лицо собеседника вместо иконки приложения
+    let avaSrc = '';
+    if (threadKey && !String(threadKey).startsWith('group:')) {
+        try { avaSrc = avatarForAuthor(`contact:${threadKey}`) || ''; } catch (e) { /* ignore */ }
+    }
+    const head = threadKey
+        ? avatarHtml(title, avaSrc, 'gp-toast-ava')
+        : `<span class="gp-toast-icon"><i class="${fam} ${icon}"></i></span>`;
+    el.innerHTML = `${head}
+        <span class="gp-toast-body">
+            <span class="gp-toast-title">${esc(title)}</span>
+            ${sub ? `<span class="gp-toast-text">${esc(sub)}</span>` : ''}
+        </span>
+        <span class="gp-toast-time">${esc(toastClock())}</span>
+        <svg class="gp-toast-arc" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="16"></circle></svg>`;
     document.body.appendChild(el);
     requestAnimationFrame(() => el.classList.add('gp-toast-show'));
     if (threadKey) {
@@ -4711,7 +5235,11 @@ export function checkNewIncoming({ silent = false } = {}) {
                 const t = list.find(x => x.key === key);
                 const lastIn = [...t.messages].reverse().find(m => m.dir === 'in');
                 const isViewing = isPhoneOpen() && currentScreen === 'thread' && currentThreadKey === key;
-                if (!isViewing && lastIn) {
+                // Счётчик входящих может скакнуть и на уже прочитанном треде
+                // (правка сообщения, свайп, скрытая строка журнала) — тогда
+                // прилетал тост о том, что она давно прочитала. Сверяемся с
+                // курсором прочтения, а не только с прошлым замером.
+                if (!isViewing && lastIn && t.unread > 0) {
                     toast(`${t.name}: ${lastIn.text.slice(0, 70)}`, 'fa-comment-dots', key);
                 }
             }

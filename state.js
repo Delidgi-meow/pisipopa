@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.0.1';
+export const GP_VERSION = '2.5.9';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -36,14 +36,14 @@ const defaultSettings = () => ({
     // Спам/мошенники: редкие скам-смс с незнакомых номеров (кулдаун ~35 мин)
     scamEnabled: true,
     // Картинко-расширение: '' = АВТООПРЕДЕЛЕНИЕ (ищем среди установленных
-    // third-party расширений novarakk-подобное — src/pipeline.js с
+    // third-party расширений подходящее — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
     imageGenExtension: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
     // Профиль подключения картинко-расширения ТОЛЬКО для телефона
     // ('' = активный профиль основного чата). Профили живут в
-    // extension_settings.inline_image_gen.connectionProfiles (novarakk и форки)
+    // extension_settings.inline_image_gen.connectionProfiles (общие для форков)
     imageGenProfileId: '',
     // Стиль картинко-расширения ТОЛЬКО для телефона ('' = активный стиль).
     // Стили у новорака ГЛОБАЛЬНЫЕ (не входят в профиль подключения) — поэтому
@@ -140,6 +140,20 @@ export function getMeta() {
     // не должны появляться задним числом при очередном пересканировании chat[].
     if (!m.smsBlocks || typeof m.smsBlocks !== 'object' || Array.isArray(m.smsBlocks)) m.smsBlocks = {};
     return m;
+}
+
+// ── Имя {{user}} и проверка «это она сама» ──
+export function userName() {
+    try { return SillyTavern.getContext()?.name1 || ''; } catch (e) { return ''; }
+}
+// Модель порой пишет от лица {{user}}: постит её твиты, шлёт смс «от неё».
+// Такие теги в телефон попадать не должны — свой канал у неё уже есть.
+export function isUserName(name) {
+    const k = keyOf(stripHandle(name));
+    if (!k) return false;
+    if (k === keyOf(userName())) return true;
+    const own = getMeta().userHandle;
+    return !!own && k === keyOf(stripHandle(own));
 }
 
 // ── Убрать @ из ника/имени ──
@@ -597,6 +611,36 @@ export function fmtTime(date) {
 // (3) дата/время в прозе последних сообщений. Иначе null → телефон берёт реальное.
 const RP_DATE_RE = /\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?\s*\]/i;
 
+// Метка времени, которую модель ставит в конце ответа. Это самый надёжный
+// источник: у каждого сообщения своё время сюжета, а не сдвиг от реальных
+// часов. Принимаем и наш скрытый комментарий, и «стрелочную» запись.
+const TIME_TAG_RE = /(?:<!--\s*tel:time:|<-{2,}\s*)\s*(\d{1,2}):([0-5]\d)\s*[-–—,;| ]\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})\s*(?:-->|-{2,}>)/i;
+
+// Время сюжета из метки в тексте сообщения
+export function parseTimeTag(text) {
+    if (!text) return null;
+    const m = String(text).match(TIME_TAG_RE);
+    if (!m) return null;
+    const hours = Number(m[1]), minutes = Number(m[2]);
+    const day = Number(m[3]), month = Number(m[4]);
+    let year = Number(m[5]);
+    if (year < 100) year += year < 50 ? 2000 : 1900;
+    if (hours > 23 || day < 1 || day > 31 || month < 1 || month > 12) return null;
+    return { day, month, year, hours, minutes };
+}
+
+// Ставит ли модель метки времени: если да, события идут строго по часам
+// сюжета, а не по числу ходов
+export function rpTimeTagged() {
+    try {
+        const chat = SillyTavern.getContext()?.chat || [];
+        for (let i = chat.length - 1; i >= 0 && i >= chat.length - 8; i--) {
+            if (chat[i]?.mes && parseTimeTag(stripThink(chat[i].mes))) return true;
+        }
+    } catch (e) { /* ignore */ }
+    return false;
+}
+
 // Русские месяцы (стемы, от специфичного к общему — «мар» до «ма»)
 const RU_MONTHS = [
     ['декабр', 12], ['ноябр', 11], ['октябр', 10], ['сентябр', 9], ['август', 8],
@@ -767,6 +811,18 @@ export function getRpDateTime() {
         if (sig === _rpDateSig) return _rpDateCache;
         _rpDateSig = sig;
 
+        // Метка времени бьёт все остальные источники: её ставит сама модель,
+        // зная, сколько времени прошло в сюжете.
+        for (let i = chat.length - 1; i >= 0 && i >= chat.length - 8; i--) {
+            const mes = chat[i]?.mes;
+            if (!mes) continue;
+            const tagged = parseTimeTag(stripThink(mes));
+            if (tagged) {
+                _rpDateCache = { ...tagged, label: `${String(tagged.day).padStart(2, '0')}.${String(tagged.month).padStart(2, '0')}` };
+                return _rpDateCache;
+            }
+        }
+
         // Источники идут по приоритету. Дату и часы ищем независимо: свежая
         // реплика «сейчас 18:40» должна обновить часы, но сохранить RP-день из
         // календаря/предыдущей реплики, а не подставить сегодняшнюю реальную дату.
@@ -853,6 +909,17 @@ function scanChatUncached() {
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
+        if (msg && msg.mes) {
+            // Метка времени точнее прозы: берём её, не разбирая текст дальше
+            const tagged = parseTimeTag(stripThink(msg.mes));
+            if (tagged) {
+                const realDate = parseRealDate(msg.send_date) || new Date();
+                const rpDate = new Date(tagged.year, tagged.month - 1, tagged.day, tagged.hours, tagged.minutes, 0, 0);
+                lastKnownOffset = rpDate.getTime() - realDate.getTime();
+                offsets[i] = lastKnownOffset;
+                continue;
+            }
+        }
         if (msg && msg.mes && !msg.is_system) {
             const r = parseAnyDateTime(msg.mes);
             if (r && !r.timeOnly) {
@@ -943,8 +1010,20 @@ function scanChatUncached() {
                 addContact(j.name, j.number || '', 'tag');
             } else if (kind === 'sms' && j.from && (j.text || j.photo)) {
                 // Явные теги = наш протокол, модель ставит их осознанно — доверяем.
-                // Единственное исключение: тег явно адресован боту (j.to = имя бота).
+                // Исключение первое: тег явно адресован боту (j.to = имя бота).
                 if (j.to && !msg.is_user && keyOf(j.to) === keyOf(msg.name)) {
+                    continue;
+                }
+                // Исключение второе: адресат — кто угодно, кроме {{user}}. Модель
+                // описывает переписку между персонажами и всё равно вешает тег —
+                // такие сообщения на её телефон приходить не должны.
+                if (j.to && !j.chat && !msg.is_user && !isUserName(j.to)) {
+                    continue;
+                }
+                // Исключение третье: отправитель — сама {{user}}. Свои сообщения
+                // она отправляет из телефона; тег «от неё» означает, что модель
+                // описала её реплику в чужой переписке.
+                if (!msg.is_user && isUserName(j.from)) {
                     continue;
                 }
                 // Заблокированный контакт не создаёт пузырь/непрочитанное. Проверка

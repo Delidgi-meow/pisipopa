@@ -136,6 +136,32 @@ export async function postToDChannel(sid, cid, text, replyTo = null) {
     }
 }
 
+// Участники сервера правятся руками: пригласить/выгнать.
+// На своём сервере это её действие — уходит строкой в ролевую;
+// на чужом она просто правит список у себя (админка не её).
+export function addDMember(sid, name) {
+    const srv = findDServer(sid);
+    const n = String(name || '').trim().slice(0, 32);
+    if (!srv || !n) return false;
+    if (!Array.isArray(srv.members)) srv.members = [];
+    if (srv.members.some(m => m.toLowerCase() === n.toLowerCase())) return false;
+    srv.members.push(n);
+    saveMeta();
+    if (srv.mine) logSocialToChat(`${getUserName()} пригласила ${n} на свой Discord-сервер «${srv.name}»`);
+    return true;
+}
+
+export function delDMember(sid, name) {
+    const srv = findDServer(sid);
+    if (!srv || !Array.isArray(srv.members)) return false;
+    const before = srv.members.length;
+    srv.members = srv.members.filter(m => m !== name);
+    if (srv.members.length === before) return false;
+    saveMeta();
+    if (srv.mine) logSocialToChat(`${getUserName()} выгнала ${name} со своего Discord-сервера «${srv.name}»`);
+    return true;
+}
+
 export function deleteDServer(sid) {
     const d = getDiscord();
     d.servers = d.servers.filter(s => s.id !== sid);

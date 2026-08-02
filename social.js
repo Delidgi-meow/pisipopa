@@ -1,7 +1,7 @@
 import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
-import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext } from './state.js';
+import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext, isUserName } from './state.js';
 import { lang } from './i18n.js';
 import { logReq, logOk, logFail } from './debug-log.js';
 
@@ -288,6 +288,15 @@ export function resolveAuthorKey(name) {
 const TW_TAG_RE = /<!--\s*tel:tweet:(\{[\s\S]*?\})\s*-->/gi;
 const IG_TAG_RE = /<!--\s*tel:insta:(\{[\s\S]*?\})\s*-->/gi;
 
+// Это сама {{user}}? Модель иногда постит от её лица — такие теги
+// отбрасываем: свои посты она пишет только руками, из телефона.
+// К базовой проверке добавляем авто-ник, который знает только этот модуль.
+function isUserAuthor(name) {
+    if (isUserName(name)) return true;
+    const k = keyOf(stripHandle(name));
+    return !!k && k === keyOf(stripHandle(makeHandle(getUserName())));
+}
+
 // Возвращает {tweets, posts} — сколько нового добавлено (для тостов)
 export function harvestSocialTags() {
     const s = getSocial();
@@ -328,6 +337,7 @@ export function harvestSocialTags() {
             seen.add(h); s.seenTags.push(h);
             const j = safeJson(m[1]);
             if (!j || !j.author || !j.text) continue;
+            if (isUserAuthor(j.author)) continue;   // её твиты пишет она сама
             const tw = {
                 id: genId(), author: String(j.author), handle: j.handle || makeHandle(j.author),
                 ak: resolveAuthorKey(j.author), text: String(j.text).slice(0, 280),
@@ -364,6 +374,7 @@ export function harvestSocialTags() {
             seen.add(h); s.seenTags.push(h);
             const j = safeJson(m[1]);
             if (!j || !j.author || (!j.caption && !j.photo)) continue;
+            if (isUserAuthor(j.author)) continue;   // её посты пишет она сама
             s.igPosts.unshift({
                 id: genId(), author: String(j.author), ak: resolveAuthorKey(j.author),
                 image: null, imgDesc: String(j.photo || '').slice(0, 200),
@@ -854,7 +865,7 @@ export function rpContextBlock(count = 12) {
 }
 
 // Любой источник картинки → dataURL (бэкенды вижна не умеют относительные пути
-// вроде /user/images/... — картинки, сгенерированные novarakk, хранятся файлами)
+// вроде /user/images/... — картинки картинко-расширения хранятся файлами)
 async function toDataUrl(src) {
     const s = String(src || '');
     if (!s) return null;
@@ -1676,6 +1687,46 @@ Format: [{"author":"nick","text":"..."}]`;
     return parseJsonArray(await socialGen(prompt, { maxTokens: 1400, prefill: '[{"author":"' }));
 }
 
+// ── Курьер: кто везёт заказ и переписка с ним в приложении магазина ──
+// Имя не берём из готового списка — курьер должен быть из того же мира,
+// что и ролевая (страна, язык, реалии).
+export async function generateCourier(order, left, packing = false) {
+    const items = (order.items || [{ name: order.item }]).map(x => x.name).join(', ');
+    const firstMsg = packing
+        ? 'their FIRST message to the customer: they have been assigned to this order and are waiting for the store to pack it'
+        : 'their FIRST message to the customer: they picked the order up and are on the way';
+    const prompt = `${await taskHeader(`invent the courier delivering ${getUserName()}'s order and their first message in the delivery app chat.`)}
+Order: ${items} — from «${order.store}». ${packing ? 'The store is still packing it.' : ''} Delivery in about ${left}.
+Invent the courier: a real person of this setting (name as it would show in a delivery app — usually first name, sometimes with surname initial) and ${firstMsg}.
+VOICE: type it as this person would, one thumb, in a hurry — 1-2 short sentences, no literary prose, no call-centre boilerplate. A migrant courier (Uzbek/Tajik/Kyrgyz name) has no grammatical gender and different cases in his own language, so it shows: "я подошел" about himself, "жду возле подъезд", "нету", address like "сестра"/"апа"/"брат", sometimes a word in Latin letters — real hurried typing, not "моя твоя" pidgin. A local student writes in slang and lowercase; an older driver — dry and terse. In another language, reproduce the same kind of breakage.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"name":"courier name","text":"first message"}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 400, prefill: '[{"name":"' }));
+    const c = Array.isArray(arr) ? arr[0] : null;
+    if (!c || !c.name) throw new Error('Курьер не назначился — попробуй ещё раз');
+    return { name: String(c.name).slice(0, 40), text: String(c.text || '').slice(0, 300) };
+}
+
+export async function generateCourierReply(order, courier, history = [], userText = '', arrived = false) {
+    const items = (order.items || [{ name: order.item }]).map(x => x.name).join(', ');
+    const ex = history.slice(-8).map(x => `${x.user ? getUserName() : courier.name}: ${x.text}`).join('\n');
+    const situation = arrived
+        ? 'The courier has JUST ARRIVED at her door with the order — write what they write on arrival (at the door / calling, handing it over).'
+        : `${getUserName()} just wrote to the courier: "${userText}" — answer her in character.`;
+    const prompt = `${await taskHeader(`write the courier's reply in the delivery app chat with ${getUserName()}.`)}
+Courier: ${courier.name}. Order: ${items} — from «${order.store}».
+${ex ? `Chat so far:\n${ex}\n` : ''}${situation}
+ONE short message (1-2 sentences), same broken grammar and address forms as in his previous messages here — a non-native speaker does not suddenly start writing correctly. Do not roleplay her side, do not narrate.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"text":"..."}]`;
+    const arr = parseJsonArray(await socialGen(prompt, { maxTokens: 300, prefill: '[{"text":"' }));
+    const t = Array.isArray(arr) && arr[0] ? String(arr[0].text || '').slice(0, 300) : '';
+    if (!t) throw new Error('Курьер не отвечает — попробуй ещё раз');
+    return t;
+}
+
 // ── Твич: список эфиров и «тики» стрима (сцена меняется от событий/комментов) ──
 export async function generateStreamList(existing = []) {
     const prompt = `${await taskHeader(`invent live streams currently online in the Twitch-like app on ${getUserName()}'s phone.`)}
@@ -1913,7 +1964,16 @@ function charCardAvatar(key) {
 }
 
 // Аватар персоны юзера
+// Своя аватарка юзера. Ключ с решётками не столкнётся с keyOf() контакта.
+const USER_AVA_KEY = '__user__';
+export function setUserAvatar(dataUrl) { setContactAvatar(USER_AVA_KEY, dataUrl); }
+export function getUserAvatar() { return getMeta()?.avatars?.[USER_AVA_KEY] || ''; }
+
 export function userAvatarUrl() {
+    // Загруженная вручную — всегда: тумблер авто-аватаров про подтягивание
+    // из персоны/карточек, а не про то, что она поставила сама
+    const own = getUserAvatar();
+    if (own) return own;
     if (!getSettings().autoAvatars) return '';
     try {
         if (typeof user_avatar === 'string' && user_avatar) {
@@ -1923,10 +1983,38 @@ export function userAvatarUrl() {
     return '';
 }
 
+// Реф NPC из картинко-расширения как аватар контакта. Матчим по имени и
+// алиасам — тем же ключевым словам, по которым расширение цепляет реф.
+// Картинка лежит base64-строкой: собранный data-URL кэшируем, иначе он
+// пересобирался бы на каждую перерисовку списка.
+const _npcAvaCache = new Map();
+function npcAvatar(key) {
+    if (!getSettings().autoAvatars) return '';
+    try {
+        const list = extension_settings.inline_image_gen?.npcList;
+        if (!Array.isArray(list) || !list.length) return '';
+        for (const npc of list) {
+            if (!npc || !npc.name || !npc.avatarData || npc.enabled === false) continue;
+            const raw = Array.isArray(npc.aliases) ? npc.aliases : String(npc.aliases || '').split(',');
+            const names = [npc.name, ...raw].map(x => String(x || '').trim()).filter(Boolean);
+            if (!names.some(n => keyOf(stripHandle(n)) === key)) continue;
+            const cacheKey = `${npc.id || npc.name}:${String(npc.avatarData).length}`;
+            let url = _npcAvaCache.get(cacheKey);
+            if (!url) {
+                const data = String(npc.avatarData);
+                url = data.startsWith('data:') ? data : `data:image/png;base64,${data}`;
+                _npcAvaCache.set(cacheKey, url);
+            }
+            return url;
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
 export function getContactAvatar(key) {
     const m = getMeta();
-    // Приоритет: загруженная вручную → карточка персонажа ST
-    return (m.avatars && m.avatars[key]) || charCardAvatar(key);
+    // Приоритет: загруженная вручную → карточка персонажа ST → реф NPC
+    return (m.avatars && m.avatars[key]) || charCardAvatar(key) || npcAvatar(key);
 }
 // Аватар по имени автора (для лент)
 export function avatarForAuthor(ak) {
@@ -1972,14 +2060,22 @@ export async function generateCommentAvatar(comment) {
     }
 }
 
-// ═══ Генерация картинок — через novarakk-ПОДОБНОЕ расширение ═══
+// ═══ Генерация картинок — через установленное картинко-расширение ═══
 // АВТООПРЕДЕЛЕНИЕ: перебираем установленные third-party расширения (ST
-// extensionNames) и ищем то, у кого есть src/pipeline.js с generateImageWithRetry
-// — это структура форков Nyaa-Rakk-Imagen (novarakk / IIG / SLAYimages / …).
+// extensionNames) и ищем то, у кого есть src/pipeline.js с
+// generateImageWithRetry — по структуре, а не по названию папки.
 // Настройка imageGenExtension пустая = авто; непустая = ручной оверрайд папки.
 // Настройки расширения мутируем ЗАЩИТНО (только существующие ключи — форки
-// «дёргают рефы по-разному» и могут не иметь sendCharAvatar/overrideAspectRatio).
+// дёргают рефы по-разному и могут не иметь sendCharAvatar/overrideAspectRatio).
 let _imgExt = { key: null, mod: undefined };
+
+// Имя собственной папки — чтобы не пробовать импортировать самого себя.
+// Берём из адреса модуля: расширение переименовывали, зашитая строка устарела бы.
+const SELF_FOLDER = (() => {
+    try {
+        return new URL('.', import.meta.url).pathname.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+    } catch (e) { return ''; }
+})();
 
 // Проверить папку: есть ли там src/pipeline.js с generateImageWithRetry.
 // allowIndexFallback — пробовать index.js (только для ручного оверрайда; в авто
@@ -2015,35 +2111,35 @@ async function loadImageExt() {
     if (override) {
         mod = await probeImageExt(override, true);
     } else {
-        // Кандидаты: все установленные third-party расширения; известные имена вперёд
-        const preferred = ['novarakk', 'nyaa-rakk-imagen', 'slayimages', 'megarakk', 'iig'];
-        let candidates = [];
+        // Кандидаты — все установленные third-party расширения. Отбор идёт по
+        // структуре (src/pipeline.js с generateImageWithRetry), а не по имени:
+        // так подхватывается любой форк, как бы его ни назвали.
+        const candidates = [];
         try {
             for (const n of (extensionNames || [])) {
                 if (typeof n === 'string' && n.startsWith('third-party/')) {
                     const f = n.slice('third-party/'.length);
-                    if (f && f !== 'GlassPhone') candidates.push(f);
+                    if (f && f !== SELF_FOLDER) candidates.push(f);
                 }
             }
         } catch (e) { /* ignore */ }
-        if (!candidates.some(c => c.toLowerCase() === 'novarakk')) candidates.push('novarakk');
-        candidates.sort((a, b) => {
-            const ia = preferred.indexOf(a.toLowerCase()); const ib = preferred.indexOf(b.toLowerCase());
-            return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-        });
+        // Папки с «картиночным» именем пробуем первыми — это лишь порядок
+        // перебора, чтобы не сыпать неудачными импортами всех подряд
+        const looksRelevant = (f) => /imag|image|gen|draw|pic|art|rakk/i.test(f);
+        candidates.sort((a, b) => (looksRelevant(b) ? 1 : 0) - (looksRelevant(a) ? 1 : 0));
         for (const f of candidates) {
             mod = await probeImageExt(f, false); // авто — только src/pipeline.js
             if (mod) break;
         }
     }
-    // Фолбэк: ВСТРОЕННЫЙ драйвер. Однофайловые форки (vish, sillyimages и т.п.)
-    // НЕ экспортируют generateImageWithRetry — импортировать нельзя (второй
-    // инстанс задублировал бы их UI). Но ВСЕ форки семейства делят один ключ
-    // настроек inline_image_gen (endpoint/apiKey/apiType/model/styles/refs) —
-    // генерим сами их настройками (мини-клиент openai/gemini ниже).
+    // Фолбэк: ВСТРОЕННЫЙ драйвер. Однофайловые форки не экспортируют
+    // generateImageWithRetry — импортировать их нельзя (второй инстанс
+    // задублировал бы их UI). Но все они делят один ключ настроек
+    // inline_image_gen (endpoint/apiKey/apiType/model/styles/refs) — генерим
+    // сами их настройками (мини-клиент openai/gemini ниже).
     if (!mod) {
-        const iig = extension_settings?.inline_image_gen;
-        if (iig && iig.endpoint && iig.apiKey && iig.model) {
+        const imgCfg = extension_settings?.inline_image_gen;
+        if (imgCfg && imgCfg.endpoint && imgCfg.apiKey && imgCfg.model) {
             mod = { builtin: true, folder: '(встроенный: настройки inline_image_gen)' };
         }
     }
@@ -2064,15 +2160,15 @@ export async function isImageGenAvailable() {
 export async function fetchImageModels() {
     const mod = await loadImageExt();
     if (!mod) throw new Error('картинко-расширение не найдено');
-    const prof = _iigProfile(getSettings().imageGenProfileId);
+    const prof = _imgProfile(getSettings().imageGenProfileId);
     const profFields = prof
         ? Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== ''))
         : null;
     if (mod.builtin) {
-        const iigBase = extension_settings.inline_image_gen;
-        const iig = profFields ? { ...iigBase, ...profFields } : iigBase;
-        const resp = await fetch(`${String(iig.endpoint).replace(/\/$/, '')}/v1/models`, {
-            headers: { 'Authorization': `Bearer ${iig.apiKey}` },
+        const cfgBase = extension_settings.inline_image_gen;
+        const imgCfg = profFields ? { ...cfgBase, ...profFields } : cfgBase;
+        const resp = await fetch(`${String(imgCfg.endpoint).replace(/\/$/, '')}/v1/models`, {
+            headers: { 'Authorization': `Bearer ${imgCfg.apiKey}` },
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const j = await resp.json();
@@ -2111,6 +2207,36 @@ export async function fetchImageModels() {
 // самого бота или ЛЮБОГО контакта-НПС = его аккаунт → запрета НЕТ, его лицо/реф
 // рисуется. allowChar: даже на рандом-посте разрешить главперсонажа (фан-аккаунт
 // явно постит про него).
+// Картинко-расширение ищет NPC в промпте ПОДСТРОКОЙ («алиса» в тексте).
+// По-русски имя склоняется — «на Алисе» такой поиск не находит, и реф NPC
+// не подцепляется. Дописываем канонические имена тех, кого узнали по основе.
+function npcNamesLine(text) {
+    try {
+        const imgCfg = extension_settings.inline_image_gen;
+        const list = Array.isArray(imgCfg?.npcList) ? imgCfg.npcList : [];
+        if (!list.length || imgCfg.autoDetectNames === false) return '';
+        const low = String(text || '').toLowerCase();
+        const found = [];
+        for (const npc of list) {
+            if (!npc || !npc.name || npc.enabled === false) continue;
+            const raw = Array.isArray(npc.aliases) ? npc.aliases : String(npc.aliases || '').split(',');
+            const names = [npc.name, ...raw].map(x => String(x || '').trim()).filter(Boolean);
+            // Точное вхождение есть — расширение справится само
+            if (names.some(n => low.includes(n.toLowerCase()))) continue;
+            // Падежная форма: «на Алисе», «с Вадимом» — узнаём по основе.
+            // Основа короче четырёх букв даёт ложные срабатывания.
+            const hit = names.some(n => {
+                const stem = n.toLowerCase().slice(0, -1);
+                return stem.length >= 4 && low.includes(stem);
+            });
+            if (hit) found.push(npc.name);
+        }
+        // Формулировка нейтральная: узнавание по основе изредка срабатывает
+        // на «Алисы нет рядом» — тогда «в кадре» было бы прямой ложью
+        return found.length ? ` Mentioned: ${[...new Set(found)].join(', ')}.` : '';
+    } catch (e) { return ''; }
+}
+
 function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     const st = getSettings();
     const parts = [];
@@ -2137,7 +2263,11 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
         const un = getUserName();
         negLine += ` This photo was TAKEN by ${un} for her own account — she is BEHIND the camera, NOT in the frame. Depict exactly what the description says; do NOT add ${un} herself to the picture.`;
     }
-    return `${framing}. ${parts.join('. ')}.${negLine}`;
+    const body = `${framing}. ${parts.join('. ')}.${negLine}`;
+    // Автор — тоже кандидат в NPC: его имя в описании часто стоит в косвенном
+    // падеже либо не упоминается вовсе, хотя это его фотография
+    const whoText = anonymous ? body : `${body} ${post.author || ''}`;
+    return body + npcNamesLine(whoText);
 }
 
 // ── Booru-теги: сцена → англ. danbooru-теги (для NovelAI/аниме-моделей) ──
@@ -2185,19 +2315,19 @@ Output ONLY the comma-separated tags.`;
 }
 
 // Профиль подключения картинко-расширения, выбранный ДЛЯ ТЕЛЕФОНА
-// (может отличаться от активного в основном чате). Общее ведро novarakk и форков.
-function _iigProfile(id) {
+// (может отличаться от активного в основном чате). Общее ведро всех форков.
+function _imgProfile(id) {
     if (!id) return null;
     try {
-        const iig = extension_settings.inline_image_gen;
-        return (Array.isArray(iig?.connectionProfiles) ? iig.connectionProfiles : []).find(p => p && p.id === id) || null;
+        const imgCfg = extension_settings.inline_image_gen;
+        return (Array.isArray(imgCfg?.connectionProfiles) ? imgCfg.connectionProfiles : []).find(p => p && p.id === id) || null;
     } catch (e) { return null; }
 }
 
 export function listIigProfiles() {
     try {
-        const iig = extension_settings.inline_image_gen;
-        return (Array.isArray(iig?.connectionProfiles) ? iig.connectionProfiles : [])
+        const imgCfg = extension_settings.inline_image_gen;
+        return (Array.isArray(imgCfg?.connectionProfiles) ? imgCfg.connectionProfiles : [])
             .filter(p => p && p.id)
             .map(p => ({ id: p.id, name: p.name || p.id }));
     } catch (e) { return []; }
@@ -2206,8 +2336,8 @@ export function listIigProfiles() {
 // Стили расширения (глобальные, НЕ входят в профили подключения)
 export function listIigStyles() {
     try {
-        const iig = extension_settings.inline_image_gen;
-        return (Array.isArray(iig?.styles) ? iig.styles : [])
+        const imgCfg = extension_settings.inline_image_gen;
+        return (Array.isArray(imgCfg?.styles) ? imgCfg.styles : [])
             .filter(s => s && s.id)
             .map(s => ({ id: s.id, name: s.name || s.id }));
     } catch (e) { return []; }
@@ -2231,11 +2361,11 @@ export function generatePostImage(post, onStatus = null) {
 //    персонаж по имени → реф его аватара (Cyrillic-safe textMentionsName — \b
 //    не ловил кириллицу, поэтому «Вадим Огнев» не находился и реф не слался)
 //  • прочее → без авто-рефов (лорбук-рефы по ключевым словам работают)
-// АСПЕКТ: novarakk по overrideAspectRatio/overrideImageSize ИГНОРИРУЕТ наш аспект
+// АСПЕКТ: по overrideAspectRatio/overrideImageSize расширение ИГНОРИРУЕТ наш аспект
 // (у юзера стоял 16:9). Снимаем оверрайды на время генерации → побеждает наш 1:1.
 async function _generatePostImage(post, onStatus = null) {
     const mod = await loadImageExt();
-    if (!mod) throw new Error('Картинко-расширение не найдено и картинко-API не настроен. Установи novarakk-подобное расширение или настрой endpoint/key/model в любом форке inline_image_gen.');
+    if (!mod) throw new Error('Картинко-расширение не найдено и картинко-API не настроен. Установи расширение генерации картинок или пропиши endpoint/key/model в его настройках.');
 
     const nvSettings = (typeof mod.settings?.getSettings === 'function') ? mod.settings.getSettings() : null;
 
@@ -2272,11 +2402,16 @@ async function _generatePostImage(post, onStatus = null) {
         const tags = await sceneToBooruTags(post, { anonymous });
         const framing = (post.framing || (post.kind === 'of' ? (st.imgPromptOf || '') : (st.imgPromptIg || ''))).trim();
         prompt = [framing, tags].filter(Boolean).join(', ') || buildImagePrompt(post, { anonymous, allowChar: wantChar });
+        // Теги — англоязычные, имён в них не остаётся: без этого NPC-реф
+        // в booru-режиме не подцепился бы никогда
+        if (prompt && !anonymous) {
+            prompt += npcNamesLine(`${post.imgDesc || ''} ${post.caption || ''} ${post.author || ''}`);
+        }
     } else {
         prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
     }
 
-    // Встроенный драйвер (форки без экспортов — vish/sillyimages и т.п.)
+    // Встроенный драйвер (форки без экспортов)
     if (mod.builtin) {
         return _generateViaBuiltin(post, { prompt, wantChar, isUserPost: userInFrame, onStatus });
     }
@@ -2285,7 +2420,7 @@ async function _generatePostImage(post, onStatus = null) {
     const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
     // Телефонный профиль подключения: временно применяем ЕГО поля (endpoint/
     // apiKey/model/aspect/...) поверх активных, основной чат не трогаем
-    const phoneProfile = _iigProfile(st.imageGenProfileId);
+    const phoneProfile = _imgProfile(st.imageGenProfileId);
     if (phoneProfile && nvSettings) {
         for (const k of Object.keys(phoneProfile)) {
             if (k !== 'id' && k !== 'name' && k in nvSettings && !keys.includes(k)) keys.push(k);
@@ -2368,24 +2503,24 @@ async function _fetchB64(url) {
 }
 
 async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
-    const iigBase = extension_settings.inline_image_gen || {};
+    const cfgBase = extension_settings.inline_image_gen || {};
     const st = getSettings();
     // Телефонный профиль подключения: его поля поверх активных (фолбэк на базу)
-    const prof = _iigProfile(st.imageGenProfileId);
-    const iig = prof ? { ...iigBase, ...Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== '')) } : iigBase;
-    const endpoint = String(iig.endpoint || '').trim().replace(/\/$/, '');
-    if (!endpoint || !iig.apiKey || !iig.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
+    const prof = _imgProfile(st.imageGenProfileId);
+    const imgCfg = prof ? { ...cfgBase, ...Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== '')) } : cfgBase;
+    const endpoint = String(imgCfg.endpoint || '').trim().replace(/\/$/, '');
+    if (!endpoint || !imgCfg.apiKey || !imgCfg.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const model = st.imageGenModel || iig.model;
+    const model = st.imageGenModel || imgCfg.model;
     // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
-    const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (iig.aspectRatio || '1:1'));
+    const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (imgCfg.aspectRatio || '1:1'));
 
     // Стиль форка: телефонный (если выбран) или активный
     let style = '';
     try {
-        const styleId = st.imageGenStyleId || iig.activeStyleId;
-        const s = (iig.styles || []).find(x => x && x.id === styleId)
-            || (iig.styles || []).find(x => x && x.id === iig.activeStyleId);
+        const styleId = st.imageGenStyleId || imgCfg.activeStyleId;
+        const s = (imgCfg.styles || []).find(x => x && x.id === styleId)
+            || (imgCfg.styles || []).find(x => x && x.id === imgCfg.activeStyleId);
         style = String(s?.value ?? s?.style ?? '').trim();
     } catch (e) { /* ignore */ }
     let fullPrompt = style ? `[STYLE: ${style}]\n\n${prompt}` : prompt;
@@ -2421,7 +2556,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     }
 
     onStatus?.('Генерация...');
-    const isGemini = iig.apiType === 'gemini' || /gemini|banana/i.test(String(model));
+    const isGemini = imgCfg.apiType === 'gemini' || /gemini|banana/i.test(String(model));
     let b64 = null, mime = 'image/png';
 
     if (isGemini) {
@@ -2430,7 +2565,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
         parts.push({ text: fullPrompt });
         const resp = await fetch(`${endpoint}/v1beta/models/${encodeURIComponent(pathModel)}:generateContent`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{ role: 'user', parts }],
                 generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: aspect } },
@@ -2447,7 +2582,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
         const size = aspect === '1:1' ? '1024x1024'
             : aspect === '9:16' ? '1024x1536'
             : aspect === '16:9' ? '1536x1024'
-            : (iig.size || 'auto');
+            : (imgCfg.size || 'auto');
         let resp;
         if (refs.length > 0) {
             const form = new FormData();
@@ -2463,7 +2598,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
             if (refs.length > 1) refs.forEach((r, i) => form.append('image[]', toBlob(r), `ref${i}.png`));
             else form.append('image', toBlob(refs[0]), 'ref0.png');
             resp = await fetch(`${endpoint}/v1/images/edits`, {
-                method: 'POST', headers: { 'Authorization': `Bearer ${iig.apiKey}` }, body: form,
+                method: 'POST', headers: { 'Authorization': `Bearer ${imgCfg.apiKey}` }, body: form,
             });
         } else {
             const body = { model, prompt: fullPrompt, n: 1 };
@@ -2471,7 +2606,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
             if (!/gpt-image/i.test(String(model))) body.response_format = 'b64_json';
             resp = await fetch(`${endpoint}/v1/images/generations`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${iig.apiKey}`, 'Content-Type': 'application/json' },
+                headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
         }

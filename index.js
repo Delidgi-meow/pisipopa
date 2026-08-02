@@ -2,7 +2,7 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { getSettings, GP_VERSION, invalidateChatCache } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, deliverScamSms } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
@@ -103,7 +103,7 @@ function setupSettingsPanel() {
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
     $('#gp-set-imgprompt-twwatch').val(s.imgPromptTwWatch || '');
     $('#gp-set-imgprompt-twmy').val(s.imgPromptTwMy || '');
-    // Профили подключения картинко-расширения (общее ведро novarakk и форков).
+    // Профили подключения картинко-расширения (общее ведро всех форков).
     // '' = телефон рисует через активный профиль основного чата
     {
         const sel = $('#gp-set-imgprofile');
@@ -351,6 +351,7 @@ jQuery(async () => {
                 if (n > 0) toast(`Банк: ${n} ${n === 1 ? 'операция' : 'операции'} из ролевой`, 'fa-building-columns');
             } catch (e) { /* ignore */ }
             notifyBankReminders();
+            notifyDeliveries();   // курьер выехал / заказ приехал
             // Мошенники: редкий скам-смс (сам себя гейтит кулдауном и шансом)
             maybeScamSms().then(sms => { if (sms) deliverScamSms(sms); }).catch(() => {});
             updatePhoneInjection();

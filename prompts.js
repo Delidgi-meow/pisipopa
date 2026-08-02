@@ -119,6 +119,14 @@ function buildPrompt() {
     p += `[OOC — hidden phone/SMS channel for the app. Not part of the story; never mention or react to it in-character.]\n`;
     p += `{{user}} owns a smartphone. ${contactsBlock}\n\n`;
 
+    // Часы сюжета. Без них телефон считает ход ролевой за фиксированные минуты
+    // и события (доставка, платежи) приходят не тогда, когда должны.
+    if (getSettings().timeTag !== false) {
+        p += `[RULE 0 — CLOCK] End EVERY reply with the in-world time as the very last line, VERBATIM:\n`;
+        p += `<!--tel:time:HH:MM DD.MM.YYYY-->\n`;
+        p += `Advance it realistically from the previous one by how much time this reply actually takes; keep the date consistent with the story.\n\n`;
+    }
+
     // Базовые правила нужны всегда: номер могут дать и смс прислать в любой ход
     p += `[RULE 1 — CONTACT TAG] If in THIS reply a character gives {{user}} their number (says it, writes it down, exchanges numbers), append at the very END, on its own line, VERBATIM:\n`;
     p += `<!--tel:contact:{"name":"CharacterName","number":"+7 9XX XXX-XX-XX"}-->\n`;
@@ -128,6 +136,7 @@ function buildPrompt() {
     p += `<!--tel:sms:{"from":"CharacterName","text":"the exact message text"}-->\n`;
     p += `Optional fields: "photo":"what the photo shows" (MMS) · "voice":true — then "text" is the transcript of what they SAY, spoken register (use when it fits the moment, not every message)${hasGroups ? ' · "chat":"GroupChatName" for a group chat, where several members may text in a row (one tag each)' : ''}.\n`;
     p += `You may also narrate the buzz in prose and show the text in your usual visible style (backticks). Duplicate as a tag ONLY what {{user}} receives. Only characters who plausibly have her number can text her.\n`;
+    p += `NEVER emit a tel:sms whose "from" is {{user}} — her own messages are sent from the app, not written by you.\n`;
     p += `CRITICAL SCOPE: tel:sms is EXCLUSIVELY for messages arriving on {{user}}'s OWN phone. What ANY other character (including yours) gets on THEIR phone — prose only, NEVER a tag; if tagged anyway it MUST carry "to":"RecipientName" so the app discards it.\n\n`;
 
     // Самый жирный блок — только в телефонный ход
@@ -144,7 +153,7 @@ function buildPrompt() {
     if (social) {
         p += `[RULE 4 — SOCIAL TAGS] If a character posts publicly as a story event, append at the END:\n`;
         p += `<!--tel:tweet:{"author":"CharacterName","text":"tweet text"}--> / <!--tel:insta:{"author":"CharacterName","photo":"short visual description","caption":"caption text"}-->\n`;
-        p += `Only when the story actually involves posting — do not spam.\n`;
+        p += `Only when the story actually involves posting — do not spam. NEVER post as {{user}}: her own posts are written by her in the app, and a tag with her name is discarded.\n`;
     }
 
     let socialSummary = '';

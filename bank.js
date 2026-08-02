@@ -27,6 +27,11 @@ export function getBank() {
     if (!Array.isArray(b.recurring)) b.recurring = [];
     if (!Array.isArray(b.seenTags)) b.seenTags = [];
     if (!Array.isArray(b.seenRpBalances)) b.seenRpBalances = [];
+    // Операции, проведённые самим телефоном и ещё не подтверждённые ролевой:
+    // [{amount, at}], at — длина чата на момент операции. Модель узнаёт о них
+    // из журнала и повторяет — инфоблоком или тегом tel:bank. Без зачёта одна
+    // покупка списывалась бы дважды.
+    if (!Array.isArray(b.syncQueue)) b.syncQueue = [];
     return b;
 }
 
@@ -104,7 +109,10 @@ export function fmtMoney(n) {
 }
 
 // ── Транзакции (amount: + доход / − трата) ──
-export function addTransaction({ amount, label, category = 'другое', silent = false }) {
+// historyOnly — записать операцию, НЕ трогая баланс. Нужно, когда сумму уже
+// учёл инфоблок ролевой: иначе одна покупка списывалась дважды — сначала
+// дельтой инфоблока, потом ещё раз транзакцией из тега.
+export function addTransaction({ amount, label, category = 'другое', silent = false, historyOnly = false }) {
     const b = getBank();
     const amt = Math.round(Number(amount) || 0);
     if (!amt) return null;
@@ -113,8 +121,14 @@ export function addTransaction({ amount, label, category = 'другое', silen
         label: String(label || '').slice(0, 60) || (amt > 0 ? 'Поступление' : 'Списание'),
         category: String(category || 'другое').slice(0, 24), time: Date.now(),
     };
+    if (historyOnly) tx.synced = true;   // при удалении баланс не откатываем
     b.transactions.unshift(tx);
-    b.balance += amt;
+    if (!historyOnly) {
+        b.balance += amt;
+        // Ждём, что ролевая повторит эту же операцию своими средствами
+        b.syncQueue.push({ amount: amt, at: chatLen() });
+        if (b.syncQueue.length > 20) b.syncQueue = b.syncQueue.slice(-20);
+    }
     if (b.transactions.length > 200) b.transactions = b.transactions.slice(0, 200);
     if (!silent) saveMeta();
     return tx;
@@ -124,7 +138,7 @@ export function deleteTransaction(id) {
     const b = getBank();
     const tx = b.transactions.find(t => t.id === id);
     if (!tx) return;
-    b.balance -= tx.amount; // откат баланса
+    if (!tx.synced) b.balance -= tx.amount; // откат баланса (кроме записей из инфоблока)
     b.transactions = b.transactions.filter(t => t.id !== id);
     saveMeta();
 }
@@ -327,6 +341,27 @@ function parseRpBalance(raw, userName) {
     return null;
 }
 
+function chatLen() {
+    try { return SillyTavern.getContext()?.chat?.length || 0; } catch (e) { return 0; }
+}
+
+// Ищет в очереди телефонную операцию ровно на ту же сумму неподалёку.
+// Нашли — операция уже проведена, ролевая лишь описывает её: транзакция
+// пишется без повторного списания.
+// Запись НЕ удаляем, а помечаем: ту же трату следом покажет и инфоблок,
+// и его дельту тоже нужно чем-то гасить. Из очереди всё уйдёт на сверке.
+function takeSynced(b, amount, msgIndex) {
+    const amt = Math.round(Number(amount) || 0);
+    if (!amt || !Array.isArray(b.syncQueue) || !b.syncQueue.length) return false;
+    // Окно по ходам: старые покупки не должны глотать законные траты ролевой
+    const hit = b.syncQueue.find(x => !x.confirmed
+        && Math.round(Number(x.amount) || 0) === amt
+        && (msgIndex - (Number(x.at) || 0)) <= 10);
+    if (!hit) return false;
+    hit.confirmed = true;
+    return true;
+}
+
 function parseBankSms(smsJson) {
     const from = String(smsJson.from || '');
     const text = String(smsJson.text || '');
@@ -423,9 +458,21 @@ export function harvestBankTags() {
                     if (rpBaseline === null) {
                         // самый первый инфоблок за всю историю — абсолютная инициализация
                         b.balance = rpBalance.value;
+                        b.syncQueue = [];
                     } else {
-                        const delta = rpBalance.value - rpBaseline;
+                        let delta = rpBalance.value - rpBaseline;
+                        // Зачёт телефонных операций: покупку в магазине телефон уже
+                        // списал, а модель, прочитав журнал, вычла её и у себя —
+                        // применять дельту целиком значит списать дважды.
+                        // Гасим только совпадающую по знаку часть: если модель трату
+                        // не заметила (дельта нулевая или обратная), баланс не трогаем.
+                        const pending = b.syncQueue.reduce((sum, x) => sum + (Number(x.amount) || 0), 0);
+                        if (delta && pending && Math.sign(delta) === Math.sign(pending)) {
+                            const comp = Math.sign(delta) * Math.min(Math.abs(delta), Math.abs(pending));
+                            delta -= comp;
+                        }
                         if (delta) b.balance += delta;
+                        b.syncQueue = [];   // инфоблок — точка сверки, копить дальше нечего
                     }
                     balanceSynced++;
                 }
@@ -471,6 +518,10 @@ export function harvestBankTags() {
                 label: j.label || j.text || 'Из ролевой',
                 category: j.category || 'ролевая',
                 silent: true,
+                // Ту же сумму телефон мог списать сам (заказ в магазине,
+                // ставка в казино), а модель повторила её тегом — тогда это
+                // не новая операция, а её описание
+                historyOnly: takeSynced(b, Number(j.amount) || 0, msgIndex),
             });
             added++;
         }
@@ -505,7 +556,7 @@ export function harvestBankTags() {
                     continue;
                 }
                 seen.add(h); b.seenTags.push(h);
-                addTransaction({ ...tx, silent: true });
+                addTransaction({ ...tx, silent: true, historyOnly: takeSynced(b, tx.amount, msgIndex) });
                 added++;
             }
         }

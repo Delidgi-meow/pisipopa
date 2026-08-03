@@ -2385,7 +2385,7 @@ function renderTw(screen) {
         const userPost = postTweet(v);
         const ad = attachActiveAd('twitter', userPost);
         if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
-        logSocialToChat(`${getUserName()} опубликовала твит: «${v}»`); // в историю чата (память/саммарайз)
+        logSocialToChat(`${getUserName()} публикует твит: «${v}»`); // в историю чата (память/саммарайз)
         updatePhoneInjection(); // персонажи «видят» твит юзера
         
         genBusy = true;
@@ -2542,7 +2542,7 @@ function renderTwThread(screen) {
             // Журнал: её ответ + значимые ответы одной строкой
             const added = (t.replies || []).slice(beforeGen).filter(r => r.ak !== 'user');
             const cparts = added.map(r => `${r.author || 'Аккаунт'}: «${String(r.text || '').slice(0, 120)}»`);
-            let line = `${getUserName()} ответила под твитом ${t.author} («${String(t.text).slice(0, 50)}»): «${v}»`;
+            let line = `${getUserName()} отвечает под твитом ${t.author} («${String(t.text).slice(0, 50)}»): «${v}»`;
             if (cparts.length) line += ` — ответы: ${cparts.join('; ')}`;
             logSocialToChat(line);
         } catch (e) {
@@ -3249,7 +3249,7 @@ function renderIgNew(screen) {
                 render();
                 // Журнал — уже с готовым описанием
                 await logSocialToChat(
-                    `${getUserName()} опубликовала фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
+                    `${getUserName()} публикует фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
@@ -3506,7 +3506,7 @@ function renderOfNew(screen) {
                 render();
                 // Журнал: с готовым описанием, текст жёстко помечает приватность
                 await logSocialToChat(
-                    `${getUserName()} опубликовала пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
+                    `${getUserName()} публикует пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
@@ -4157,7 +4157,7 @@ function flushCasinoSession() {
     if (!s || !s.spins) return;
     const net = s.won - s.wagered;
     const outcome = net > 0 ? `в плюсе на ${fmtMoney(net)}` : net < 0 ? `в минусе на ${fmtMoney(-net)}` : 'вышла в ноль';
-    logSocialToChat(`${getUserName()} играла в онлайн-казино с телефона: ставок на ${fmtMoney(s.wagered)} (${s.spins} раунд.), итог — ${outcome}.`);
+    logSocialToChat(`${getUserName()} играет в онлайн-казино с телефона: ставок на ${fmtMoney(s.wagered)} (${s.spins} раунд.), итог — ${outcome}.`);
     applyChatHiding();
 }
 let _casinoBusy = false;
@@ -4393,7 +4393,7 @@ function renderDiscord(screen) {
         </div>` : `
         <div class="gp-empty">
             <div class="gp-empty-icon">${brand('fa-discord')}</div>
-            <div class="gp-empty-text">${ic('fa-plus')} — найти серверы, где ты могла бы состоять<br>${ic('fa-crown')} — создать свой сервер</div>
+            <div class="gp-empty-text">${ic('fa-plus')} — найти серверы, где можно состоять<br>${ic('fa-crown')} — создать свой сервер</div>
         </div>`;
     screen.innerHTML = `
         <div class="gp-dc-skin">
@@ -5158,7 +5158,7 @@ async function doSend(key) {
         // Генерируем ответ «тихо» — generateQuietPrompt не триггерит JS Runner,
         // Extra блоки и другие скрипты. Результат вставляем призраком.
         const ctx = SillyTavern.getContext();
-        const msgKind = asVoice ? 'VOICE message (they hear her voice; this is the transcript)' : 'message';
+        const msgKind = asVoice ? 'VOICE message (they hear their voice; this is the transcript)' : 'message';
         const quietPrompt = isGroup
             ? `Continue the roleplay. The group chat «${name}» (members: ${(t.members || []).join(', ')}) just received this ${msgKind} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply as the group members — ONLY hidden tel:sms tags with the "chat" field (RULE 3 — PHONE-ONLY MODE), one tag per message, several members may text. No visible prose.`
             : `Continue the roleplay. ${name} just received this ${asVoice ? msgKind : 'SMS'} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;

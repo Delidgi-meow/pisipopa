@@ -121,7 +121,7 @@ export function buyItem(catId, storeId, itemId) {
         open.price += item.price;
         saveMeta();
         try {
-            logSocialToChat(`${getUserName()} добавила «${item.name}» (${store.name}) к заказу за ${fmtMoney(item.price)}`);
+            logSocialToChat(`${getUserName()} добавляет «${item.name}» (${store.name}) к заказу за ${fmtMoney(item.price)}`);
         } catch (e) { /* ignore */ }
         return { ...open, merged: true };
     }
@@ -142,7 +142,7 @@ export function buyItem(catId, storeId, itemId) {
 
     // Событие для ролевой (скрытая строка в чат, уважает настройку журнала)
     try {
-        const verb = catId === 'hotels' ? 'забронировала' : (catId === 'travel' ? 'оформила тур' : 'заказала');
+        const verb = catId === 'hotels' ? 'бронирует' : (catId === 'travel' ? 'оформляет тур' : 'заказывает');
         logSocialToChat(`${getUserName()} ${verb} «${item.name}» (${store.name}) за ${fmtMoney(item.price)}`);
     } catch (e) { /* ignore */ }
     return order;
@@ -314,7 +314,7 @@ export async function writeToCourier(orderId, text) {
     o.chat.push({ text: text.slice(0, 500), ts: Date.now(), user: true });
     saveMeta();
     try {
-        logSocialToChat(`${getUserName()} написала курьеру ${o.courier.name}: «${text}»`);
+        logSocialToChat(`${getUserName()} пишет курьеру ${o.courier.name}: «${text}»`);
     } catch (e) { /* ignore */ }
     const reply = await generateCourierReply(o, o.courier, o.chat, text);
     const cur = findOrder(orderId);

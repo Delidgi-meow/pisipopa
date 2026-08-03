@@ -286,14 +286,14 @@ export function getBankSummaryLine() {
     if (debt > 0) parts.push(`loan debt ${fmtMoney(debt)} (monthly ${fmtMoney(monthlyLoanPayment())})`);
     const oblig = monthlyObligations();
     if (oblig > 0) parts.push(`fixed monthly bills ${fmtMoney(oblig)}`);
-    if (b.balance < 0) parts.push('she is in overdraft / broke');
-    return `- Her bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether she can afford things. If you maintain a money/balance tracker in an infoblock, do NOT copy this number into it — change your tracker ONLY by story events (the app reconciles the two by itself; this number already includes phone-app income the story hasn't shown).`;
+    if (b.balance < 0) parts.push('they are in overdraft / broke');
+    return `- Their bank/finances: ${parts.join(', ')}. The SOURCE and details are private — characters only sense whether they can afford things. If you maintain a money/balance tracker in an infoblock, do NOT copy this number into it — change your tracker ONLY by story events (the app reconciles the two by itself; this number already includes phone-app income the story hasn't shown).`;
 }
 
 // ── Одна компактная строка-правило для директивы (инжектится только если банк активен) ──
 export function bankInjectRule() {
     if (!bankActive()) return '';
-    return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers her cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. This INCLUDES bank notification SMS: if you send {{user}} an SMS from a bank about money credited/debited, the tel:bank tag with the same amount is MANDATORY alongside it — the SMS alone does not move money in the app. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
+    return `[BANK] {{user}}'s phone has a bank app. If in THIS reply the story makes {{user}} spend or receive money (buys something, gets paid, someone transfers their cash), append a hidden comment at the END: <!--tel:bank:{"amount":-500,"label":"что купила"}--> (negative = spent, positive = received; amount is a number, no currency sign). One tag per transaction. This INCLUDES bank notification SMS: if you send {{user}} an SMS from a bank about money credited/debited, the tel:bank tag with the same amount is MANDATORY alongside it — the SMS alone does not move money in the app. Do NOT tag hypothetical or other characters' money — only {{user}}'s real transactions.`;
 }
 
 // ── Харвест тегов tel:bank + банковских СМС из чата ──

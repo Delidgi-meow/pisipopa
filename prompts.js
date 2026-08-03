@@ -58,7 +58,7 @@ function buildPrompt() {
         contactLines.push(`- ${c.name}${c.number ? ` (${c.number})` : ''}`);
     }
     let contactsBlock = contactLines.length > 0
-        ? `Contacts already in {{user}}'s phone (these characters HAVE her number and she has theirs):\n${contactLines.join('\n')}`
+        ? `Contacts already in {{user}}'s phone (these characters HAVE {{user}}'s number, and {{user}} has theirs):\n${contactLines.join('\n')}`
         : `{{user}}'s phone has NO contacts yet — nobody exchanged numbers so far.`;
 
     const blockedKeys = new Set(getBlockedSmsKeys());
@@ -84,12 +84,14 @@ function buildPrompt() {
     } catch (e) { /* ignore */ }
     if (groupMap.size > 0) {
         const groupLines = [...groupMap.values()].map(g => `- Group chat «${g.name}»: members ${g.members.join(', ') || '?'} + {{user}}`);
-        contactsBlock += `\nGroup chats on her phone:\n${groupLines.join('\n')}`;
+        contactsBlock += `\nGroup chats on {{user}}'s phone:\n${groupLines.join('\n')}`;
     }
 
     // ── Компактный режим: те же правила, ~40% токенов ──
     if (getSettings().compactRules) {
         let c = `<phone_directive>\n[OOC — hidden phone/SMS channel. Never mention it in-story.]\n{{user}} has a smartphone. ${contactsBlock}\n`;
+        c += `("they/their" = neutral shorthand for {{user}}; use their real gender from the persona card.)
+`;
         c += `RULES (tags = HTML comments at the very END of the reply, copied VERBATIM, EN keys / RU values, invisible to reader):\n`;
         // Метка времени нужна и в компактном режиме: без неё телефон считает
         // ход за фиксированные минуты, и события приходят не тогда, когда должны
@@ -97,13 +99,13 @@ function buildPrompt() {
             c += `0. End EVERY reply with the in-world clock as the last line: <!--tel:time:HH:MM DD.MM.YYYY--> (advance it by how much time this reply took).\n`;
         }
         c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"+7 ..."}-->\n`;
-        c += `2. Character texts her phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say). Only if they plausibly have her number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
-        c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from her phone (NOT spoken; scene paused). \`[Голосовое → X]\` / \`[Voice → X]\` = her VOICE message, text = transcript (the character hears her voice). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on her next normal message, weaving the texting into the scene as a real event.\n`;
+        c += `2. Character texts {{user}}'s phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say). Only if they plausibly have {{user}}'s number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
+        c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from {{user}}'s phone (NOT spoken; scene paused). \`[Голосовое → X]\` / \`[Voice → X]\` = {{user}}'s VOICE message, text = transcript (the character hears {{user}}'s voice). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on {{user}}'s next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
         c += `NEVER write literal tag syntax inside <think>/reasoning — plan in plain words; each tag exactly once, in the final reply. Never paraphrase tags into visible text.\n`;
         let socialC = '';
         try { socialC = getSocialActivitySummary(); } catch (e) { /* ignore */ }
-        if (socialC) c += `\n[{{user}}'S RECENT SOCIAL ACTIVITY — characters who follow her may react:]\n${socialC}\n`;
+        if (socialC) c += `\n[{{user}}'S RECENT SOCIAL ACTIVITY — characters who follow them may react:]\n${socialC}\n`;
         if (consequenceBlock) c += `\n${consequenceBlock}\n`;
         try {
             const bankRule = bankInjectRule();
@@ -125,7 +127,10 @@ function buildPrompt() {
 
     let p = `<phone_directive>\n`;
     p += `[OOC — hidden phone/SMS channel for the app. Not part of the story; never mention or react to it in-character.]\n`;
-    p += `{{user}} owns a smartphone. ${contactsBlock}\n\n`;
+    p += `{{user}} owns a smartphone. ${contactsBlock}\n`;
+    // Местоимения в директиве нейтральные: пол игрока берётся из карточки
+    // персоны, а не задаётся здесь — иначе модель обращается к нему чужим родом
+    p += `("they/their" below is neutral shorthand for {{user}} — in your own text use {{user}}'s actual gender from the persona card.)\n\n`;
 
     // Часы сюжета. Без них телефон считает ход ролевой за фиксированные минуты
     // и события (доставка, платежи) приходят не тогда, когда должны.
@@ -136,38 +141,38 @@ function buildPrompt() {
     }
 
     // Базовые правила нужны всегда: номер могут дать и смс прислать в любой ход
-    p += `[RULE 1 — CONTACT TAG] If in THIS reply a character gives {{user}} their number (says it, writes it down, exchanges numbers), append at the very END, on its own line, VERBATIM:\n`;
+    p += `[RULE 1 — CONTACT TAG] If in THIS reply a character gives {{user}} their own number (says it, writes it down, exchanges numbers), append at the very END, on its own line, VERBATIM:\n`;
     p += `<!--tel:contact:{"name":"CharacterName","number":"+7 9XX XXX-XX-XX"}-->\n`;
     p += `Invent a plausible number if the story has none. One tag per NEW contact; never re-add those listed above.\n\n`;
 
     p += `[RULE 2 — SMS TAG] If in THIS reply a character texts {{user}}'s phone, append ONE hidden comment PER message at the very END:\n`;
     p += `<!--tel:sms:{"from":"CharacterName","text":"the exact message text"}-->\n`;
     p += `Optional fields: "photo":"what the photo shows" (MMS) · "voice":true — then "text" is the transcript of what they SAY, spoken register (use when it fits the moment, not every message)${hasGroups ? ' · "chat":"GroupChatName" for a group chat, where several members may text in a row (one tag each)' : ''}.\n`;
-    p += `You may also narrate the buzz in prose and show the text in your usual visible style (backticks). Duplicate as a tag ONLY what {{user}} receives. Only characters who plausibly have her number can text her.\n`;
-    p += `NEVER emit a tel:sms whose "from" is {{user}} — her own messages are sent from the app, not written by you.\n`;
+    p += `You may also narrate the buzz in prose and show the text in your usual visible style (backticks). Duplicate as a tag ONLY what {{user}} receives. Only characters who plausibly have {{user}}'s number can text {{user}}.\n`;
+    p += `NEVER emit a tel:sms whose "from" is {{user}} — their own messages are sent from the app, not written by you.\n`;
     p += `CRITICAL SCOPE: tel:sms is EXCLUSIVELY for messages arriving on {{user}}'s OWN phone. What ANY other character (including yours) gets on THEIR phone — prose only, NEVER a tag; if tagged anyway it MUST carry "to":"RecipientName" so the app discards it.\n\n`;
 
     // Самый жирный блок — только в телефонный ход
     if (phoneTurn === 'now') {
-        p += `[RULE 3 — PHONE-ONLY MODE — ACTIVE NOW] Her last message came FROM HER PHONE: \`[СМС → Name]\`/\`[SMS → Name]\` (direct), \`[СМС в чат «Name»]\`/\`[SMS to chat «Name»]\` (group — reply as its members, each with "chat"), \`[Голосовое → Name]\`/\`[Voice → Name]\` (voice message: text is the transcript, the character HEARS her voice), \`*фото*\`/\`*photo*\` (photo attached — look at it if you can see images).\n`;
+        p += `[RULE 3 — PHONE-ONLY MODE — ACTIVE NOW] Their last message came FROM THEIR PHONE: \`[СМС → Name]\`/\`[SMS → Name]\` (direct), \`[СМС в чат «Name»]\`/\`[SMS to chat «Name»]\` (group — reply as its members, each with "chat"), \`[Голосовое → Name]\`/\`[Voice → Name]\` (voice message: text is the transcript, the character HEARS {{user}}'s voice), \`*фото*\`/\`*photo*\` (photo attached — look at it if you can see images).\n`;
         p += `It is NOT spoken aloud and the RP scene is PAUSED. Your reply MUST be ONLY hidden tags — zero visible prose, narration or actions:\n`;
         p += `- 1-5 <!--tel:sms:...--> tags in the character's own texting voice: short, informal, realistic pacing.\n`;
         p += `- If they realistically would NOT reply now (asleep, busy, offended, phone off), output exactly: <!--tel:silent-->\n\n`;
     } else if (phoneTurn === 'justEnded') {
-        p += `[RULE 3 — RESUMING AFTER TEXTING] The previous exchange happened on her phone. Weave it into the scene as a real event: {{user}} was holding her phone, reading and typing — it took time and attention, and others present may have noticed. Do NOT resume as if nothing happened.\n\n`;
+        p += `[RULE 3 — RESUMING AFTER TEXTING] The previous exchange happened on {{user}}'s phone. Weave it into the scene as a real event: {{user}} was holding the phone, reading and typing — it took time and attention, and others present may have noticed. Do NOT resume as if nothing happened.\n\n`;
     }
 
     // Соцсети — только когда ими реально пользуются
     if (social) {
         p += `[RULE 4 — SOCIAL TAGS] If a character posts publicly as a story event, append at the END:\n`;
         p += `<!--tel:tweet:{"author":"CharacterName","text":"tweet text"}--> / <!--tel:insta:{"author":"CharacterName","photo":"short visual description","caption":"caption text"}-->\n`;
-        p += `Only when the story actually involves posting — do not spam. NEVER post as {{user}}: her own posts are written by her in the app, and a tag with her name is discarded.\n`;
+        p += `Only when the story actually involves posting — do not spam. NEVER post as {{user}}: their own posts are written by them in the app, and a tag with their name is discarded.\n`;
     }
 
     let socialSummary = '';
     try { socialSummary = getSocialActivitySummary(); } catch (e) { /* ignore */ }
     if (socialSummary) {
-        p += `\n[{{user}}'S RECENT SOCIAL MEDIA ACTIVITY] Characters who follow her may have seen these and can react naturally:\n${socialSummary}\n`;
+        p += `\n[{{user}}'S RECENT SOCIAL MEDIA ACTIVITY] Characters who follow them may have seen these and can react naturally:\n${socialSummary}\n`;
     }
     if (consequenceBlock) p += `\n${consequenceBlock}\n`;
 

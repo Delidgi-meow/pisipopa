@@ -62,7 +62,7 @@ const DICT = {
     'Серверы не сгенерировались — попробуй ещё раз': 'Servers failed to generate — try again',
     'Канал молчит — попробуй ещё раз': 'The channel is silent — try again',
     'Нажми ↻ — канал оживёт, или напиши первой': 'Tap ↻ to bring the channel alive, or post first',
-    '— найти серверы, где ты могла бы состоять': '— find servers you could be a member of',
+    '— найти серверы, где можно состоять': '— find servers you could be a member of',
     '— создать свой сервер': '— create your own server',
     'Текстовые каналы': 'Text channels', 'Покинуть сервер': 'Leave server',
     'Найти серверы': 'Find servers', 'Начало канала.': 'The beginning of the channel.',

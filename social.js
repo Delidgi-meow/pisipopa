@@ -73,10 +73,10 @@ export async function generateStoryReactions(story) {
     const names = [...new Set((m.contacts || []).map(c => c.name))].slice(0, 12);
     const prompt = `${await taskHeader(`react to the Instagram story ${getUserName()} just posted.`)}
 Story: ${story.imgDesc || 'photo'}${story.caption ? ` — text on it: «${story.caption}»` : ''}${story.image ? ' (the ACTUAL image is attached — LOOK at it and react to what you actually SEE, details included)' : ''}
-Her contacts who могли увидеть: ${names.join(', ') || 'random followers'}.
+Their contacts who могли увидеть: ${names.join(', ') || 'random followers'}.
 Return:
-"reactions" — 2-6 quick story reactions [{"author":"Имя","icon":"fire|heart|laugh|wow|sad"}] — authors from her contacts (or 1-2 invented followers); icon matches how THAT person would react in-character.
-"dms" — 0-2 direct replies that arrive as SMS on her phone [{"from":"Имя СТРОГО из её контактов","text":"short in-character reply referencing what's ON the story"}] — ONLY if that person would really slide into DMs (close, flirty, worried, provoked); otherwise [].
+"reactions" — 2-6 quick story reactions [{"author":"Имя","icon":"fire|heart|laugh|wow|sad"}] — authors from their contacts (or 1-2 invented followers); icon matches how THAT person would react in-character.
+"dms" — 0-2 direct replies that arrive as SMS on ${getUserName()}'s phone [{"from":"Имя СТРОГО из её контактов","text":"short in-character reply referencing what's ON the story"}] — ONLY if that person would really slide into DMs (close, flirty, worried, provoked); otherwise [].
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"reactions":[{"author":"Имя","icon":"fire"}],"dms":[{"from":"Имя","text":"..."}]}]`;
@@ -106,7 +106,7 @@ export async function generateContactStories() {
     const names = [...new Set((m.contacts || []).map(c => displayName(keyOf(c.name), c.name)))].slice(0, 12);
     const existing = activeStories().filter(s => s.ak !== 'user').map(s => s.author);
     const prompt = `${await taskHeader(`invent Instagram stories posted in the last hours by people around ${getUserName()}.`)}
-People who might post (her phone contacts): ${names.join(', ') || '—'}. You may also add ONE local celebrity or acquaintance from the roleplay world.
+People who might post (${getUserName()}'s phone contacts): ${names.join(', ') || '—'}. You may also add ONE local celebrity or acquaintance from the roleplay world.
 ${existing.length ? `These people ALREADY have an active story (skip them): ${existing.join(', ')}.` : ''}
 Invent 2-4 stories: slice-of-life moments fitting the current story timeline and each person's character. For each: "author" — name from the list (or the celebrity), "photo" — ONE vivid sentence of what the story shows, "caption" — short overlay text or empty string.
 ${uiLangLine()}
@@ -594,12 +594,12 @@ export async function generateOfComments(post) {
     try { knownNames = [...scanChat().contacts.values()].map(c => c.name); } catch (e) { /* ignore */ }
 
     const prompt = `${await taskHeader(`generate fan reactions under a post on ${getUserName()}'s OnlyFans-like page.`)}
-${getUserName()} posted on her PRIVATE paid subscription page (${s.ofSubs} subscribers). ${photoLine}
+${getUserName()} posted on their PRIVATE paid subscription page (${s.ofSubs} subscribers). ${photoLine}
 Caption: "${post.caption || '(none)'}"${post.price > 0 ? `\nPay-per-view price: $${post.price}` : ''}
 ${existing ? `Existing comments (do not repeat):\n${existing}\n` : ''}
-PRIVACY — CRITICAL: this page is anonymous and subscribers are STRANGERS. ${knownNames.length ? `The following roleplay characters must NOT appear in comments and their names must NOT be used for fan accounts: ${knownNames.join(', ')}. ` : ''}A known character may appear ONLY IF the roleplay excerpt above EXPLICITLY shows that this character knows about / subscribes to her page. No guesses, no "plausible" — when in doubt: random fans ONLY.
+PRIVACY — CRITICAL: this page is anonymous and subscribers are STRANGERS. ${knownNames.length ? `The following roleplay characters must NOT appear in comments and their names must NOT be used for fan accounts: ${knownNames.join(', ')}. ` : ''}A known character may appear ONLY IF the roleplay excerpt above EXPLICITLY shows that this character knows about / subscribes to their page. No guesses, no "plausible" — when in doubt: random fans ONLY.
 
-Generate 4-7 comments from her SUBSCRIBERS: invented fan accounts (simps, regulars, big tippers, shy lurkers who finally commented). Thirsty but human; vary tone.
+Generate 4-7 comments from their SUBSCRIBERS: invented fan accounts (simps, regulars, big tippers, shy lurkers who finally commented). Thirsty but human; vary tone.
 Some commenters tip: add "tip": dollar amount (5-200) to 1-3 comments.
 Max 200 chars each. NO emojis. Match the explicitness of the roleplay excerpt — do not sanitize, do not escalate beyond it.
 ${uiLangLine()}
@@ -1274,13 +1274,13 @@ export async function generateSmsPhotoReply({ contactName, isGroup = false, memb
     const target = isGroup
         ? `the group chat «${contactName}» (members: ${members.join(', ') || '?'})`
         : contactName;
-    const prompt = `${await taskHeader(`reply to an SMS that ${getUserName()} just sent from her phone, and describe her attached photo.`)}
+    const prompt = `${await taskHeader(`reply to an SMS that ${getUserName()} just sent from ${getUserName()}'s phone, and describe the attached photo.`)}
 ${getUserName()} texted ${target}: "${userText || '(only the photo, no text)'}"
-Her PHOTO is ATTACHED to this request — LOOK at it and react to what you actually see.
+Their PHOTO is ATTACHED to this request — LOOK at it and react to what you actually see.
 
 Output STRICT JSON object ONLY — no markdown, no backticks, no <think>, no HTML comments:
 {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph: who/what is in the frame, pose, facial expression, clothes, setting, lighting, mood, small details","replies":[{"from":"SenderName","text":"reply text"}]}
-Reply rules: 1-5 short messages in the character's own texting voice, in-character reaction to the photo and her text, same language as the excerpt. ${isGroup ? 'Several members may reply in a row — "from" = member name.' : `Every reply has "from":"${contactName}".`} If the character realistically would NOT reply right now, use an empty "replies" array.
+Reply rules: 1-5 short messages in the character's own texting voice, in-character reaction to the photo and their text, same language as the excerpt. ${isGroup ? 'Several members may reply in a row — "from" = member name.' : `Every reply has "from":"${contactName}".`} If the character realistically would NOT reply right now, use an empty "replies" array.
 ${uiLangLine()}`;
 
     try {
@@ -1456,7 +1456,7 @@ ${userTweetsBlock}
 Generate 8-12 tweets for ${getUserName()}'s timeline:
 1. Tweets from known characters — in character, may reference recent RP events (from their point of view, no spoilers of hidden thoughts).
 2. Tweets from invented accounts fitting the setting: news, local spots, memes, random strangers, drama. These make the feed feel alive.
-3. 1-2 tweets MAY be quote-retweets of ${getUserName()}'s recent tweets (if she posted any) — a character reacts to her tweet with their own commentary. For these, add a "quote" field.
+3. 1-2 tweets MAY be quote-retweets of ${getUserName()}'s recent tweets (if they posted any) — a character reacts to their tweet with their own commentary. For these, add a "quote" field.
 
 Rules: max 280 chars each, SHORT like real tweets; mix of tones (news, shitpost, life update, ad, hot take). NO emojis.
 ${uiLangLine()}
@@ -1634,7 +1634,7 @@ export async function generateScamSms(recent = []) {
     const seen = (recent || []).slice(0, 8).map(x => `- ${x}`).join('\n');
     const prompt = `${await taskHeader(`invent ONE scam/spam SMS that ${getUserName()} just received from an unknown number.`)}
 Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
-${seen ? `She ALREADY received these scam messages — invent a COMPLETELY different scheme, sender type and wording (do not rehash any of them):\n${seen}\n` : ''}${uiLangLine()}
+${seen ? `They ALREADY received these scam messages — invent a COMPLETELY different scheme, sender type and wording (do not rehash any of them):\n${seen}\n` : ''}${uiLangLine()}
 ${JSON_RULES}
 Format: [{"from":"sender: short name or number like +7 9XX XXX-XX-XX","text":"the scam message, max 280 chars"}]`;
     const arr = await socialGenArray(prompt, { maxTokens: 400, prefill: '[{"from":"' });
@@ -1659,8 +1659,8 @@ Format: [{"tag":"категория","title":"заголовок","text":"тек
 // ── Дискорд: серверы и жизнь каналов ──
 export async function generateDiscordServers(existing = []) {
     const prompt = `${await taskHeader(`invent Discord servers that ${getUserName()} would realistically be a member of.`)}
-Invent 2-4 servers fitting her interests, city, work and the roleplay setting (fandom, hobby, game, neighborhood, professional...). For each: name, one-line description, 2-4 text channels (channel name latin-lowercase-with-dashes, short topic), 8-12 member nicknames (varied and believable; story characters MAY appear under their handles if they'd plausibly be there).
-${existing.length ? `Servers she already has (do NOT duplicate): ${existing.join('; ')}` : ''}
+Invent 2-4 servers fitting their interests, city, work and the roleplay setting (fandom, hobby, game, neighborhood, professional...). For each: name, one-line description, 2-4 text channels (channel name latin-lowercase-with-dashes, short topic), 8-12 member nicknames (varied and believable; story characters MAY appear under their handles if they'd plausibly be there).
+${existing.length ? `Servers they already have (do NOT duplicate): ${existing.join('; ')}` : ''}
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"name":"...","desc":"...","channels":[{"name":"general","topic":"..."}],"members":["nick1","nick2"]}]`;
@@ -1669,9 +1669,9 @@ Format: [{"name":"...","desc":"...","channels":[{"name":"general","topic":"..."}
 
 // Свой сервер: юзер даёт название и тему, модель наполняет каналами/участниками
 export async function generateOwnDiscordServer(name, theme) {
-    const prompt = `${await taskHeader(`${getUserName()} is creating her OWN Discord server called «${name}».`)}
+    const prompt = `${await taskHeader(`${getUserName()} is creating their OWN Discord server called «${name}».`)}
 Server theme / what it's about: ${theme || name}.
-Flesh it out as its OWNER would set it up: a one-line description, 3-5 text channels (name latin-lowercase-with-dashes, short topic), and 8-14 members who would join — her friends/contacts from the roleplay MAY be here under nicknames, plus fitting strangers. She is the owner (do NOT list her among members).
+Flesh it out as its OWNER would set it up: a one-line description, 3-5 text channels (name latin-lowercase-with-dashes, short topic), and 8-14 members who would join — their friends/contacts from the roleplay MAY be here under nicknames, plus fitting strangers. They is the owner (do NOT list their among members).
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"desc":"...","channels":[{"name":"general","topic":"..."}],"members":["nick1","nick2"]}]`;
@@ -1685,9 +1685,9 @@ export async function generateGroupChats(existing = []) {
     const m = getMeta();
     const contactNames = [...new Set((m.contacts || []).map(c => c.name))].slice(0, 14);
     const prompt = `${await taskHeader(`invent group chats on ${getUserName()}'s phone messenger (like Telegram/WhatsApp groups).`)}
-Her known contacts (реальные участники, use their EXACT names): ${contactNames.join(', ') || '—'}.
-Invent 2-3 group chats that fit her life and the roleplay: e.g. family chat, work team, close friends, neighbours, a hobby/fandom group. Each chat MUST include 2-5 members — prefer her real contacts by exact name, you may add 1-2 fitting new people per chat. Give each a short lively opening exchange (3-6 messages) between the members (NOT ${getUserName()} herself), in their voices, fitting the current story moment.
-${existing.length ? `Chats she already has (do NOT duplicate): ${existing.join('; ')}` : ''}
+Their known contacts (реальные участники, use their EXACT names): ${contactNames.join(', ') || '—'}.
+Invent 2-3 group chats that fit their life and the roleplay: e.g. family chat, work team, close friends, neighbours, a hobby/fandom group. Each chat MUST include 2-5 members — prefer their real contacts by exact name, you may add 1-2 fitting new people per chat. Give each a short lively opening exchange (3-6 messages) between the members (NOT ${getUserName()} themselves), in their voices, fitting the current story moment.
+${existing.length ? `Chats they already have (do NOT duplicate): ${existing.join('; ')}` : ''}
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"name":"Название чата","members":["Имя1","Имя2"],"messages":[{"author":"Имя1","text":"..."}]}]`;
@@ -1698,8 +1698,8 @@ export async function generateDiscordFeed(server, channel, existingMsgs = [], us
     const ex = existingMsgs.slice(-10).map(x => `${x.author}: ${x.text}`).join('\n');
     const userEvent = userText
         ? (replyTo
-            ? `${getUserName()} (${handleFor('user', getUserName())}) just REPLIED to ${replyTo.author}'s message «${replyTo.text}» with: "${userText}" — ${replyTo.author} SHOULD answer her back, others may chime in.`
-            : `${getUserName()} (${handleFor('user', getUserName())}) just posted: "${userText}" — several replies MUST react to her message (agree, argue, joke, @-mention her).`)
+            ? `${getUserName()} (${handleFor('user', getUserName())}) just REPLIED to ${replyTo.author}'s message «${replyTo.text}» with: "${userText}" — ${replyTo.author} SHOULD answer them back, others may chime in.`
+            : `${getUserName()} (${handleFor('user', getUserName())}) just posted: "${userText}" — several replies MUST react to their message (agree, argue, joke, @-mention them).`)
         : 'Write a natural slice of ongoing conversation fitting the topic.';
     const prompt = `${await taskHeader(`write fresh messages in the «${channel.name}» channel of the «${server.name}» Discord server.`)}
 Server: ${server.desc || server.name}. Channel topic: ${channel.topic || channel.name}. Members: ${(server.members || []).join(', ')}.
@@ -1735,12 +1735,12 @@ export async function generateCourierReply(order, courier, history = [], userTex
     const items = (order.items || [{ name: order.item }]).map(x => x.name).join(', ');
     const ex = history.slice(-8).map(x => `${x.user ? getUserName() : courier.name}: ${x.text}`).join('\n');
     const situation = arrived
-        ? 'The courier has JUST ARRIVED at her door with the order — write what they write on arrival (at the door / calling, handing it over).'
-        : `${getUserName()} just wrote to the courier: "${userText}" — answer her in character.`;
+        ? 'The courier has JUST ARRIVED at their door with the order — write what they write on arrival (at the door / calling, handing it over).'
+        : `${getUserName()} just wrote to the courier: "${userText}" — answer them in character.`;
     const prompt = `${await taskHeader(`write the courier's reply in the delivery app chat with ${getUserName()}.`)}
 Courier: ${courier.name}. Order: ${items} — from «${order.store}».
 ${ex ? `Chat so far:\n${ex}\n` : ''}${situation}
-ONE short message (1-2 sentences), same broken grammar and address forms as in his previous messages here — a non-native speaker does not suddenly start writing correctly. Do not roleplay her side, do not narrate.
+ONE short message (1-2 sentences), same broken grammar and address forms as in his previous messages here — a non-native speaker does not suddenly start writing correctly. Do not roleplay their side, do not narrate.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"text":"..."}]`;
@@ -1764,14 +1764,14 @@ Format: [{"streamer":"nick","title":"...","category":"...","viewers":1234,"scene
 export async function generateStreamTick(stream, chatLog = [], userComment = null, donation = null) {
     const ex = chatLog.slice(-8).map(x => `${x.author}: ${x.text}`).join('\n');
     const userEvent = donation
-        ? `${getUserName()} just DONATED ${donation.amount} to the streamer${userComment ? ` with the message: "${userComment}"` : ''} — a donation alert popped on stream. The STREAMER MUST notice it and thank/react to her on stream (in their own style); chat reacts too (hype, envy, jokes).`
+        ? `${getUserName()} just DONATED ${donation.amount} to the streamer${userComment ? ` with the message: "${userComment}"` : ''} — a donation alert popped on stream. The STREAMER MUST notice it and thank/react to their on stream (in their own style); chat reacts too (hype, envy, jokes).`
         : (userComment
-            ? `${getUserName()} just wrote in the stream chat: "${userComment}" — the STREAMER may notice and react on stream (read it aloud, answer, laugh), and chat may reply to her.`
+            ? `${getUserName()} just wrote in the stream chat: "${userComment}" — the STREAMER may notice and react on stream (read it aloud, answer, laugh), and chat may reply to them.`
             : 'Advance the stream a little: something happens on screen.');
     const prompt = `${await taskHeader(`continue the live stream «${stream.title}» by ${stream.streamer} that ${getUserName()} is watching.`)}
 Category: ${stream.category}. Current frame: ${stream.scene}
 ${ex ? `Recent stream chat:\n${ex}\n` : ''}${userEvent}
-Return: "scene" — NEW one-sentence description of the frame now (changed by events${userComment ? ' and possibly her comment' : ''}); "streamer" — what the streamer says/does (1-2 sentences, their live voice); "chat" — 3-6 viewer messages (short, twitch-style, varied nicks${userComment ? ', some replying to her' : ''}); "viewers" — updated count (drift it slightly).
+Return: "scene" — NEW one-sentence description of the frame now (changed by events${userComment ? ' and possibly their comment' : ''}); "streamer" — what the streamer says/does (1-2 sentences, their live voice); "chat" — 3-6 viewer messages (short, twitch-style, varied nicks${userComment ? ', some replying to them' : ''}); "viewers" — updated count (drift it slightly).
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"scene":"...","streamer":"...","chat":[{"author":"nick","text":"..."}],"viewers":1234}]`;
@@ -1781,10 +1781,10 @@ Format: [{"scene":"...","streamer":"...","chat":[{"author":"nick","text":"..."}]
 
 export async function generateMyStreamTick(myStream, chatLog = [], userLine = null) {
     const ex = chatLog.slice(-8).map(x => `${x.author}: ${x.text}`).join('\n');
-    const prompt = `${await taskHeader(`${getUserName()} is LIVE on her own stream «${myStream.title}» — generate her audience.`)}
-Category: ${myStream.category || '—'}. Viewers now: ${myStream.viewers || 0}. On screen: ${myStream.scene || 'she just went live'}
-${ex ? `Recent chat:\n${ex}\n` : ''}${userLine ? `She just said/did on stream: "${userLine}" — the chat REACTS to that.` : 'Chat lives its life: greetings, questions, emote spam, maybe a new follower.'}
-Return: "chat" — 4-8 viewer messages (short, twitch-style; regulars, fans, maybe a troll; story characters MAY appear under recognizable nicks if they'd plausibly watch her); "viewers" — updated count (drifts, grows if the stream is interesting); "scene" — one-sentence description of what her frame shows now${userLine ? ' (reflecting what she just did)' : ''}; "donations" — OPTIONAL 0-2 viewer donations {from, amount, text} in the story's ordinary money scale — include one only when it feels EARNED by the moment (a highlight, a milestone, a viewer moved by her), NOT every time.
+    const prompt = `${await taskHeader(`${getUserName()} is LIVE on their own stream «${myStream.title}» — generate their audience.`)}
+Category: ${myStream.category || '—'}. Viewers now: ${myStream.viewers || 0}. On screen: ${myStream.scene || 'they just went live'}
+${ex ? `Recent chat:\n${ex}\n` : ''}${userLine ? `They just said/did on stream: "${userLine}" — the chat REACTS to that.` : 'Chat lives its life: greetings, questions, emote spam, maybe a new follower.'}
+Return: "chat" — 4-8 viewer messages (short, twitch-style; regulars, fans, maybe a troll; story characters MAY appear under recognizable nicks if they'd plausibly watch them); "viewers" — updated count (drifts, grows if the stream is interesting); "scene" — one-sentence description of what their frame shows now${userLine ? ' (reflecting what they just did)' : ''}; "donations" — OPTIONAL 0-2 viewer donations {from, amount, text} in the story's ordinary money scale — include one only when it feels EARNED by the moment (a highlight, a milestone, a viewer moved by them), NOT every time.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"chat":[{"author":"nick","text":"..."}],"viewers":47,"scene":"...","donations":[{"from":"nick","amount":150,"text":"хайп!"}]}]`;
@@ -1813,8 +1813,8 @@ ${uiLangLine()}`;
 // ── Статус репутации: короткое живое описание вместо шаблонного тира ──
 export async function generateRepLabel(platform, reputation, followers, fallback) {
     const prompt = `${await taskHeader(`invent a short vivid "audience status" label for ${getUserName()}'s ${platform} profile screen.`)}
-Her ${platform}: ${followers} followers, reputation score ${reputation}/100 (roughly: "${fallback}").
-Write ONE punchy status label, 2-5 words. Make it flavorful and specific to her vibe/roleplay (like «тихий омут ленты» / "menace of the comment section") and matching the score tone (${reputation}/100). ${uiLangLine()} NO quotes, NO emojis. Output ONLY the label.`;
+Their ${platform}: ${followers} followers, reputation score ${reputation}/100 (roughly: "${fallback}").
+Write ONE punchy status label, 2-5 words. Make it flavorful and specific to their vibe/roleplay (like «тихий омут ленты» / "menace of the comment section") and matching the score tone (${reputation}/100). ${uiLangLine()} NO quotes, NO emojis. Output ONLY the label.`;
     const raw = await socialGen(prompt, { maxTokens: 60 });
     return String(raw || '').replace(/<!--[\s\S]*?-->/g, '').replace(/["'«»]/g, '').trim().split('\n')[0].slice(0, 42);
 }
@@ -1827,7 +1827,7 @@ export async function generateIgComments(post) {
     const wantDesc = willAttach && !post.imgDesc;
     const photoLine = willAttach
         ? `The actual photo is ATTACHED to this request — LOOK at it and react to what you actually see.${post.imgDesc ? ` (fallback description if you cannot see images: ${post.imgDesc})` : ''}`
-        : `Photo (description): ${post.imgDesc || (post.image ? 'her photo, no text description available' : '(no description)')}`;
+        : `Photo (description): ${post.imgDesc || (post.image ? 'their photo, no text description available' : '(no description)')}`;
     const existing = (post.comments || []).map(c => `${c.author}: ${c.text}`).join('\n');
     const formatLine = wantDesc
         ? `Format — STRICT JSON OBJECT: {"photo_description":"detailed description of the attached photo in Russian, one cohesive paragraph (who/what, pose, clothes, setting, lighting, mood, details)","comments":[{"author":"Имя","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]}`
@@ -2289,12 +2289,12 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     // иначе её лицо с рефа персоны лезло на чужие фото
     if (post.mms) {
         const un = getUserName();
-        negLine += ` This photo was taken and sent by ${post.author} from their own phone to ${un}. ${un} is the RECIPIENT — she is NOT in the photo. Do NOT depict her unless the description explicitly says she is in the frame.`;
+        negLine += ` This photo was taken and sent by ${post.author} from their own phone to ${un}. ${un} is the RECIPIENT — they are NOT in the photo. Do NOT depict them unless the description explicitly says they are in the frame.`;
     }
     // Пост юзерки, где по описанию её самой в кадре нет: она — фотограф
     if (post._behindCamera) {
         const un = getUserName();
-        negLine += ` This photo was TAKEN by ${un} for her own account — she is BEHIND the camera, NOT in the frame. Depict exactly what the description says; do NOT add ${un} herself to the picture.`;
+        negLine += ` This photo was TAKEN by ${un} for their own account — they are BEHIND the camera, NOT in the frame. Depict exactly what the description says; do NOT add ${un} themselves to the picture.`;
     }
     const body = `${framing}. ${parts.join('. ')}.${negLine}`;
     // Автор — тоже кандидат в NPC: его имя в описании часто стоит в косвенном
@@ -2315,10 +2315,10 @@ async function sceneToBooruTags(post, { anonymous }) {
         ? 'The subject is a random stranger — use generic appearance tags, NOT any specific named main character.'
         : '';
     if (post.mms) {
-        who += ` The photo was taken and sent by ${post.author}; the recipient ${getUserName()} is NOT in the frame — do not add tags describing her unless the scene explicitly includes her.`;
+        who += ` The photo was taken and sent by ${post.author}; the recipient ${getUserName()} is NOT in the frame — do not add tags describing them unless the scene explicitly includes them.`;
     }
     if (post._behindCamera) {
-        who += ` The photo was TAKEN by ${getUserName()} — she is behind the camera, NOT in the frame; tag ONLY what the scene describes, do not add tags describing her.`;
+        who += ` The photo was TAKEN by ${getUserName()} — they are behind the camera, NOT in the frame; tag ONLY what the scene describes, do not add tags describing them.`;
     }
     const prompt = `Convert this scene into ONE line of English Danbooru-style image tags for an anime image model (NovelAI).
 Scene: ${scene}
@@ -2747,7 +2747,7 @@ export function getSocialActivitySummary() {
 
     if (getSettings().socialLogToChat !== false) {
         return s.ofWallet > 0
-            ? `- She has $${s.ofWallet} of her own money available (on her personal card). The SOURCE is her secret — characters see only that she can afford things.`
+            ? `- They have $${s.ofWallet} of their own money available (on their personal card). The SOURCE is their secret — characters see only that they can afford things.`
             : '';
     }
 
@@ -2758,11 +2758,11 @@ export function getSocialActivitySummary() {
 
     // Её посты + ветки под ними (персонажи в РП знают и свои ответы в комментах)
     for (const t of s.tweets.filter(t => t.ak === 'user').slice(0, 2)) {
-        lines.push(`- Her tweet (${timeAgo(t.time)} ago): "${t.text.slice(0, 150)}"${t.replies?.length ? ` — replies: ${fmtThread(t.replies)}` : ''}`);
+        lines.push(`- Their tweet (${timeAgo(t.time)} ago): "${t.text.slice(0, 150)}"${t.replies?.length ? ` — replies: ${fmtThread(t.replies)}` : ''}`);
     }
     for (const p of s.igPosts.filter(p => p.ak === 'user').slice(0, 2)) {
         const photo = p.imgDesc ? `photo: ${p.imgDesc.slice(0, 80)}` : 'photo';
-        lines.push(`- Her Instagram post (${timeAgo(p.time)} ago): ${photo}${p.caption ? `, caption: "${p.caption.slice(0, 100)}"` : ''}${p.comments?.length ? ` — comments: ${fmtThread(p.comments)}` : ''}`);
+        lines.push(`- Their Instagram post (${timeAgo(p.time)} ago): ${photo}${p.caption ? `, caption: "${p.caption.slice(0, 100)}"` : ''}${p.comments?.length ? ` — comments: ${fmtThread(p.comments)}` : ''}`);
     }
 
     // Её реплики под ЧУЖИМИ постами (+ ответ автора, если был)
@@ -2773,7 +2773,7 @@ export function getSocialActivitySummary() {
             if (r.ak !== 'user') return;
             const next = t.replies[i + 1];
             const followUp = next && next.ak !== 'user' ? ` → ${next.author}: "${String(next.text).slice(0, 80)}"` : '';
-            interactions.push({ time: r.time || 0, line: `- She replied under ${t.author}'s tweet "${t.text.slice(0, 60)}...": "${String(r.text).slice(0, 80)}"${followUp}` });
+            interactions.push({ time: r.time || 0, line: `- They replied under ${t.author}'s tweet "${t.text.slice(0, 60)}...": "${String(r.text).slice(0, 80)}"${followUp}` });
         });
     }
     for (const p of s.igPosts) {
@@ -2782,7 +2782,7 @@ export function getSocialActivitySummary() {
             if (c.ak !== 'user') return;
             const next = p.comments[i + 1];
             const followUp = next && next.ak !== 'user' ? ` → ${next.author}: "${String(next.text).slice(0, 80)}"` : '';
-            interactions.push({ time: c.time || 0, line: `- She commented on ${p.author}'s Instagram post: "${String(c.text).slice(0, 80)}"${followUp}` });
+            interactions.push({ time: c.time || 0, line: `- They commented on ${p.author}'s Instagram post: "${String(c.text).slice(0, 80)}"${followUp}` });
         });
     }
     interactions.sort((a, b) => b.time - a.time);
@@ -2792,11 +2792,11 @@ export function getSocialActivitySummary() {
     const lastOf = s.ofPosts.filter(p => p.ak === 'user')[0];
     if (lastOf) {
         const photo = lastOf.imgDesc ? `photo: ${lastOf.imgDesc.slice(0, 80)}` : 'photo';
-        lines.push(`- Her PRIVATE OnlyFans post (${timeAgo(lastOf.time)} ago, subscribers-only): ${photo}${lastOf.caption ? `, caption: "${lastOf.caption.slice(0, 80)}"` : ''}. Characters know about it ONLY if the story established they secretly subscribe.`);
+        lines.push(`- Their PRIVATE OnlyFans post (${timeAgo(lastOf.time)} ago, subscribers-only): ${photo}${lastOf.caption ? `, caption: "${lastOf.caption.slice(0, 80)}"` : ''}. Characters know about it ONLY if the story established they secretly subscribe.`);
     }
     // Деньги, выведенные с OnlyFans — доступны ей в РП (источник приватен)
     if (s.ofWallet > 0) {
-        lines.push(`- She has $${s.ofWallet} of her own money available (on her personal card). The SOURCE is her secret — characters see only that she can afford things, never assume they know where it came from.`);
+        lines.push(`- They have $${s.ofWallet} of their own money available (on their personal card). The SOURCE is their secret — characters see only that they can afford things, never assume they know where it came from.`);
     }
 
     return lines.join('\n');

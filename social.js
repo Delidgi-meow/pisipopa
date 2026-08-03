@@ -2148,7 +2148,10 @@ async function probeImageExt(folder, allowIndexFallback) {
 
 async function loadImageExt() {
     const override = String(getSettings().imageGenExtension || '').replace(/[^a-zA-Z0-9_\-]/g, '');
-    const key = override || '(auto)';
+    // В ключ входят и настройки: без этого «расширение не установлено»
+    // залипало в кэше после того, как его настроили или переключили
+    const bucket = imgBucket();
+    const key = [override || '(auto)', getSettings().imageCfgKey || '', cfgReady(bucket) ? 'ready' : 'empty'].join('|');
     if (_imgExt.key === key && _imgExt.mod !== undefined) return _imgExt.mod;
 
     let mod = null;
@@ -2183,7 +2186,7 @@ async function loadImageExt() {
     // (мини-клиент openai/gemini ниже).
     if (!mod) {
         const imgCfg = imgBucket();
-        if (imgCfg && imgCfg.endpoint && imgCfg.apiKey && imgCfg.model) {
+        if (cfgReady(imgCfg)) {
             mod = { builtin: true, folder: '(встроенный драйвер по настройкам расширения)' };
         }
     }
@@ -2540,6 +2543,20 @@ async function _generatePostImage(post, onStatus = null) {
 // провал. Отличаем по полям, которых у озвучки не бывает.
 const IMG_MARKERS = ['aspectRatio', 'sendCharAvatar', 'sendUserAvatar', 'npcList', 'npcReferences', 'imageContextEnabled', 'imageSize', 'styles'];
 
+// Модель у некоторых провайдеров лежит в своём поле (naistera хранит выбор
+// в naisteraModel, общее model при этом пустое) — иначе расширение выглядит
+// ненастроенным, хотя рисовать готово.
+function cfgModel(v) {
+    if (!v) return '';
+    // У naistera свой список моделей: общее поле model относится к другому
+    // провайдеру и осталось там с прошлой настройки
+    if (v.apiType === 'naistera') return String(v.naisteraModel || v.model || '').trim();
+    return String(v.model || v.naisteraModel || '').trim();
+}
+function cfgReady(v) {
+    return !!(v && v.apiKey && cfgModel(v) && (v.endpoint || v.apiType === 'naistera'));
+}
+
 // Все найденные картинко-вёдра — для выбора в настройках телефона
 export function listImageBuckets() {
     const out = [];
@@ -2550,7 +2567,7 @@ export function listImageBuckets() {
             if (!v || typeof v !== 'object') continue;
             if (typeof v.endpoint !== 'string' || typeof v.apiKey !== 'string') continue;
             if (!IMG_MARKERS.some(m => m in v)) continue;
-            out.push({ key, ready: !!(v.endpoint && v.apiKey && v.model), model: v.model || '', apiType: v.apiType || '' });
+            out.push({ key, ready: cfgReady(v), model: cfgModel(v), apiType: v.apiType || '' });
         }
     } catch (e) { /* ignore */ }
     return out;
@@ -2568,7 +2585,7 @@ function imgBucket() {
             if (!v || typeof v !== 'object') continue;
             if (typeof v.endpoint !== 'string' || typeof v.apiKey !== 'string') continue;
             if (!IMG_MARKERS.some(m => m in v)) continue;
-            if (v.endpoint && v.apiKey && v.model) return v;   // готовое к генерации — сразу
+            if (cfgReady(v)) return v;   // готовое к генерации — сразу
             if (!firstShape) firstShape = v;
         }
         return firstShape;
@@ -2601,9 +2618,9 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     const prof = _imgProfile(st.imageGenProfileId);
     const imgCfg = prof ? { ...cfgBase, ...Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== '')) } : cfgBase;
     const endpoint = String(imgCfg.endpoint || '').trim().replace(/\/$/, '');
-    if (!endpoint || !imgCfg.apiKey || !imgCfg.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
+    if (!cfgReady(imgCfg)) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const model = st.imageGenModel || imgCfg.model;
+    const model = st.imageGenModel || cfgModel(imgCfg);
     // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
     const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (imgCfg.aspectRatio || '1:1'));
 

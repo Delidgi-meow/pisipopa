@@ -79,6 +79,16 @@
 }
 
 .gp-hidden { display: none !important; }
+/* Кнопки действий — одной строкой, с переносом на узкой панели */
+#gp-settings-drawer .gp-settings-actions {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin-top: 5px;
+}
+#gp-settings-drawer .gp-settings-actions .gp-settings-reset {
+    flex: 1 1 auto; margin: 0; white-space: nowrap; text-align: center;
+}
+/* Кнопки панели настроек, которые стирают данные */
+.gp-settings-danger { border-color: rgba(226,75,74,.5) !important; color: #ff8f8e !important; }
+.gp-settings-danger:hover { background: rgba(226,75,74,.12) !important; }
 
 /* Смс-переписка, спрятанная из ленты чата (сообщения остаются в истории/контексте) */
 #chat .mes.gp-sms-hidden { display: none !important; }

@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.8.1';
+export const GP_VERSION = '2.9.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -146,6 +146,22 @@ export function getMeta() {
     // не должны появляться задним числом при очередном пересканировании chat[].
     if (!m.smsBlocks || typeof m.smsBlocks !== 'object' || Array.isArray(m.smsBlocks)) m.smsBlocks = {};
     return m;
+}
+
+// ── Сброс к заводским ──
+// Два независимых хранилища: настройки расширения общие для всех чатов,
+// данные телефона (контакты, переписки, банк, магазин, соцсети) — свои у
+// каждого чата. Что чистить, решает вызывающий.
+export function factoryReset({ settings = true, chatData = true } = {}) {
+    if (settings) {
+        extension_settings[EXT_NAME] = defaultSettings();
+    }
+    if (chatData) {
+        try { delete chat_metadata[META_KEY]; } catch (e) { chat_metadata[META_KEY] = undefined; }
+        getMeta();          // сразу пересоздаём пустую структуру
+        invalidateChatCache();
+        saveMeta();
+    }
 }
 
 // ── Имя {{user}} и проверка «это она сама» ──

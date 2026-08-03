@@ -1,8 +1,8 @@
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { getSettings, GP_VERSION, invalidateChatCache } from './state.js';
+import { getSettings, GP_VERSION, invalidateChatCache, factoryReset } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
@@ -87,8 +87,12 @@ function setupSettingsPanel() {
                     <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
                 </div>
-                <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
-                <button class="menu_button gp-settings-reset" id="gp-show-report" type="button">Отчёт: последние действия</button>
+                <div class="gp-settings-actions">
+                    <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
+                    <button class="menu_button gp-settings-reset" id="gp-show-report" type="button">Отчёт: последние действия</button>
+                    <button class="menu_button gp-settings-reset gp-settings-danger" id="gp-wipe-chat" type="button">Очистить телефон в этом чате</button>
+                    <button class="menu_button gp-settings-reset gp-settings-danger" id="gp-factory-reset" type="button">Сброс к заводским настройкам</button>
+                </div>
                 <pre id="gp-report-box" class="gp-report-box" hidden></pre>
             </div>
         </details>
@@ -281,6 +285,36 @@ function setupSettingsPanel() {
             toast('Отчёт скопирован в буфер', 'fa-clipboard-check');
         } catch (e) { /* без буфера — просто показываем */ }
     });
+    // Чистка данных телефона В ЭТОМ ЧАТЕ: контакты, переписки, соцсети, банк,
+    // магазин, дискорд, заметки. Настройки расширения не трогаем.
+    $('#gp-wipe-chat').on('click', function () {
+        if (!confirm('Стереть все данные телефона в ЭТОМ чате?\n\nУдалятся контакты, переписки, посты, банк, заказы, дискорд и заметки. Настройки расширения останутся.\n\nОтменить это будет нельзя.')) return;
+        factoryReset({ settings: false, chatData: true });
+        resetIncomingCounters();
+        updatePhoneInjection();
+        updateFabBadge();
+        if (isPhoneOpen()) render();
+        toast('Данные телефона в этом чате стёрты', 'fa-broom');
+    });
+
+    // Полный сброс: настройки + данные текущего чата
+    $('#gp-factory-reset').on('click', function () {
+        if (!confirm('Сбросить ВСЁ к заводскому состоянию?\n\nСлетят настройки расширения (тема, промпты, профили, язык) И данные телефона в этом чате.\n\nДанные в других чатах останутся — их чистить нужно там же, своей кнопкой.')) return;
+        if (!confirm('Точно? Отменить это будет нельзя.')) return;
+        factoryReset({ settings: true, chatData: true });
+        saveSettingsDebounced();
+        resetIncomingCounters();
+        applySkin();
+        applyWallpaper();
+        updatePhoneInjection();
+        updateFabBadge();
+        if (isPhoneOpen()) closePhone();
+        toast('Сброшено к заводским настройкам', 'fa-broom');
+        // Панель настроек построена из прежних значений — перечитываем
+        $('#gp-settings-drawer').remove();
+        setupSettingsPanel();
+    });
+
     $('#gp-report-box').on('dblclick', function () {
         clearLog();
         this.textContent = buildReport(14);

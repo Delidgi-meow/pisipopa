@@ -1990,11 +1990,27 @@ export function setContactAvatar(key, dataUrl) {
     saveMeta();
 }
 // Авто-аватар из карточки персонажа ST (по имени) — чтобы не было пустых кружков
+// Контакт «Елисей» и карточка «Елисей Дельвиг» — один человек, но ключи
+// разные. Считаем именем одного и того же, если совпадает значимое слово:
+// имя или фамилия целиком. Короткие слова не берём — «Ян», «Ли» дали бы
+// случайные совпадения с любым созвучным именем.
+function nameWords(key) {
+    return String(key || '').split(/[\s._-]+/).filter(w => w.length >= 4);
+}
+function sameHuman(aKey, bKey) {
+    if (!aKey || !bKey) return false;
+    if (aKey === bKey) return true;
+    const a = nameWords(aKey), b = nameWords(bKey);
+    if (!a.length || !b.length) return false;
+    return a.some(w => b.includes(w));
+}
+
 function charCardAvatar(key) {
     if (!getSettings().autoAvatars) return '';
     try {
-        const ctx = SillyTavern.getContext();
-        const ch = (ctx?.characters || []).find(c => keyOf(c?.name) === key);
+        const chars = SillyTavern.getContext()?.characters || [];
+        const ch = chars.find(c => keyOf(c?.name) === key)
+            || chars.find(c => sameHuman(keyOf(c?.name), key));
         if (ch?.avatar && ch.avatar !== 'none') {
             return getThumbnailUrl('avatar', ch.avatar);
         }
@@ -2054,7 +2070,7 @@ function npcAvatar(key) {
     if (!getSettings().autoAvatars) return '';
     try {
         for (const npc of npcEntries()) {
-            if (!npcNames(npc).some(n => keyOf(stripHandle(n)) === key)) continue;
+            if (!npcNames(npc).some(n => sameHuman(keyOf(stripHandle(n)), key))) continue;
             const src = npcImageSrc(npc);
             if (!src) continue;
             if (!src.startsWith('data:')) return src;   // путь к файлу — как есть

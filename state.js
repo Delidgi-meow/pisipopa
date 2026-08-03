@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.7.0';
+export const GP_VERSION = '2.9.1';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -39,11 +39,14 @@ const defaultSettings = () => ({
     // third-party расширений подходящее — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
     imageGenExtension: '',
+    // Какое картинко-расширение брать, если установлено несколько
+    // ('' = автоматически: настроенное побеждает пустое)
+    imageCfgKey: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
     // Профиль подключения картинко-расширения ТОЛЬКО для телефона
     // ('' = активный профиль основного чата). Профили живут в
-    // extension_settings.inline_image_gen.connectionProfiles (общие для форков)
+    // Профили живут в настройках самого картинко-расширения (connectionProfiles)
     imageGenProfileId: '',
     // Стиль картинко-расширения ТОЛЬКО для телефона ('' = активный стиль).
     // Стили у новорака ГЛОБАЛЬНЫЕ (не входят в профиль подключения) — поэтому
@@ -143,6 +146,54 @@ export function getMeta() {
     // не должны появляться задним числом при очередном пересканировании chat[].
     if (!m.smsBlocks || typeof m.smsBlocks !== 'object' || Array.isArray(m.smsBlocks)) m.smsBlocks = {};
     return m;
+}
+
+// ── Сброс к заводским ──
+// Два независимых хранилища: настройки расширения общие для всех чатов,
+// данные телефона (контакты, переписки, банк, магазин, соцсети) — свои у
+// каждого чата. Что чистить, решает вызывающий.
+export function factoryReset({ settings = true, chatData = true } = {}) {
+    if (settings) {
+        extension_settings[EXT_NAME] = defaultSettings();
+    }
+    if (chatData) {
+        try { delete chat_metadata[META_KEY]; } catch (e) { chat_metadata[META_KEY] = undefined; }
+        getMeta();          // сразу пересоздаём пустую структуру
+        invalidateChatCache();
+        saveMeta();
+    }
+}
+
+// Следы телефона в САМОЙ истории чата: служебные строки журнала и скрытые
+// теги внутри реплик. Без их удаления контакты и переписки воскресают при
+// первом же пересканировании — метаданные телефона строятся из чата.
+// Возвращает {removed, cleaned} — сколько сообщений удалено и подчищено.
+export async function wipePhoneTraces() {
+    let removed = 0, cleaned = 0;
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx?.chat;
+        if (!Array.isArray(chat)) return { removed, cleaned };
+        const TAGS = /<!--\s*tel:[\s\S]*?-->\s*/gi;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const m = chat[i];
+            if (!m || typeof m.mes !== 'string') continue;
+            // Целиком наши строки журнала — удаляем сообщение
+            if (/<!--\s*tel:log\s*-->/i.test(m.mes)) {
+                chat.splice(i, 1);
+                removed++;
+                continue;
+            }
+            if (!/<!--\s*tel:/i.test(m.mes)) continue;
+            const next = m.mes.replace(TAGS, '').replace(/\n{3,}/g, '\n\n').trim();
+            if (next !== m.mes) { m.mes = next; cleaned++; }
+        }
+        invalidateChatCache();
+        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    } catch (e) {
+        console.warn('[GlassPhone] wipePhoneTraces failed:', e);
+    }
+    return { removed, cleaned };
 }
 
 // ── Имя {{user}} и проверка «это она сама» ──

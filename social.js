@@ -2012,26 +2012,43 @@ export function userAvatarUrl() {
 
 // Реф NPC из картинко-расширения как аватар контакта. Матчим по имени и
 // алиасам — тем же ключевым словам, по которым расширение цепляет реф.
-// Картинка лежит base64-строкой: собранный data-URL кэшируем, иначе он
-// пересобирался бы на каждую перерисовку списка.
+// Список описанных NPC. Форки зовут его по-разному (npcList / npcReferences),
+// поля картинки тоже: base64-строка или готовый путь к файлу.
+function npcEntries() {
+    const b = imgBucket();
+    if (!b) return [];
+    const list = Array.isArray(b.npcList) ? b.npcList
+        : (Array.isArray(b.npcReferences) ? b.npcReferences : []);
+    return list.filter(n => n && n.name && n.enabled !== false);
+}
+
+function npcNames(npc) {
+    const raw = Array.isArray(npc.aliases) ? npc.aliases : String(npc.aliases || '').split(',');
+    return [npc.name, ...raw].map(x => String(x || '').trim()).filter(Boolean);
+}
+
+function npcImageSrc(npc) {
+    const data = npc.avatarData || npc.imageBase64 || npc.imageData || '';
+    if (data) {
+        const str = String(data);
+        return str.startsWith('data:') ? str : `data:image/png;base64,${str}`;
+    }
+    return npc.imagePath ? String(npc.imagePath) : '';
+}
+
+// Готовый data-URL кэшируем: base64-строки тяжёлые, а список перерисовывается часто.
 const _npcAvaCache = new Map();
 function npcAvatar(key) {
     if (!getSettings().autoAvatars) return '';
     try {
-        const list = extension_settings.inline_image_gen?.npcList;
-        if (!Array.isArray(list) || !list.length) return '';
-        for (const npc of list) {
-            if (!npc || !npc.name || !npc.avatarData || npc.enabled === false) continue;
-            const raw = Array.isArray(npc.aliases) ? npc.aliases : String(npc.aliases || '').split(',');
-            const names = [npc.name, ...raw].map(x => String(x || '').trim()).filter(Boolean);
-            if (!names.some(n => keyOf(stripHandle(n)) === key)) continue;
-            const cacheKey = `${npc.id || npc.name}:${String(npc.avatarData).length}`;
+        for (const npc of npcEntries()) {
+            if (!npcNames(npc).some(n => keyOf(stripHandle(n)) === key)) continue;
+            const src = npcImageSrc(npc);
+            if (!src) continue;
+            if (!src.startsWith('data:')) return src;   // путь к файлу — как есть
+            const cacheKey = `${npc.id || npc.name}:${src.length}`;
             let url = _npcAvaCache.get(cacheKey);
-            if (!url) {
-                const data = String(npc.avatarData);
-                url = data.startsWith('data:') ? data : `data:image/png;base64,${data}`;
-                _npcAvaCache.set(cacheKey, url);
-            }
+            if (!url) { url = src; _npcAvaCache.set(cacheKey, url); }
             return url;
         }
     } catch (e) { /* ignore */ }
@@ -2131,7 +2148,10 @@ async function probeImageExt(folder, allowIndexFallback) {
 
 async function loadImageExt() {
     const override = String(getSettings().imageGenExtension || '').replace(/[^a-zA-Z0-9_\-]/g, '');
-    const key = override || '(auto)';
+    // В ключ входят и настройки: без этого «расширение не установлено»
+    // залипало в кэше после того, как его настроили или переключили
+    const bucket = imgBucket();
+    const key = [override || '(auto)', getSettings().imageCfgKey || '', cfgReady(bucket) ? 'ready' : 'empty'].join('|');
     if (_imgExt.key === key && _imgExt.mod !== undefined) return _imgExt.mod;
 
     let mod = null;
@@ -2161,13 +2181,13 @@ async function loadImageExt() {
     }
     // Фолбэк: ВСТРОЕННЫЙ драйвер. Однофайловые форки не экспортируют
     // generateImageWithRetry — импортировать их нельзя (второй инстанс
-    // задублировал бы их UI). Но все они делят один ключ настроек
-    // inline_image_gen (endpoint/apiKey/apiType/model/styles/refs) — генерим
-    // сами их настройками (мини-клиент openai/gemini ниже).
+    // задублировал бы их UI). Зато их настройки (endpoint/apiKey/apiType/
+    // model/styles/refs) лежат в extension_settings — генерим сами по ним
+    // (мини-клиент openai/gemini ниже).
     if (!mod) {
-        const imgCfg = extension_settings?.inline_image_gen;
-        if (imgCfg && imgCfg.endpoint && imgCfg.apiKey && imgCfg.model) {
-            mod = { builtin: true, folder: '(встроенный: настройки inline_image_gen)' };
+        const imgCfg = imgBucket();
+        if (cfgReady(imgCfg)) {
+            mod = { builtin: true, folder: '(встроенный драйвер по настройкам расширения)' };
         }
     }
     _imgExt = { key, mod };
@@ -2192,7 +2212,7 @@ export async function fetchImageModels() {
         ? Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== ''))
         : null;
     if (mod.builtin) {
-        const cfgBase = extension_settings.inline_image_gen;
+        const cfgBase = imgBucket() || {};
         const imgCfg = profFields ? { ...cfgBase, ...profFields } : cfgBase;
         const resp = await fetch(`${String(imgCfg.endpoint).replace(/\/$/, '')}/v1/models`, {
             headers: { 'Authorization': `Bearer ${imgCfg.apiKey}` },
@@ -2242,16 +2262,14 @@ export async function fetchImageModels() {
 // в промпт не попадает, и без этого имя стримера некому было матчить.
 function npcNamesLine(searchIn, promptText = null) {
     try {
-        const imgCfg = extension_settings.inline_image_gen;
-        const list = Array.isArray(imgCfg?.npcList) ? imgCfg.npcList : [];
-        if (!list.length || imgCfg.autoDetectNames === false) return '';
+        const imgCfg = imgBucket();
+        const list = npcEntries();
+        if (!list.length || imgCfg?.autoDetectNames === false) return '';
         const low = String(searchIn || '').toLowerCase();
         const inPrompt = String(promptText == null ? searchIn : promptText).toLowerCase();
         const found = [];
         for (const npc of list) {
-            if (!npc || !npc.name || npc.enabled === false) continue;
-            const raw = Array.isArray(npc.aliases) ? npc.aliases : String(npc.aliases || '').split(',');
-            const names = [npc.name, ...raw].map(x => String(x || '').trim()).filter(Boolean);
+            const names = npcNames(npc);
             // Имя уже в самом промпте — расширение найдёт его само
             if (names.some(n => inPrompt.includes(n.toLowerCase()))) continue;
             // Точное вхождение в исходных данных (обычно автор поста)
@@ -2352,14 +2370,14 @@ Output ONLY the comma-separated tags.`;
 function _imgProfile(id) {
     if (!id) return null;
     try {
-        const imgCfg = extension_settings.inline_image_gen;
+        const imgCfg = imgBucket();
         return (Array.isArray(imgCfg?.connectionProfiles) ? imgCfg.connectionProfiles : []).find(p => p && p.id === id) || null;
     } catch (e) { return null; }
 }
 
 export function listIigProfiles() {
     try {
-        const imgCfg = extension_settings.inline_image_gen;
+        const imgCfg = imgBucket();
         return (Array.isArray(imgCfg?.connectionProfiles) ? imgCfg.connectionProfiles : [])
             .filter(p => p && p.id)
             .map(p => ({ id: p.id, name: p.name || p.id }));
@@ -2369,7 +2387,7 @@ export function listIigProfiles() {
 // Стили расширения (глобальные, НЕ входят в профили подключения)
 export function listIigStyles() {
     try {
-        const imgCfg = extension_settings.inline_image_gen;
+        const imgCfg = imgBucket();
         return (Array.isArray(imgCfg?.styles) ? imgCfg.styles : [])
             .filter(s => s && s.id)
             .map(s => ({ id: s.id, name: s.name || s.id }));
@@ -2516,7 +2534,65 @@ async function _generatePostImage(post, onStatus = null) {
     }
 }
 
-// ── ВСТРОЕННЫЙ драйвер генерации (настройки любого форка inline_image_gen) ──
+// ── Настройки картинко-расширения ──
+// Форки хранят их под разными ключами extension_settings, поэтому ищем по
+// СТРУКТУРЕ: объект с endpoint/apiKey/model — это они и есть. Заполненный
+// (готовый к генерации) выигрывает у пустого.
+// Признаки именно КАРТИНОЧНОГО расширения: endpoint+apiKey есть и у
+// голосового (ElevenLabs), и отправлять туда запрос на картинку — гарантированный
+// провал. Отличаем по полям, которых у озвучки не бывает.
+const IMG_MARKERS = ['aspectRatio', 'sendCharAvatar', 'sendUserAvatar', 'npcList', 'npcReferences', 'imageContextEnabled', 'imageSize', 'styles'];
+
+// Модель у некоторых провайдеров лежит в своём поле (naistera хранит выбор
+// в naisteraModel, общее model при этом пустое) — иначе расширение выглядит
+// ненастроенным, хотя рисовать готово.
+function cfgModel(v) {
+    if (!v) return '';
+    // У naistera свой список моделей: общее поле model относится к другому
+    // провайдеру и осталось там с прошлой настройки
+    if (v.apiType === 'naistera') return String(v.naisteraModel || v.model || '').trim();
+    return String(v.model || v.naisteraModel || '').trim();
+}
+function cfgReady(v) {
+    return !!(v && v.apiKey && cfgModel(v) && (v.endpoint || v.apiType === 'naistera'));
+}
+
+// Все найденные картинко-вёдра — для выбора в настройках телефона
+export function listImageBuckets() {
+    const out = [];
+    try {
+        const all = extension_settings || {};
+        for (const key of Object.keys(all)) {
+            const v = all[key];
+            if (!v || typeof v !== 'object') continue;
+            if (typeof v.endpoint !== 'string' || typeof v.apiKey !== 'string') continue;
+            if (!IMG_MARKERS.some(m => m in v)) continue;
+            out.push({ key, ready: cfgReady(v), model: cfgModel(v), apiType: v.apiType || '' });
+        }
+    } catch (e) { /* ignore */ }
+    return out;
+}
+
+function imgBucket() {
+    try {
+        const all = extension_settings || {};
+        // Явный выбор в настройках телефона — когда стоит несколько расширений
+        const pinned = getSettings().imageCfgKey;
+        if (pinned && all[pinned] && typeof all[pinned] === 'object') return all[pinned];
+        let firstShape = null;
+        for (const key of Object.keys(all)) {
+            const v = all[key];
+            if (!v || typeof v !== 'object') continue;
+            if (typeof v.endpoint !== 'string' || typeof v.apiKey !== 'string') continue;
+            if (!IMG_MARKERS.some(m => m in v)) continue;
+            if (cfgReady(v)) return v;   // готовое к генерации — сразу
+            if (!firstShape) firstShape = v;
+        }
+        return firstShape;
+    } catch (e) { return null; }
+}
+
+// ── ВСТРОЕННЫЙ драйвер генерации (настройки любого форка) ──
 // Мини-клиент: openai (/v1/images/generations|edits) и gemini (:generateContent).
 // Стиль — активный стиль форка ([STYLE: ...]), рефы — аватары чара/персоны
 // по правилам форка (sendCharAvatar/sendUserAvatar) с нашим гейтом wantChar/isUserPost.
@@ -2536,15 +2612,15 @@ async function _fetchB64(url) {
 }
 
 async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
-    const cfgBase = extension_settings.inline_image_gen || {};
+    const cfgBase = imgBucket() || {};
     const st = getSettings();
     // Телефонный профиль подключения: его поля поверх активных (фолбэк на базу)
     const prof = _imgProfile(st.imageGenProfileId);
     const imgCfg = prof ? { ...cfgBase, ...Object.fromEntries(Object.entries(prof).filter(([k, v]) => k !== 'id' && k !== 'name' && v !== undefined && v !== '')) } : cfgBase;
     const endpoint = String(imgCfg.endpoint || '').trim().replace(/\/$/, '');
-    if (!endpoint || !imgCfg.apiKey || !imgCfg.model) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
+    if (!cfgReady(imgCfg)) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const model = st.imageGenModel || imgCfg.model;
+    const model = st.imageGenModel || cfgModel(imgCfg);
     // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
     const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (imgCfg.aspectRatio || '1:1'));
 
@@ -2589,6 +2665,37 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     }
 
     onStatus?.('Генерация...');
+
+    // Naistera: свой простой протокол — POST /api/generate, ответ с data_url.
+    // Рефы уходят готовыми data-URL, а не голым base64.
+    if (imgCfg.apiType === 'naistera') {
+        const base = endpoint || 'https://naistera.org';
+        const url = base.endsWith('/api/generate') ? base : `${base}/api/generate`;
+        const body = { prompt: fullPrompt, aspect_ratio: aspect, model: model || undefined };
+        if (imgCfg.naisteraPreset) body.preset = imgCfg.naisteraPreset;
+        if (refs.length) body.reference_images = refs.map(r => `data:image/png;base64,${r}`);
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error(`Naistera ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
+        const j = await resp.json();
+        if (!j?.data_url) throw new Error('Naistera не вернула картинку');
+        // Ответ приходит готовым data-URL — раскладываем в файл тем же путём,
+        // что и остальные ветки драйвера
+        const nurl = String(j.data_url);
+        let nsrc = nurl;
+        const nb64 = nurl.replace(/^data:[^;]+;base64,/i, '');
+        if (nb64 && nb64 !== nurl) {
+            try { nsrc = await saveBase64AsFile(nb64, 'glassphone', `iggen_${Date.now()}`, /png/i.test(nurl) ? 'png' : 'jpeg'); }
+            catch (e) { /* оставляем dataURL */ }
+        }
+        post.image = nsrc;
+        saveMeta();
+        return nsrc;
+    }
+
     const isGemini = imgCfg.apiType === 'gemini' || /gemini|banana/i.test(String(model));
     let b64 = null, mime = 'image/png';
 

@@ -28,7 +28,7 @@ const DICT = {
     'Разблокировать': 'Unblock', 'Заблокировать': 'Block', 'Заблокировать аккаунт': 'Block account',
     'Обновить ленту': 'Refresh feed', 'Обновить каталог': 'Refresh catalog', 'Обновить предложения': 'Refresh offers',
     'Перегенерировать': 'Regenerate', 'Другой ответ': 'Another reply', 'Не сейчас': 'Not now',
-    'Сбросить кнопку': 'Reset button', 'Отчёт: последние действия': 'Report: recent activity', 'Отчёт скопирован в буфер': 'Report copied to clipboard', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
+    'Сбросить кнопку': 'Reset button', 'Отчёт: последние действия': 'Report: recent activity', 'Очистить телефон в этом чате': 'Wipe the phone in this chat', 'Сброс к заводским настройкам': 'Factory reset', 'Данные телефона в этом чате стёрты': 'Phone data in this chat wiped', 'Сброшено к заводским настройкам': 'Reset to factory settings', 'Отчёт скопирован в буфер': 'Report copied to clipboard', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
     'Пусто': 'Empty', 'случайный': 'random', 'авто': 'auto', 'Сегодня': 'Today', 'сейчас': 'now',
     'Имя': 'Name', 'Номер': 'Number', 'Название': 'Title', 'Описание': 'Description',
     'Категория': 'Category', 'Сумма': 'Amount', 'Цена': 'Price', 'Стиль': 'Style',
@@ -384,6 +384,7 @@ const RULES = [
     [/^Выгнать (.+) с сервера\?$/, 'Kick $1 from the server?'],
     [/^Убрать (.+) из списка участников\?$/, 'Remove $1 from the member list?'],
     [/^Приглашён(?:а)?: (.+)$/, 'Invited: $1'],
+    [/^Данные телефона в этом чате стёрты(.*)$/, 'Phone data in this chat wiped$1'],
     [/^(.+): так выглядят уведомления$/, '$1: this is how notifications look'],
     // Доставка. Сам срок («~35 мин») собирается уже на нужном языке в fmtEta:
     // он попадает внутрь этих строк, и подстрочное правило ловило бы

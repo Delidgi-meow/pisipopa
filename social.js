@@ -2794,13 +2794,29 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
         const url = base.endsWith('/api/generate') ? base : `${base}/api/generate`;
         const body = { prompt: fullPrompt, aspect_ratio: aspect, model: model || undefined };
         if (imgCfg.naisteraPreset) body.preset = imgCfg.naisteraPreset;
-        if (refs.length) body.reference_images = refs.map(r => `data:image/png;base64,${r}`);
-        const resp = await fetch(url, {
+        // Рефы принимают не все модели наистеры: novelai отвечает 400.
+        // Список тот же, что показывает само расширение.
+        const NAIS_REFS_OK = ['grok', 'nano banana', 'grok-pro'];
+        const modelTakesRefs = NAIS_REFS_OK.includes(String(model || '').toLowerCase());
+        if (refs.length && modelTakesRefs) body.reference_images = refs.map(r => `data:image/png;base64,${r}`);
+        const send = (payload) => fetch(url, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
             signal,
         });
+        let resp = await send(body);
+        // Страховка на незнакомые модели: сервер сам скажет, что рефы лишние
+        if (!resp.ok && body.reference_images) {
+            const text = await resp.text();
+            if (/reference image/i.test(text)) {
+                logReq('повтор без референсов', String(model || ''));
+                delete body.reference_images;
+                resp = await send(body);
+            } else {
+                throw new Error(`Naistera ${resp.status}: ${text.slice(0, 150)}`);
+            }
+        }
         if (!resp.ok) throw new Error(`Naistera ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
         const j = await resp.json();
         if (!j?.data_url) throw new Error('Naistera не вернула картинку');

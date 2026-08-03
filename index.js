@@ -1,6 +1,6 @@
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { getSettings, GP_VERSION, invalidateChatCache, factoryReset } from './state.js';
+import { getSettings, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets } from './social.js';
@@ -287,21 +287,32 @@ function setupSettingsPanel() {
     });
     // Чистка данных телефона В ЭТОМ ЧАТЕ: контакты, переписки, соцсети, банк,
     // магазин, дискорд, заметки. Настройки расширения не трогаем.
-    $('#gp-wipe-chat').on('click', function () {
+    $('#gp-wipe-chat').on('click', async function () {
         if (!confirm('Стереть все данные телефона в ЭТОМ чате?\n\nУдалятся контакты, переписки, посты, банк, заказы, дискорд и заметки. Настройки расширения останутся.\n\nОтменить это будет нельзя.')) return;
+        // Контакты и переписки строятся ИЗ ЧАТА: не убрав теги и строки
+        // журнала из истории, телефон восстановит их при первом же скане
+        const alsoChat = confirm('Убрать следы и из самой истории чата?\n\nЭто удалит служебные строки «Событие мира» и скрытые теги телефона из реплик. Без этого контакты и переписки вернутся при следующем сканировании.\n\nСообщения ролевой не пострадают.');
         factoryReset({ settings: false, chatData: true });
+        let note = '';
+        if (alsoChat) {
+            const { removed, cleaned } = await wipePhoneTraces();
+            note = ` · история: −${removed}, правок ${cleaned}`;
+        }
         resetIncomingCounters();
         updatePhoneInjection();
         updateFabBadge();
+        applyChatHiding();
         if (isPhoneOpen()) render();
-        toast('Данные телефона в этом чате стёрты', 'fa-broom');
+        toast(`Данные телефона в этом чате стёрты${note}`, 'fa-broom');
     });
 
     // Полный сброс: настройки + данные текущего чата
-    $('#gp-factory-reset').on('click', function () {
+    $('#gp-factory-reset').on('click', async function () {
         if (!confirm('Сбросить ВСЁ к заводскому состоянию?\n\nСлетят настройки расширения (тема, промпты, профили, язык) И данные телефона в этом чате.\n\nДанные в других чатах останутся — их чистить нужно там же, своей кнопкой.')) return;
         if (!confirm('Точно? Отменить это будет нельзя.')) return;
+        const alsoChat = confirm('Убрать следы и из самой истории чата?\n\nЭто удалит служебные строки «Событие мира» и скрытые теги телефона из реплик. Без этого контакты и переписки вернутся при следующем сканировании.\n\nСообщения ролевой не пострадают.');
         factoryReset({ settings: true, chatData: true });
+        if (alsoChat) await wipePhoneTraces();
         saveSettingsDebounced();
         resetIncomingCounters();
         applySkin();
@@ -309,6 +320,7 @@ function setupSettingsPanel() {
         updatePhoneInjection();
         updateFabBadge();
         if (isPhoneOpen()) closePhone();
+        applyChatHiding();
         toast('Сброшено к заводским настройкам', 'fa-broom');
         // Панель настроек построена из прежних значений — перечитываем
         $('#gp-settings-drawer').remove();

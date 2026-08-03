@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.9.0';
+export const GP_VERSION = '2.9.1';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -162,6 +162,38 @@ export function factoryReset({ settings = true, chatData = true } = {}) {
         invalidateChatCache();
         saveMeta();
     }
+}
+
+// Следы телефона в САМОЙ истории чата: служебные строки журнала и скрытые
+// теги внутри реплик. Без их удаления контакты и переписки воскресают при
+// первом же пересканировании — метаданные телефона строятся из чата.
+// Возвращает {removed, cleaned} — сколько сообщений удалено и подчищено.
+export async function wipePhoneTraces() {
+    let removed = 0, cleaned = 0;
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx?.chat;
+        if (!Array.isArray(chat)) return { removed, cleaned };
+        const TAGS = /<!--\s*tel:[\s\S]*?-->\s*/gi;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const m = chat[i];
+            if (!m || typeof m.mes !== 'string') continue;
+            // Целиком наши строки журнала — удаляем сообщение
+            if (/<!--\s*tel:log\s*-->/i.test(m.mes)) {
+                chat.splice(i, 1);
+                removed++;
+                continue;
+            }
+            if (!/<!--\s*tel:/i.test(m.mes)) continue;
+            const next = m.mes.replace(TAGS, '').replace(/\n{3,}/g, '\n\n').trim();
+            if (next !== m.mes) { m.mes = next; cleaned++; }
+        }
+        invalidateChatCache();
+        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    } catch (e) {
+        console.warn('[GlassPhone] wipePhoneTraces failed:', e);
+    }
+    return { removed, cleaned };
 }
 
 // ── Имя {{user}} и проверка «это она сама» ──

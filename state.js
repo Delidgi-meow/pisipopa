@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.10.1';
+export const GP_VERSION = '2.11.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -64,6 +64,10 @@ const defaultSettings = () => ({
     // Кадры твича: чужой эфир (что показывает камера стрима) и свой (фейскам)
     imgPromptTwWatch: 'livestream video frame, what the stream camera shows, stream overlay vibe',
     imgPromptTwMy: 'live webcam stream frame, streamer facecam view, stream overlay vibe',
+    // Строгий промпт: в картинко-расширение уходит ТОЛЬКО заданный здесь
+    // промпт + описание кадра. Служебные оговорки (чужой аккаунт, получатель
+    // ММС не в кадре, имена NPC для рефов) отключаются.
+    imgStrictPrompt: false,
     // Booru-теги: перед генерацией сцена конвертируется в англ. danbooru-теги
     // (1girl/1boy, solo, hair, ...) — для NovelAI и аниме-моделей, которые не
     // понимают короткие описания на русском. Стоит доп. текстовый запрос.

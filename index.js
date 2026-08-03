@@ -71,6 +71,7 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks gp-settings-wide">
                     <label><input type="checkbox" id="gp-set-square" ${s.imageGenSquare !== false ? 'checked' : ''}><span>Картинки постов — квадрат 1:1</span></label>
                     <label><input type="checkbox" id="gp-set-tagmode" ${s.imgTagMode ? 'checked' : ''}><span>Booru-теги (для NovelAI/аниме-моделей)</span></label>
+                    <label><input type="checkbox" id="gp-set-strictimg" ${s.imgStrictPrompt ? 'checked' : ''}><span>Только мой промпт (без служебных приписок)</span></label>
                 </div>
                 <label class="gp-settings-field"><span>Публичные посты</span><textarea id="gp-set-imgprompt-ig" class="text_pole" rows="3"></textarea></label>
                 <label class="gp-settings-field"><span>Закрытые посты</span><textarea id="gp-set-imgprompt-of" class="text_pole" rows="3"></textarea></label>
@@ -250,6 +251,10 @@ function setupSettingsPanel() {
     });
     $('#gp-set-square').on('change', function () {
         getSettings().imageGenSquare = this.checked;
+        saveSettingsDebounced();
+    });
+    $('#gp-set-strictimg').on('change', function () {
+        getSettings().imgStrictPrompt = this.checked;
         saveSettingsDebounced();
     });
     $('#gp-set-tagmode').on('change', function () {

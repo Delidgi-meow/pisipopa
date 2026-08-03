@@ -2320,11 +2320,16 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     const st = getSettings();
     const parts = [];
     if (post.imgDesc) parts.push(post.imgDesc);
-    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
-    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
     const framing = (post.framing || (post.kind === 'of'
         ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
         : (st.imgPromptIg || 'social media post, self-taken candid framing'))).trim();
+    // Строгий режим: только промпт из настроек и описание кадра, больше ничего
+    if (st.imgStrictPrompt) {
+        if (!parts.length) parts.push(`photo posted by ${post.author}`);
+        return `${framing}. ${parts.join('. ')}.`;
+    }
+    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
+    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
     let negLine = '';
     if (anonymous) {
         const neg = ['the protagonist / the main user'];

@@ -21,7 +21,7 @@ import {
     withdrawOf, setOfWallet,
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor, setUserAvatar, getUserAvatar,
-    timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
+    timeAgo, makeHandle, getUserName, generatePostImage, cancelImageGen, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
@@ -621,6 +621,7 @@ const BLEED_SCREENS = new Set(['discord', 'dchannel', 'twitch', 'stream', 'mystr
 export function render() {
     const screen = document.getElementById('gp-screen');
     if (!screen || !isPhoneOpen()) return;
+    bindStopGen(screen);
     screen.classList.toggle('gp-screen-bleed', BLEED_SCREENS.has(currentScreen));
     // «Оформление» — экран настроек: ему нечего показывать из ролевой, а
     // перерисовка приходит на каждое сообщение и сбивает прокрутку каруселей
@@ -1820,7 +1821,7 @@ function renderThread(screen) {
         } else if (m.photoDesc) {
             const genKey = m.eventId || `${m.idx}:${m.tagStart}`;
             const busy = _mmsGenBusy.has(genKey);
-            media = `<div class="gp-bubble-img gp-bubble-img-gen" style="${avatarStyle((m.from || t.name) + m.photoDesc)}"><span>${ic('fa-image')}</span><i data-mmsdesc="${esc(genKey)}">${esc(m.photoDesc)}</i><button class="gp-mms-gen" data-mmsgen="${mi}" title="Сгенерировать фото" ${busy ? 'disabled' : ''}>${ic(busy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button></div>`;
+            media = `<div class="gp-bubble-img gp-bubble-img-gen" style="${avatarStyle((m.from || t.name) + m.photoDesc)}"><span>${ic('fa-image')}</span><i data-mmsdesc="${esc(genKey)}">${esc(m.photoDesc)}</i><button class="gp-mms-gen" data-mmsgen="${mi}" title="Сгенерировать фото" ${busy ? 'disabled' : ''}>${ic(busy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button>${busy ? stopGenBtn(genKey) : ''}</div>`;
         }
         // В группе подписываем отправителя входящих — КАЖДОМУ свой цвет
         // (тот же хэш, что у аватара-градиента → цвет ника совпадает с аватаром)
@@ -2108,6 +2109,7 @@ function renderThread(screen) {
                     const el = document.querySelector(`[data-mmsdesc="${CSS.escape(genKey)}"]`);
                     if (el) el.textContent = status;
                 },
+                genKey,
             );
             // Персистим через общий rewriteSmsTag: он ищет тег по его ТЕКСТУ.
             // (Раньше здесь была своя копия логики, резавшая по индексам —
@@ -2122,8 +2124,12 @@ function renderThread(screen) {
                 toast('Фото сгенерилось, но не привязалось к сообщению', 'fa-circle-exclamation');
             }
         } catch (err) {
-            console.error('[GlassPhone] MMS image gen failed:', err);
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') {
+                toast('Генерация остановлена', 'fa-circle-stop');
+            } else {
+                console.error('[GlassPhone] MMS image gen failed:', err);
+                toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            }
         } finally {
             _mmsGenBusy.delete(genKey);
             render();
@@ -2612,6 +2618,26 @@ function logNewReplies(kindLabel, postText, arr, beforeLen) {
 let _imgGenReady = false;
 isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
 
+// Кнопка отмены поверх картинки: полупрозрачный кружок с крестиком.
+// key — тот же, по которому генерация зарегистрирована в social.js
+// Кнопки «стоп» живут на разных экранах и перерисовываются — вешаем один
+// делегат на контейнер, а не слушатель на каждую кнопку
+function bindStopGen(screen) {
+    if (screen.dataset.stopGenBound) return;
+    screen.dataset.stopGenBound = '1';
+    screen.addEventListener('click', (e) => {
+        const btn = e.target.closest?.('[data-genstop]');
+        if (!btn) return;
+        e.stopPropagation();
+        e.preventDefault();
+        cancelImageGen(btn.getAttribute('data-genstop'));
+    });
+}
+
+function stopGenBtn(key) {
+    return `<button class="gp-gen-stop" data-genstop="${esc(key)}" title="Остановить генерацию" aria-label="Остановить">${ic('fa-xmark')}</button>`;
+}
+
 function igImageHtml(p) {
     if (p.image) {
         const busy = _imgGenBusy.has(p.id);
@@ -2620,7 +2646,7 @@ function igImageHtml(p) {
         return `<div class="gp-ig-img gp-ig-img-has">
             <img src="${esc(src)}" alt="">
             ${busy
-                ? `<div class="gp-ig-regen-overlay">${ic('fa-spinner fa-spin')}<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Перегенерация...</div></div>`
+                ? `<div class="gp-ig-regen-overlay">${ic('fa-spinner fa-spin')}<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Перегенерация...</div>${stopGenBtn(p.id)}</div>`
                 : `<button class="gp-ig-regenbtn" data-regenimg="${esc(p.id)}" title="Перегенерировать">${ic('fa-rotate-right')}</button>`}
         </div>`;
     }
@@ -2631,7 +2657,7 @@ function igImageHtml(p) {
         <div class="gp-ig-img-inner">
             ${busy ? ic('fa-spinner fa-spin') : ic('fa-image')}
             ${p.imgDesc ? `<div class="gp-ig-img-desc">${esc(p.imgDesc)}</div>` : ''}
-            ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>` : ''}
+            ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>${stopGenBtn(p.id)}` : ''}
             ${!busy ? `<button class="gp-ig-genbtn" data-genimg="${esc(p.id)}">${ic('fa-wand-magic-sparkles')} Нарисовать</button>` : ''}
         </div>
     </div>`;
@@ -2687,12 +2713,17 @@ function bindIgCardActions(root) {
             await generatePostImage(post, (status) => {
                 const el = document.querySelector(`[data-genstatus="${CSS.escape(id)}"]`);
                 if (el) el.textContent = status;
-            });
+            }, id);
             post._imgTs = Date.now(); // cache-busting для перезагрузки нового фото
             toast('Фото готово', 'fa-instagram');
         } catch (err) {
-            console.error('[GlassPhone] image gen failed:', err);
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            // Отмена — не ошибка: молча снимаем индикатор
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') {
+                toast('Генерация остановлена', 'fa-circle-stop');
+            } else {
+                console.error('[GlassPhone] image gen failed:', err);
+                toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            }
         } finally {
             _imgGenBusy.delete(id);
             render();
@@ -3019,11 +3050,12 @@ function renderIgNewStory(screen) {
         const caption = screen.querySelector('#gp-st-caption')?.value.trim() || '';
         render();
         try {
-            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption, aspect: '9:16' });
+            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption, aspect: '9:16' }, null, 'story-draft');
             _storyDraftImage = src2;
             toast('Фото готово', 'fa-image');
         } catch (e) {
-            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (e?.name === 'ImageGenCancelled' || e?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             _storyGenBusy = false;
             const d = document.getElementById('gp-st-desc')?.value;
@@ -3141,12 +3173,13 @@ function renderIgStory(screen) {
                 kind: 'ig',
                 aspect: '9:16',
                 stream: !isMine, // частичный неймматч с карточкой для НПС
-            });
+            }, null, `story-${st.id || _storyIdx}`);
             st.image = src2;
             saveMeta();
             toast('Фото готово', 'fa-image');
         } catch (err) {
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             _storyGenBusy = false;
             if (currentScreen === 'igstory') render();

@@ -86,6 +86,28 @@
 #gp-settings-drawer .gp-settings-actions .gp-settings-reset {
     flex: 1 1 auto; margin: 0; white-space: nowrap; text-align: center;
 }
+/* Стоп генерации — полупрозрачный кружок в углу превью */
+.gp-gen-stop {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 11px;
+    color: rgba(255,255,255,.85);
+    background: rgba(10,10,14,.42);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: background .15s, opacity .15s;
+    z-index: 4;
+}
+.gp-gen-stop:hover { background: rgba(10,10,14,.7); color: #fff; }
+.gp-gen-stop:active { transform: scale(.92); }
+/* в пузыре ММС превью меньше — кнопка тоже */
+.gp-bubble-img .gp-gen-stop { top: 5px; right: 5px; width: 22px; height: 22px; font-size: 10px; }
+
 /* Кнопки панели настроек, которые стирают данные */
 .gp-settings-danger { border-color: rgba(226,75,74,.5) !important; color: #ff8f8e !important; }
 .gp-settings-danger:hover { background: rgba(226,75,74,.12) !important; }

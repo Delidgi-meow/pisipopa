@@ -2323,12 +2323,8 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     const framing = (post.framing || (post.kind === 'of'
         ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
         : (st.imgPromptIg || 'social media post, self-taken candid framing'))).trim();
-    // Строгий режим: только промпт из настроек и описание кадра, больше ничего
-    if (st.imgStrictPrompt) {
-        if (!parts.length) parts.push(`photo posted by ${post.author}`);
-        return `${framing}. ${parts.join('. ')}.`;
-    }
-    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
+    // Подпись поста в промпт НЕ идёт: рисуем то, что описано в кадре,
+    // а не то, что написано под фотографией
     if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
     let negLine = '';
     if (anonymous) {
@@ -2526,6 +2522,13 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
     } else {
         prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
     }
+
+    // ВРЕМЕННО (отладка): финальный промпт, который уходит в картинко-расширение.
+    // Стиль и референсы расширение добавляет уже само — их тут не видно.
+    console.log('%c[Телефон] промпт картинки', 'color:#7f77dd;font-weight:600', {
+        kind: post.kind || 'ig', author: post.author || '', aspect: post.aspect || (st.imageGenSquare !== false ? '1:1' : 'по настройке расширения'),
+        anonymous, refCharacter: wantChar, prompt,
+    });
 
     // Встроенный драйвер (форки без экспортов)
     if (mod.builtin) {

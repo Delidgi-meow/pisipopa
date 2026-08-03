@@ -1038,8 +1038,12 @@ function legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces) {
 }
 
 function isMessageCompatibilityError(message) {
-    return /(assistant|message|messages|role|alternate|alternating|last\s+message|prefill|conversation)/i.test(String(message || ''))
-        && !/(prohibited|moderation|safety|policy|blocked|content filter)/i.test(String(message || ''));
+    const t = String(message || '');
+    // Google AI Studio отвечает «Requests ending with a model turn are not
+    // supported» — про роль assistant там ни слова, поэтому свой шаблон
+    return (/(assistant|message|messages|role|alternate|alternating|last\s+message|prefill|conversation)/i.test(t)
+            || /(model\s+turn|ending with a model|turn are not supported)/i.test(t))
+        && !/(prohibited|moderation|safety|policy|blocked|content filter)/i.test(t);
 }
 
 // ── Запрос ПРОФИЛЕМ подключения ──
@@ -1078,13 +1082,19 @@ async function profileRequest(profileId, messages, maxTokens) {
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
 // Возвращается ВСЕГДА prefill+продолжение — JSON-парсеры получают полный текст.
+// Профили, чей провайдер отказался принимать assistant-префилл (Google AI
+// Studio: «Requests ending with a model turn are not supported»). Повторять
+// заведомо провальный запрос каждый раз незачем — до перезагрузки страницы
+// шлём им сразу текстовую эмуляцию.
+const _noPrefill = new Set();
+
 async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' } = {}) {
     const st = getSettings();
     const profileId = st.socialProfileId;
     // Пол длины ответа (если модель рвёт JSON из-за лимита — юзер поднимает)
     const floor = parseInt(st.socialMaxTokens) || 0;
     if (floor > 0) maxTokens = Math.max(maxTokens, floor);
-    const usePrefill = !!(st.usePrefill && prefill);
+    const usePrefill = !!(st.usePrefill && prefill) && !_noPrefill.has(profileId || '(current)');
     const useFigureSpaces = !!st.useFigureSpaces;
     const messages = buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces);
     const fallbackPrompt = legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces);
@@ -1126,6 +1136,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             // Некоторые text-completion/прокси-профили не принимают финальную роль
             // assistant. Для них повторяем запрос один раз с безопасной эмуляцией.
             if (usePrefill && isMessageCompatibilityError(root)) {
+                _noPrefill.add(profileId || '(current)');
                 try {
                     let content = fallbackPrompt;
                     if (image) {
@@ -1173,6 +1184,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             logOk('ответ (текущий API)', `${String(direct || '').length} симв.`);
             return finish(direct);
         }
+        _noPrefill.add(profileId || '(current)');
         console.warn('[GlassPhone] текущий API не принял messages-prefill; используется текстовая эмуляция');
     }
 

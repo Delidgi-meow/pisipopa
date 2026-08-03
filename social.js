@@ -1454,6 +1454,66 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
 const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.
 CRITICAL — "author" is ALWAYS the person's real DISPLAY NAME (e.g. «Вадим Огнев», «Алиса»), NEVER an @handle/nickname. The @handle belongs ONLY in the separate "handle" field. For known characters use their EXACT name as listed above so the app links them correctly.`;
 
+// Перегенерация ОДНОГО чужого поста: тот же автор, новая запись. Свои посты
+// не трогаем — их пишет она сама.
+export async function regenerateTweet(id) {
+    const s = getSocial();
+    const tw = s.tweets.find(x => x.id === id);
+    if (!tw || tw.ak === 'user') return false;
+    const others = s.tweets.filter(x => x.id !== id).slice(0, 6)
+        .map(x => `- ${x.author}: "${String(x.text).slice(0, 90)}"`).join('\n');
+    const prompt = `${await taskHeader(`rewrite ONE tweet by ${tw.author} for the feed on ${getUserName()}'s phone.`)}
+${contactsBlock()}
+Previous version of this tweet (write a DIFFERENT one, same author, same voice): "${String(tw.text).slice(0, 280)}"
+${others ? `Other tweets already in the feed (do not repeat their topics):\n${others}` : ''}
+One tweet, max 280 chars, short like a real tweet, no emojis. It may reference recent events from ${tw.author}'s point of view.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"text":"..."}]`;
+    const arr = await socialGenArray(prompt, { maxTokens: 400, prefill: '[{"text":"' });
+    const next = Array.isArray(arr) && arr[0] ? String(arr[0].text || '').trim() : '';
+    if (!next) return false;
+    tw.text = next.slice(0, 280);
+    tw.replies = [];          // ответы относились к прежнему тексту
+    tw.likes = Math.floor(Math.random() * 60);
+    tw.rts = Math.floor(Math.random() * 15);
+    saveMeta();
+    return true;
+}
+
+export async function regenerateIgPost(id) {
+    const s = getSocial();
+    const post = s.igPosts.find(x => x.id === id) || s.ofPosts.find(x => x.id === id);
+    if (!post || post.ak === 'user') return false;
+    const prompt = `${await taskHeader(`rewrite ONE Instagram post by ${post.author} for the feed on ${getUserName()}'s phone.`)}
+${contactsBlock()}
+Previous version (write a DIFFERENT one, same author, same voice): photo was "${String(post.imgDesc || '').slice(0, 200)}", caption "${String(post.caption || '').slice(0, 200)}"
+Return the new photo description (what is IN the frame, one vivid sentence) and its caption (short, the way this person writes).
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"photo":"what the frame shows","caption":"..."}]`;
+    const arr = await socialGenArray(prompt, { maxTokens: 500, prefill: '[{"photo":"' });
+    const it = Array.isArray(arr) && arr[0] ? arr[0] : null;
+    if (!it || (!it.photo && !it.caption)) return false;
+    post.imgDesc = String(it.photo || '').slice(0, 200);
+    post.caption = String(it.caption || '').slice(0, 400);
+    post.image = null;        // прежняя картинка иллюстрировала другой кадр
+    post.comments = [];
+    saveMeta();
+    return true;
+}
+
+// Заменить чужие посты в ленте свежими: старые убираем, свои оставляем
+export async function refreshFeed(kind = 'tw') {
+    const s = getSocial();
+    if (kind === 'ig') {
+        s.igPosts = s.igPosts.filter(p => p.ak === 'user');
+        return await generateIgFeed();
+    }
+    s.tweets = s.tweets.filter(t => t.ak === 'user');
+    return await generateTweetFeed();
+}
+
 export async function generateTweetFeed() {
     // Последние твиты юзера — боты могут их цитировать (quote tweet)
     const s = getSocial();

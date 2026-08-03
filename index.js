@@ -256,12 +256,19 @@ function setupSettingsPanel() {
         getSettings().imgTagMode = this.checked;
         saveSettingsDebounced();
     });
-    $('#gp-imgprompt-apply').on('click', function () {
+    // Промпты сохраняются сами, как только уходит фокус: «Применить» легко
+    // не заметить, и генерация уходила со старым текстом
+    const saveImgPrompts = () => {
         getSettings().imgPromptIg = $('#gp-set-imgprompt-ig').val() || '';
         getSettings().imgPromptOf = $('#gp-set-imgprompt-of').val() || '';
         getSettings().imgPromptTwWatch = $('#gp-set-imgprompt-twwatch').val() || '';
         getSettings().imgPromptTwMy = $('#gp-set-imgprompt-twmy').val() || '';
         saveSettingsDebounced();
+    };
+    $('#gp-set-imgprompt-ig, #gp-set-imgprompt-of, #gp-set-imgprompt-twwatch, #gp-set-imgprompt-twmy')
+        .on('change blur', saveImgPrompts);
+    $('#gp-imgprompt-apply').on('click', function () {
+        saveImgPrompts();
         toast('Промпты картинок сохранены', 'fa-check');
     });
     $('#gp-set-sociallog').on('change', function () {

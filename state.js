@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.9.1';
+export const GP_VERSION = '2.11.3';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -447,14 +447,28 @@ export function textMentionsName(text, name) {
     if (!t || !name) return false;
     const isWordChar = (c) => !!c && /[a-zа-яё0-9ё]/i.test(c);
     const words = nameAliases(name);
-    for (const w of words) {
+    const hit = (needle, maxTail) => {
         let from = 0, i;
-        while ((i = t.indexOf(w, from)) !== -1) {
+        while ((i = t.indexOf(needle, from)) !== -1) {
             const before = t[i - 1];
-            const after = t[i + w.length];
-            if (!isWordChar(before) && !isWordChar(after)) return true;
+            if (!isWordChar(before)) {
+                // Хвост — падежное окончание: «Татьяну», «Татьяной», «Елисея»
+                for (let tail = 0; tail <= maxTail; tail++) {
+                    const after = t[i + needle.length + tail];
+                    if (tail > 0 && !isWordChar(t[i + needle.length + tail - 1])) break;
+                    if (!isWordChar(after)) return true;
+                }
+            }
             from = i + 1;
         }
+        return false;
+    };
+    for (const w of words) {
+        if (hit(w, 0)) return true;
+        // Русские имена склоняются: ищем основу, разрешая до двух букв
+        // окончания. Основа короче четырёх букв ловила бы «вер» в «верно».
+        const stem = w.slice(0, -1);
+        if (stem.length >= 4 && hit(stem, 2)) return true;
     }
     return false;
 }

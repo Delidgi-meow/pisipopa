@@ -1038,8 +1038,12 @@ function legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces) {
 }
 
 function isMessageCompatibilityError(message) {
-    return /(assistant|message|messages|role|alternate|alternating|last\s+message|prefill|conversation)/i.test(String(message || ''))
-        && !/(prohibited|moderation|safety|policy|blocked|content filter)/i.test(String(message || ''));
+    const t = String(message || '');
+    // Google AI Studio отвечает «Requests ending with a model turn are not
+    // supported» — про роль assistant там ни слова, поэтому свой шаблон
+    return (/(assistant|message|messages|role|alternate|alternating|last\s+message|prefill|conversation)/i.test(t)
+            || /(model\s+turn|ending with a model|turn are not supported)/i.test(t))
+        && !/(prohibited|moderation|safety|policy|blocked|content filter)/i.test(t);
 }
 
 // ── Запрос ПРОФИЛЕМ подключения ──
@@ -1078,13 +1082,19 @@ async function profileRequest(profileId, messages, maxTokens) {
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
 // Возвращается ВСЕГДА prefill+продолжение — JSON-парсеры получают полный текст.
+// Профили, чей провайдер отказался принимать assistant-префилл (Google AI
+// Studio: «Requests ending with a model turn are not supported»). Повторять
+// заведомо провальный запрос каждый раз незачем — до перезагрузки страницы
+// шлём им сразу текстовую эмуляцию.
+const _noPrefill = new Set();
+
 async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' } = {}) {
     const st = getSettings();
     const profileId = st.socialProfileId;
     // Пол длины ответа (если модель рвёт JSON из-за лимита — юзер поднимает)
     const floor = parseInt(st.socialMaxTokens) || 0;
     if (floor > 0) maxTokens = Math.max(maxTokens, floor);
-    const usePrefill = !!(st.usePrefill && prefill);
+    const usePrefill = !!(st.usePrefill && prefill) && !_noPrefill.has(profileId || '(current)');
     const useFigureSpaces = !!st.useFigureSpaces;
     const messages = buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces);
     const fallbackPrompt = legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces);
@@ -1126,6 +1136,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             // Некоторые text-completion/прокси-профили не принимают финальную роль
             // assistant. Для них повторяем запрос один раз с безопасной эмуляцией.
             if (usePrefill && isMessageCompatibilityError(root)) {
+                _noPrefill.add(profileId || '(current)');
                 try {
                     let content = fallbackPrompt;
                     if (image) {
@@ -1173,6 +1184,7 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
             logOk('ответ (текущий API)', `${String(direct || '').length} симв.`);
             return finish(direct);
         }
+        _noPrefill.add(profileId || '(current)');
         console.warn('[GlassPhone] текущий API не принял messages-prefill; используется текстовая эмуляция');
     }
 
@@ -1978,11 +1990,27 @@ export function setContactAvatar(key, dataUrl) {
     saveMeta();
 }
 // Авто-аватар из карточки персонажа ST (по имени) — чтобы не было пустых кружков
+// Контакт «Елисей» и карточка «Елисей Дельвиг» — один человек, но ключи
+// разные. Считаем именем одного и того же, если совпадает значимое слово:
+// имя или фамилия целиком. Короткие слова не берём — «Ян», «Ли» дали бы
+// случайные совпадения с любым созвучным именем.
+function nameWords(key) {
+    return String(key || '').split(/[\s._-]+/).filter(w => w.length >= 4);
+}
+function sameHuman(aKey, bKey) {
+    if (!aKey || !bKey) return false;
+    if (aKey === bKey) return true;
+    const a = nameWords(aKey), b = nameWords(bKey);
+    if (!a.length || !b.length) return false;
+    return a.some(w => b.includes(w));
+}
+
 function charCardAvatar(key) {
     if (!getSettings().autoAvatars) return '';
     try {
-        const ctx = SillyTavern.getContext();
-        const ch = (ctx?.characters || []).find(c => keyOf(c?.name) === key);
+        const chars = SillyTavern.getContext()?.characters || [];
+        const ch = chars.find(c => keyOf(c?.name) === key)
+            || chars.find(c => sameHuman(keyOf(c?.name), key));
         if (ch?.avatar && ch.avatar !== 'none') {
             return getThumbnailUrl('avatar', ch.avatar);
         }
@@ -2042,7 +2070,7 @@ function npcAvatar(key) {
     if (!getSettings().autoAvatars) return '';
     try {
         for (const npc of npcEntries()) {
-            if (!npcNames(npc).some(n => keyOf(stripHandle(n)) === key)) continue;
+            if (!npcNames(npc).some(n => sameHuman(keyOf(stripHandle(n)), key))) continue;
             const src = npcImageSrc(npc);
             if (!src) continue;
             if (!src.startsWith('data:')) return src;   // путь к файлу — как есть
@@ -2292,11 +2320,12 @@ function buildImagePrompt(post, { anonymous = false, allowChar = false } = {}) {
     const st = getSettings();
     const parts = [];
     if (post.imgDesc) parts.push(post.imgDesc);
-    if (post.caption) parts.push(`caption vibe: "${post.caption}"`);
-    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
     const framing = (post.framing || (post.kind === 'of'
         ? (st.imgPromptOf || 'intimate boudoir shot, self-taken framing')
         : (st.imgPromptIg || 'social media post, self-taken candid framing'))).trim();
+    // Подпись поста в промпт НЕ идёт: рисуем то, что описано в кадре,
+    // а не то, что написано под фотографией
+    if (parts.length === 0) parts.push(`candid photo posted by ${post.author}`);
     let negLine = '';
     if (anonymous) {
         const neg = ['the protagonist / the main user'];
@@ -2398,8 +2427,40 @@ export function listIigStyles() {
 // параллельные генерации увидели бы чужие флаги)
 let _imgGenChain = Promise.resolve();
 
-export function generatePostImage(post, onStatus = null) {
-    const run = () => _generatePostImage(post, onStatus);
+// Отмена генерации. Встроенный драйвер получает signal и рвёт сам запрос;
+// сторонний pipeline отменять нечем — там мы перестаём ждать результат и
+// выбрасываем его, когда он придёт.
+const _imgAborts = new Map();
+
+export function cancelImageGen(key) {
+    const ctl = _imgAborts.get(key);
+    if (!ctl) return false;
+    ctl.abort();
+    _imgAborts.delete(key);
+    return true;
+}
+
+export function isImageGenCancelled(key) { return !_imgAborts.has(key); }
+
+export class ImageGenCancelled extends Error {
+    constructor() { super('Генерация отменена'); this.name = 'ImageGenCancelled'; }
+}
+
+export function generatePostImage(post, onStatus = null, cancelKey = null) {
+    const run = () => {
+        if (cancelKey) {
+            const ctl = new AbortController();
+            _imgAborts.set(cancelKey, ctl);
+            return _generatePostImage(post, onStatus, ctl.signal)
+                .then((src) => {
+                    // Пока ждали, кнопку могли нажать — результат уже не нужен
+                    if (ctl.signal.aborted) throw new ImageGenCancelled();
+                    return src;
+                })
+                .finally(() => { if (_imgAborts.get(cancelKey) === ctl) _imgAborts.delete(cancelKey); });
+        }
+        return _generatePostImage(post, onStatus);
+    };
     const p = _imgGenChain.then(run, run);
     _imgGenChain = p.then(() => {}, () => {});
     return p;
@@ -2414,7 +2475,7 @@ export function generatePostImage(post, onStatus = null) {
 //  • прочее → без авто-рефов (лорбук-рефы по ключевым словам работают)
 // АСПЕКТ: по overrideAspectRatio/overrideImageSize расширение ИГНОРИРУЕТ наш аспект
 // (у юзера стоял 16:9). Снимаем оверрайды на время генерации → побеждает наш 1:1.
-async function _generatePostImage(post, onStatus = null) {
+async function _generatePostImage(post, onStatus = null, signal = null) {
     const mod = await loadImageExt();
     if (!mod) throw new Error('Картинко-расширение не найдено и картинко-API не настроен. Установи расширение генерации картинок или пропиши endpoint/key/model в его настройках.');
 
@@ -2464,7 +2525,7 @@ async function _generatePostImage(post, onStatus = null) {
 
     // Встроенный драйвер (форки без экспортов)
     if (mod.builtin) {
-        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost: userInFrame, onStatus });
+        return _generateViaBuiltin(post, { prompt, wantChar, isUserPost: userInFrame, onStatus, signal });
     }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
@@ -2611,7 +2672,7 @@ async function _fetchB64(url) {
     } catch (e) { return null; }
 }
 
-async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus }) {
+async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatus, signal = null }) {
     const cfgBase = imgBucket() || {};
     const st = getSettings();
     // Телефонный профиль подключения: его поля поверх активных (фолбэк на базу)
@@ -2678,6 +2739,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
             method: 'POST',
             headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
+            signal,
         });
         if (!resp.ok) throw new Error(`Naistera ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
         const j = await resp.json();
@@ -2710,6 +2772,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
                 contents: [{ role: 'user', parts }],
                 generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: aspect } },
             }),
+            signal,
         });
         if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${(await resp.text()).slice(0, 150)}`);
         const j = await resp.json();
@@ -2738,7 +2801,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
             if (refs.length > 1) refs.forEach((r, i) => form.append('image[]', toBlob(r), `ref${i}.png`));
             else form.append('image', toBlob(refs[0]), 'ref0.png');
             resp = await fetch(`${endpoint}/v1/images/edits`, {
-                method: 'POST', headers: { 'Authorization': `Bearer ${imgCfg.apiKey}` }, body: form,
+                method: 'POST', headers: { 'Authorization': `Bearer ${imgCfg.apiKey}` }, body: form, signal,
             });
         } else {
             const body = { model, prompt: fullPrompt, n: 1 };
@@ -2748,6 +2811,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${imgCfg.apiKey}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
+                signal,
             });
         }
         if (!resp.ok) throw new Error(`API ${resp.status}: ${(await resp.text()).slice(0, 150)}`);

@@ -2523,13 +2523,6 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
         prompt = buildImagePrompt(post, { anonymous, allowChar: wantChar });
     }
 
-    // ВРЕМЕННО (отладка): финальный промпт, который уходит в картинко-расширение.
-    // Стиль и референсы расширение добавляет уже само — их тут не видно.
-    console.log('%c[Телефон] промпт картинки', 'color:#7f77dd;font-weight:600', {
-        kind: post.kind || 'ig', author: post.author || '', aspect: post.aspect || (st.imageGenSquare !== false ? '1:1' : 'по настройке расширения'),
-        anonymous, refCharacter: wantChar, prompt,
-    });
-
     // Встроенный драйвер (форки без экспортов)
     if (mod.builtin) {
         return _generateViaBuiltin(post, { prompt, wantChar, isUserPost: userInFrame, onStatus, signal });

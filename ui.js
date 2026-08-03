@@ -20,6 +20,7 @@ import {
     getOfPosts, postOf, likeOf, delOf, addOfComment, delOfComment, generateOfComments, getSocial,
     withdrawOf, setOfWallet,
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
+    regenerateTweet, regenerateIgPost, refreshFeed,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor, setUserAvatar, getUserAvatar,
     timeAgo, makeHandle, getUserName, generatePostImage, cancelImageGen, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
@@ -2304,7 +2305,8 @@ function twCard(t, { clickable = true } = {}) {
                 <span class="gp-tw-time">· ${esc(timeAgo(t.time))}</span>
                 ${isUser
                     ? `<button class="gp-tw-del" data-del="${esc(t.id)}" title="Удалить">${ic('fa-xmark')}</button>`
-                    : `<button class="gp-tw-del gp-ban-btn" data-ban-tw="${esc(t.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
+                    : `<button class="gp-tw-del" data-regen-tw="${esc(t.id)}" title="Перегенерировать пост">${ic('fa-rotate-right')}</button>
+                       <button class="gp-tw-del gp-ban-btn" data-ban-tw="${esc(t.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
             </div>
             <div class="gp-tw-text">${esc(t.text)}</div>
             ${quoteHtml}
@@ -2329,6 +2331,17 @@ function bindTwCardActions(root, rerender) {
     root.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
         if (confirm('Удалить твит?')) { delTweet(b.getAttribute('data-del')); rerender(); }
+    }));
+    root.querySelectorAll('[data-regen-tw]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const ok = await regenerateTweet(b.getAttribute('data-regen-tw'));
+            toast(ok ? 'Пост переписан' : 'Не получилось переписать пост', ok ? 'fa-x-twitter' : 'fa-circle-exclamation');
+        } catch (err) {
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally { genBusy = false; render(); }
     }));
     root.querySelectorAll('[data-ban-tw]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2358,7 +2371,8 @@ function renderTw(screen) {
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
             <div class="gp-title gp-title-app">${brand('fa-x-twitter')}</div>
             <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
-            <button class="gp-iconbtn" id="gp-tw-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+            <button class="gp-iconbtn" id="gp-tw-refresh" title="Пересобрать ленту заново" ${genBusy ? 'disabled' : ''}>${ic('fa-rotate')}</button>
+            <button class="gp-iconbtn" id="gp-tw-gen" title="Дописать в ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-tw-compose">
             ${avatarHtml(getUserName(), avatarForAuthor('user'), 'gp-avatar gp-avatar-sm')}
@@ -2423,6 +2437,22 @@ function renderTw(screen) {
         } catch (e) {
             console.error('[GlassPhone] tw feed failed:', e);
             toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'tw') render();
+        }
+    });
+
+    screen.querySelector('#gp-tw-refresh')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        // Свои твиты остаются: пересобирается только то, что придумала модель
+        if (!confirm('Пересобрать ленту заново?\n\nЧужие твиты заменятся новыми, твои останутся.')) return;
+        genBusy = true; render();
+        try {
+            const n = await refreshFeed('tw');
+            toast(n > 0 ? `Лента пересобрана: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-x-twitter' : 'fa-circle-exclamation');
+        } catch (e) {
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'tw') render();
@@ -2677,7 +2707,8 @@ function igCard(p, { clickable = true } = {}) {
             <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
             ${isUser
                 ? `<button class="gp-tw-del" data-del-ig="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>`
-                : `<button class="gp-tw-del gp-ban-btn" data-ban-ig="${esc(p.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
+                : `<button class="gp-tw-del" data-regen-ig="${esc(p.id)}" title="Перегенерировать пост">${ic('fa-rotate-right')}</button>
+                   <button class="gp-tw-del gp-ban-btn" data-ban-ig="${esc(p.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
         </div>
         <div class="${clickable ? 'gp-clickable' : ''}" data-open-ig="${esc(p.id)}">${igImageHtml(p)}</div>
         <div class="gp-ig-actions">
@@ -2754,6 +2785,17 @@ function bindIgCardActions(root) {
         else render();
         toast(`«${post.author}» заблокирован`, 'fa-ban');
     }));
+    root.querySelectorAll('[data-regen-ig]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const ok = await regenerateIgPost(b.getAttribute('data-regen-ig'));
+            toast(ok ? 'Пост переписан' : 'Не получилось переписать пост', ok ? 'fa-instagram' : 'fa-circle-exclamation');
+        } catch (err) {
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally { genBusy = false; render(); }
+    }));
     const open = (id) => { currentPostId = id; goto('igview'); };
     root.querySelectorAll('[data-open-ig]').forEach(b => b.addEventListener('click', () => open(b.getAttribute('data-open-ig'))));
     root.querySelectorAll('[data-open-ig2]').forEach(b => b.addEventListener('click', (e) => {
@@ -2772,7 +2814,8 @@ function renderIg(screen) {
             <div class="gp-title gp-title-app">${brand('fa-instagram')}</div>
             <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
             <button class="gp-iconbtn" id="gp-ig-new" title="Новый пост">${ic('fa-plus')}</button>
-            <button class="gp-iconbtn" id="gp-ig-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+            <button class="gp-iconbtn" id="gp-ig-refresh" title="Пересобрать ленту заново" ${genBusy ? 'disabled' : ''}>${ic('fa-rotate')}</button>
+            <button class="gp-iconbtn" id="gp-ig-gen" title="Дописать в ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-feed" id="gp-ig-feed">
             ${igStoriesRow()}
@@ -2804,6 +2847,21 @@ function renderIg(screen) {
         } catch (e) {
             console.error('[GlassPhone] ig feed failed:', e);
             toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'ig') render();
+        }
+    });
+    screen.querySelector('#gp-ig-refresh')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        // Свои посты остаются: пересобирается только то, что придумала модель
+        if (!confirm('Пересобрать ленту заново?\n\nЧужие посты заменятся новыми, твои останутся.')) return;
+        genBusy = true; render();
+        try {
+            const n = await refreshFeed('ig');
+            toast(n > 0 ? `Лента пересобрана: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-instagram' : 'fa-circle-exclamation');
+        } catch (e) {
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'ig') render();

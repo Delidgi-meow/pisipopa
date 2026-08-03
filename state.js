@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.7.0';
+export const GP_VERSION = '2.8.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -39,11 +39,14 @@ const defaultSettings = () => ({
     // third-party расширений подходящее — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
     imageGenExtension: '',
+    // Какое картинко-расширение брать, если установлено несколько
+    // ('' = автоматически: настроенное побеждает пустое)
+    imageCfgKey: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
     // Профиль подключения картинко-расширения ТОЛЬКО для телефона
     // ('' = активный профиль основного чата). Профили живут в
-    // extension_settings.inline_image_gen.connectionProfiles (общие для форков)
+    // Профили живут в настройках самого картинко-расширения (connectionProfiles)
     imageGenProfileId: '',
     // Стиль картинко-расширения ТОЛЬКО для телефона ('' = активный стиль).
     // Стили у новорака ГЛОБАЛЬНЫЕ (не входят в профиль подключения) — поэтому

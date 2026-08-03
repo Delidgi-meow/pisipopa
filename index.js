@@ -3,7 +3,7 @@ import { eventSource, event_types, saveSettingsDebounced } from '../../../../scr
 import { getSettings, GP_VERSION, invalidateChatCache } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
-import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles } from './social.js';
+import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
@@ -65,6 +65,7 @@ function setupSettingsPanel() {
             <summary><i class="fa-solid fa-image"></i><span><b>Изображения</b><small>Модель, формат и промпты</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
             <div class="gp-settings-group-body gp-settings-grid">
                 <label class="gp-settings-field gp-settings-wide"><span>Модель картинок</span><span class="gp-settings-control-row"><input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" placeholder="авто"><datalist id="gp-imgmodels"></datalist><button class="menu_button gp-settings-icon-button" id="gp-imgmodel-refresh" type="button" title="Загрузить список моделей" aria-label="Загрузить список моделей"><i class="fa-solid fa-rotate"></i></button></span></label>
+                <label class="gp-settings-field gp-hidden" id="gp-imgcfg-row"><span>Картинко-расширение</span><select id="gp-set-imgcfg" class="text_pole"></select></label>
                 <label class="gp-settings-field"><span>Профиль картинко-расширения</span><select id="gp-set-imgprofile" class="text_pole"></select></label>
                 <label class="gp-settings-field"><span>Стиль картинок телефона</span><select id="gp-set-imgstyle" class="text_pole"></select></label>
                 <div class="gp-settings-checks gp-settings-wide">
@@ -103,6 +104,31 @@ function setupSettingsPanel() {
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
     $('#gp-set-imgprompt-twwatch').val(s.imgPromptTwWatch || '');
     $('#gp-set-imgprompt-twmy').val(s.imgPromptTwMy || '');
+    // Источник настроек картинок. Строку показываем, только когда установлено
+    // несколько расширений — иначе выбирать не из чего.
+    {
+        const sel = $('#gp-set-imgcfg');
+        const buckets = listImageBuckets();
+        $('#gp-imgcfg-row').toggleClass('gp-hidden', buckets.length < 2);
+        sel.empty().append(`<option value="">Определять автоматически</option>`);
+        for (const b of buckets) {
+            const note = b.ready ? (b.model || b.apiType) : 'не настроено';
+            sel.append($('<option>').val(b.key).text(`${b.key} — ${note}`));
+        }
+        if (s.imageCfgKey && !buckets.some(b => b.key === s.imageCfgKey)) s.imageCfgKey = '';
+        sel.val(s.imageCfgKey || '');
+        sel.off('change.gp').on('change.gp', function () {
+            getSettings().imageCfgKey = String($(this).val() || '');
+            $('#gp-imgmodels').empty();   // модели и профили относятся к прежнему расширению
+            // Профили и стили принадлежат прежнему расширению — сбрасываем,
+            // иначе телефон рисовал бы чужими настройками
+            getSettings().imageGenProfileId = '';
+            getSettings().imageGenStyleId = '';
+            saveSettingsDebounced();
+            $('#gp-set-imgprofile').empty().append($('<option>').val('').text('Как в основном чате'));
+            $('#gp-set-imgstyle').empty().append($('<option>').val('').text('Как в основном чате'));
+        });
+    }
     // Профили подключения картинко-расширения (общее ведро всех форков).
     // '' = телефон рисует через активный профиль основного чата
     {

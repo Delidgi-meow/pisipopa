@@ -5392,7 +5392,34 @@ export function resetIncomingCounters() {
 
 // ═══ Инициализация ═══
 
+// Приложение-обёртка (Tauri Tavern и подобные) рисует свою системную панель
+// поверх страницы. Два шага: просим у вьюпорта безопасные отступы и, если
+// обёртка их всё-таки не отдаёт, помечаем body — CSS подставит запасные.
+function setupNativeShell() {
+    try {
+        const meta = document.querySelector('meta[name="viewport"]');
+        if (meta && !/viewport-fit/i.test(meta.content || '')) {
+            meta.content = `${meta.content}, viewport-fit=cover`;
+        }
+        const forced = getSettings().forceSafeArea;
+        const isNative = !!(window.__TAURI__ || window.__TAURI_INTERNALS__ || window.Capacitor || /wv|Tauri/i.test(navigator.userAgent));
+        if (!isNative && !forced) return;
+        document.body.classList.add('gp-native-shell');
+        if (forced) return;   // выставлено вручную — автопроверка не отменяет
+        // Проверяем, отдала ли обёртка настоящие отступы: если да, запасные не нужны
+        requestAnimationFrame(() => {
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top,0px);visibility:hidden';
+            document.body.appendChild(probe);
+            const real = probe.getBoundingClientRect().height;
+            probe.remove();
+            if (real > 0) document.body.classList.remove('gp-native-shell');
+        });
+    } catch (e) { /* ignore */ }
+}
+
 export function initUI() {
+    setupNativeShell();
     createFab();
     createPhone();
     createWandButton();

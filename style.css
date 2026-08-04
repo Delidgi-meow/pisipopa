@@ -1729,8 +1729,28 @@
     #gp-fab { right: 12px; bottom: 150px; }
     /* остров не нужен на реальном телефоне — там свой */
     .gp-island { display: none; }
-    .gp-statusbar { padding-top: 12px; }
+    /* Системная панель устройства (часы, запись, батарея) перекрывает верх
+       телефона в приложении-обёртке. Отступаем на её высоту: env() отдаёт
+       ноль там, где выреза нет, поэтому в браузере ничего не меняется. */
+    .gp-statusbar { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+    .gp-homebar { margin-bottom: calc(9px + env(safe-area-inset-bottom, 0px)); }
+    #gp-screen.gp-screen-bleed { padding-bottom: env(safe-area-inset-bottom, 0px); }
+    #gp-phone:has(> #gp-screen.gp-screen-bleed) > .gp-homebar {
+        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    }
 }
+/* Плавающая кнопка тоже не должна лезть под системную панель */
+#gp-fab {
+    margin-top: env(safe-area-inset-top, 0px);
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* Обёртка не отдала безопасные отступы — подставляем запасные вручную:
+   высота системной панели на телефонах примерно такая. */
+body.gp-native-shell .gp-statusbar { padding-top: 34px; }
+body.gp-native-shell .gp-homebar { margin-bottom: 20px; }
+body.gp-native-shell #gp-fab { margin-top: 34px; margin-bottom: 20px; }
+body.gp-native-shell #gp-phone:has(> #gp-screen.gp-screen-bleed) > .gp-homebar { bottom: 22px; }
+body.gp-native-shell #gp-screen.gp-screen-bleed { padding-bottom: 14px; }
 
 /* Кнопка закрытия в статус-баре (на мобильном фуллскрине «тапнуть мимо» нельзя) */
 .gp-close {

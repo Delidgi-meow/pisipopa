@@ -86,6 +86,7 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks">
                     <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
+                    <label><input type="checkbox" id="gp-set-safearea" ${s.forceSafeArea ? 'checked' : ''}><span>Экран с системной панелью (сдвинуть телефон)</span></label>
                 </div>
                 <div class="gp-settings-actions">
                     <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
@@ -270,6 +271,11 @@ function setupSettingsPanel() {
     $('#gp-imgprompt-apply').on('click', function () {
         saveImgPrompts();
         toast('Промпты картинок сохранены', 'fa-check');
+    });
+    $('#gp-set-safearea').on('change', function () {
+        getSettings().forceSafeArea = this.checked;
+        saveSettingsDebounced();
+        document.body.classList.toggle('gp-native-shell', this.checked);
     });
     $('#gp-set-sociallog').on('change', function () {
         getSettings().socialLogToChat = this.checked;

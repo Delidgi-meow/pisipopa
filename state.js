@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.13.0';
+export const GP_VERSION = '2.14.2';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -44,6 +44,9 @@ const defaultSettings = () => ({
     imageCfgKey: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
+    // Модель расширения на момент выбора оверрайда: если её там сменили,
+    // оверрайд считается устаревшим и телефон следует за расширением
+    imageGenModelBase: '',
     // Профиль подключения картинко-расширения ТОЛЬКО для телефона
     // ('' = активный профиль основного чата). Профили живут в
     // Профили живут в настройках самого картинко-расширения (connectionProfiles)

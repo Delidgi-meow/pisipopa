@@ -1,4 +1,4 @@
-import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
+import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext, isUserName } from './state.js';
@@ -1447,7 +1447,7 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     if (rp) block += `\n=== RECENT ROLEPLAY EXCERPT (current events) ===\n${rp}\n=== END OF EXCERPT ===\n`;
     const dt = getRpDateTime();
     if (dt) block += `\n=== AUTHORITATIVE RP CLOCK ===\nCurrent in-world date/time: ${String(dt.day).padStart(2, '0')}.${String(dt.month).padStart(2, '0')}.${dt.year}${dt.hours === undefined ? '' : ` ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes || 0).padStart(2, '0')}`}. This overrides the computer/server date. Relative phrases in posts (today/tomorrow/tonight) must be interpreted from this clock.\n`;
-    block += `\n=== CULTURAL / NAME CONSISTENCY ===\nInfer the story's actual country, city, language community and cultural naming pool from WORLD/LOREBOOK, character card, persona and RP excerpt. The UI/output language is NOT evidence of country. Invented stranger accounts must use names, handles, places, institutions and prices natural for that inferred setting. If evidence is mixed or absent, prefer setting-neutral handles instead of assuming Russian, American, Japanese or any other nationality. Known characters keep their exact display names.\n`;
+    block += `\n=== SETTING: COUNTRY, PLACE, ERA ===\nInfer from WORLD/LOREBOOK, character card, persona and the RP excerpt: the country and city (or the world and region, if the setting is not our Earth), the era, the season and the kind of place the scene is in — a megalopolis, a small town, a village, a station, a fantasy realm. The UI/output language is NOT evidence of country: a story in Russian may be set anywhere.\nEverything you invent must belong to THAT place and time: names, handles and slang; shops, cafés, brands, delivery services, banks and mobile operators; streets, districts, transport and landmarks; prices and currency; weather, daylight and season; holidays, news topics, local habits and what people argue about. No cross-border props — no American chains in a Russian town, no rubles in medieval France, no Instagram in a world without electricity (there use whatever the setting has instead).\nIf the evidence is mixed or absent, stay neutral: generic names and places, no nationality guessed by default. Known characters keep their exact display names.\n`;
     return block;
 }
 
@@ -1503,7 +1503,6 @@ Format: [{"photo":"what the frame shows","caption":"..."}]`;
     return true;
 }
 
-// Заменить чужие посты в ленте свежими: старые убираем, свои оставляем
 export async function refreshFeed(kind = 'tw') {
     const s = getSocial();
     if (kind === 'ig') {
@@ -1705,10 +1704,10 @@ Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc"
 export async function generateScamSms(recent = []) {
     const seen = (recent || []).slice(0, 8).map(x => `- ${x}`).join('\n');
     const prompt = `${await taskHeader(`invent ONE scam/spam SMS that ${getUserName()} just received from an unknown number.`)}
-Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
+Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. Scammers impersonate LOCAL institutions: the bank, delivery service, tax office, police or operator must be ones that exist where the story takes place — in Tokyo it is a Japanese bank and a Japanese courier, never a foreign one. Phone format, currency and the sender name follow the same country. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
 ${seen ? `They ALREADY received these scam messages — invent a COMPLETELY different scheme, sender type and wording (do not rehash any of them):\n${seen}\n` : ''}${uiLangLine()}
 ${JSON_RULES}
-Format: [{"from":"sender: short name or number like +7 9XX XXX-XX-XX","text":"the scam message, max 280 chars"}]`;
+Format: [{"from":"sender: short name or a phone number in the local format","text":"the scam message, max 280 chars"}]`;
     const arr = await socialGenArray(prompt, { maxTokens: 400, prefill: '[{"from":"' });
     const it = Array.isArray(arr) ? arr[0] : null;
     if (!it || !it.from || !it.text) return null;
@@ -2062,6 +2061,10 @@ function sameHuman(aKey, bKey) {
     if (aKey === bKey) return true;
     const a = nameWords(aKey), b = nameWords(bKey);
     if (!a.length || !b.length) return false;
+    // У обоих есть имя и фамилия — сверяем ИМЕНА. Одной фамилии мало:
+    // «Алиса Огнева» и «Вера Огнева» — однофамильцы, а не один человек.
+    if (a.length > 1 && b.length > 1) return a[0] === b[0];
+    // Короткая запись («Елисей», «Огнев») — совпадение с любым словом полной
     return a.some(w => b.includes(w));
 }
 
@@ -2166,7 +2169,7 @@ export async function generateCommentAvatar(comment) {
         const mod = await loadImageExt();
         if (!mod) return '';
         const subject = `${comment.author || 'anonymous social media user'} (${comment.handle || makeHandle(comment.author)})`;
-        const prompt = `square social-media profile avatar, close-up head-and-shoulders portrait of ${subject}, one person, clean readable face, simple unobtrusive background, no text, no logo, no watermark`;
+        const prompt = `square social-media profile avatar, close-up head-and-shoulders portrait of ${subject}, one person, clean readable face, appearance and clothing typical for the story's country and era, simple unobtrusive background, no text, no logo, no watermark`;
         const temp = { author: comment.author || 'Account', ak: 'random', kind: 'avatar' };
         let src = '';
         if (mod.builtin) {
@@ -2435,6 +2438,7 @@ Rules:
 - Then: appearance (hair length+color, eye color, body), clothing OR state of undress, pose, facial expression, setting/background, lighting.
 - End with quality tags (masterpiece, best quality, highly detailed).
 - Comma-separated, lowercase, ENGLISH ONLY, tags NOT sentences, no Russian, no explanations.
+- Setting matters: clothing, interior, street and season tags must fit the story's country, era and place.
 ${who} ${nsfw}
 Output ONLY the comma-separated tags.`;
     try {
@@ -2589,7 +2593,10 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
     }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
-    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
+    // swSendOutfitImage* — гардероб: расширение подмешивает картинки одежды
+    // ОТДЕЛЬНО от аватарок, поэтому платье юзерки лезло на фото контактов
+    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model',
+        'swSendOutfitImageBot', 'swSendOutfitImageUser'];
     // Телефонный профиль подключения: временно применяем ЕГО поля (endpoint/
     // apiKey/model/aspect/...) поверх активных, основной чат не трогаем
     const phoneProfile = _imgProfile(st.imageGenProfileId);
@@ -2617,6 +2624,9 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
         // главперсонажа → его карточка), и восстанавливает флаги в finally
         if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!wantChar;
         if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!userInFrame;
+        // Одежда идёт только за тем, кто в кадре: на чужом фото ей делать нечего
+        if ('swSendOutfitImageBot' in nvSettings) nvSettings.swSendOutfitImageBot = !!wantChar;
+        if ('swSendOutfitImageUser' in nvSettings) nvSettings.swSendOutfitImageUser = !!userInFrame;
         if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
         // Аспект поста (сторис 9:16, стрим 16:9, посты 1:1) должен победить
         // оверрайды расширения — снимаем их, когда аспект задан
@@ -2624,7 +2634,8 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
             if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
             if ('overrideImageSize' in nvSettings) nvSettings.overrideImageSize = false;
         }
-        if (st.imageGenModel && 'model' in nvSettings) nvSettings.model = st.imageGenModel;
+        const useModel = effectiveModel(nvSettings);
+        if (useModel && 'model' in nvSettings) nvSettings.model = useModel;
     }
 
     const genOptions = {};
@@ -2674,11 +2685,29 @@ function cfgModel(v) {
     if (v.apiType === 'naistera') return String(v.naisteraModel || v.model || '').trim();
     return String(v.model || v.naisteraModel || '').trim();
 }
+// Какая модель реально пойдёт в запрос. Телефонный оверрайд действует, пока
+// в самом расширении модель та же, что была при его выборе: сменила её там —
+// значит хочет рисовать новой, а не той, что телефон запомнил месяц назад.
+function effectiveModel(imgCfg) {
+    const st = getSettings();
+    const extModel = cfgModel(imgCfg);
+    if (!st.imageGenModel) return extModel;
+    if (extModel && st.imageGenModelBase && extModel !== st.imageGenModelBase) {
+        st.imageGenModel = '';
+        st.imageGenModelBase = extModel;
+        try { saveSettingsDebounced(); } catch (e) { /* ignore */ }
+        return extModel;
+    }
+    return st.imageGenModel;
+}
+
+// Модель, выбранная сейчас в самом картинко-расширении
+export function currentExtModel() { return cfgModel(imgBucket()); }
+
 function cfgReady(v) {
     return !!(v && v.apiKey && cfgModel(v) && (v.endpoint || v.apiType === 'naistera'));
 }
 
-// Все найденные картинко-вёдра — для выбора в настройках телефона
 export function listImageBuckets() {
     const out = [];
     try {
@@ -2741,7 +2770,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     const endpoint = String(imgCfg.endpoint || '').trim().replace(/\/$/, '');
     if (!cfgReady(imgCfg)) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const model = st.imageGenModel || cfgModel(imgCfg);
+    const model = effectiveModel(imgCfg);
     // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
     const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (imgCfg.aspectRatio || '1:1'));
 

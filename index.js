@@ -3,7 +3,7 @@ import { eventSource, event_types, saveSettingsDebounced } from '../../../../scr
 import { getSettings, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
-import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets } from './social.js';
+import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
@@ -230,7 +230,11 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
     });
     $('#gp-set-imgmodel').on('change', function () {
-        getSettings().imageGenModel = this.value.trim();
+        const st = getSettings();
+        st.imageGenModel = this.value.trim();
+        // Запоминаем, какая модель стояла в расширении: сменит её там —
+        // телефон перестанет держаться за выбранную здесь
+        st.imageGenModelBase = st.imageGenModel ? (currentExtModel() || '') : '';
         saveSettingsDebounced();
     });
     // Список моделей — из автоопределённого картинко-расширения

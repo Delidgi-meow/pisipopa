@@ -2648,7 +2648,6 @@ function logNewReplies(kindLabel, postText, arr, beforeLen) {
 let _imgGenReady = false;
 isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
 
-// Кнопка отмены поверх картинки: полупрозрачный кружок с крестиком.
 // key — тот же, по которому генерация зарегистрирована в social.js
 // Кнопки «стоп» живут на разных экранах и перерисовываются — вешаем один
 // делегат на контейнер, а не слушатель на каждую кнопку

@@ -60,6 +60,13 @@ export function ensureSocialSystems(social = null) {
     if (!root.postingTasks.setProgress || typeof root.postingTasks.setProgress !== 'object') root.postingTasks.setProgress = {};
     if (!root.storyEvents || typeof root.storyEvents !== 'object') root.storyEvents = {};
     if (!Array.isArray(root.storyEvents.recent)) root.storyEvents.recent = [];
+    // Сохранения, где решение приняли, а ивент так и остался активным
+    if (root.storyEvents.active?.appliedAt) {
+        const stuck = root.storyEvents.active;
+        root.storyEvents.recent.unshift(stuck);
+        root.storyEvents.recent = root.storyEvents.recent.slice(0, 8);
+        root.storyEvents.active = null;
+    }
     if (!Number.isFinite(root.storyEvents.cooldownPosts)) root.storyEvents.cooldownPosts = 0;
     if (!Array.isArray(root.rpConsequences)) root.rpConsequences = [];
     if (!root.advertising || typeof root.advertising !== 'object') root.advertising = {};
@@ -379,7 +386,10 @@ export function applyEventResolution(choice, classification, result) {
     e.recap = `${e.hook} Пользователь: ${cleanChoice.text}. Результат: ${e.immediateResult}`.slice(0, 1200);
     e.state = ['resolved', 'failed'].includes(result?.arc_state) ? result.arc_state : consequence ? 'waiting_rp' : 'active';
     if (consequence) { root.rpConsequences.push(consequence); e.pendingConsequenceId = consequence.id; }
-    if (['resolved', 'failed'].includes(e.state)) finishEvent(root, e);
+    // Ивент с решением уходит в архив в любом случае. Раньше он оставался
+    // активным при state 'waiting_rp' — висело уведомление «ждёт решения»,
+    // и новые ивенты не создавались, потому что активный уже есть.
+    finishEvent(root, e);
     saveMeta();
     return { event: e, consequence, choice: cleanChoice };
 }

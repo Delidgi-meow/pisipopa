@@ -1,4 +1,4 @@
-import { generateRaw, user_avatar, getThumbnailUrl } from '../../../../script.js';
+import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext, isUserName } from './state.js';
@@ -2062,6 +2062,10 @@ function sameHuman(aKey, bKey) {
     if (aKey === bKey) return true;
     const a = nameWords(aKey), b = nameWords(bKey);
     if (!a.length || !b.length) return false;
+    // У обоих есть имя и фамилия — сверяем ИМЕНА. Одной фамилии мало:
+    // «Алиса Огнева» и «Вера Огнева» — однофамильцы, а не один человек.
+    if (a.length > 1 && b.length > 1) return a[0] === b[0];
+    // Короткая запись («Елисей», «Огнев») — совпадение с любым словом полной
     return a.some(w => b.includes(w));
 }
 
@@ -2589,7 +2593,10 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
     }
 
     // Защитная мутация: сохраняем и трогаем ТОЛЬКО существующие ключи
-    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model'];
+    // swSendOutfitImage* — гардероб: расширение подмешивает картинки одежды
+    // ОТДЕЛЬНО от аватарок, поэтому платье юзерки лезло на фото контактов
+    const keys = ['sendCharAvatar', 'sendUserAvatar', 'imageContextEnabled', 'overrideAspectRatio', 'overrideImageSize', 'model',
+        'swSendOutfitImageBot', 'swSendOutfitImageUser'];
     // Телефонный профиль подключения: временно применяем ЕГО поля (endpoint/
     // apiKey/model/aspect/...) поверх активных, основной чат не трогаем
     const phoneProfile = _imgProfile(st.imageGenProfileId);
@@ -2617,6 +2624,9 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
         // главперсонажа → его карточка), и восстанавливает флаги в finally
         if ('sendCharAvatar' in nvSettings) nvSettings.sendCharAvatar = !!wantChar;
         if ('sendUserAvatar' in nvSettings) nvSettings.sendUserAvatar = !!userInFrame;
+        // Одежда идёт только за тем, кто в кадре: на чужом фото ей делать нечего
+        if ('swSendOutfitImageBot' in nvSettings) nvSettings.swSendOutfitImageBot = !!wantChar;
+        if ('swSendOutfitImageUser' in nvSettings) nvSettings.swSendOutfitImageUser = !!userInFrame;
         if ('imageContextEnabled' in nvSettings) nvSettings.imageContextEnabled = false;
         // Аспект поста (сторис 9:16, стрим 16:9, посты 1:1) должен победить
         // оверрайды расширения — снимаем их, когда аспект задан
@@ -2624,7 +2634,8 @@ async function _generatePostImage(post, onStatus = null, signal = null) {
             if ('overrideAspectRatio' in nvSettings) nvSettings.overrideAspectRatio = false;
             if ('overrideImageSize' in nvSettings) nvSettings.overrideImageSize = false;
         }
-        if (st.imageGenModel && 'model' in nvSettings) nvSettings.model = st.imageGenModel;
+        const useModel = effectiveModel(nvSettings);
+        if (useModel && 'model' in nvSettings) nvSettings.model = useModel;
     }
 
     const genOptions = {};
@@ -2674,6 +2685,25 @@ function cfgModel(v) {
     if (v.apiType === 'naistera') return String(v.naisteraModel || v.model || '').trim();
     return String(v.model || v.naisteraModel || '').trim();
 }
+// Какая модель реально пойдёт в запрос. Телефонный оверрайд действует, пока
+// в самом расширении модель та же, что была при его выборе: сменила её там —
+// значит хочет рисовать новой, а не той, что телефон запомнил месяц назад.
+function effectiveModel(imgCfg) {
+    const st = getSettings();
+    const extModel = cfgModel(imgCfg);
+    if (!st.imageGenModel) return extModel;
+    if (extModel && st.imageGenModelBase && extModel !== st.imageGenModelBase) {
+        st.imageGenModel = '';
+        st.imageGenModelBase = extModel;
+        try { saveSettingsDebounced(); } catch (e) { /* ignore */ }
+        return extModel;
+    }
+    return st.imageGenModel;
+}
+
+// Модель, выбранная сейчас в самом картинко-расширении
+export function currentExtModel() { return cfgModel(imgBucket()); }
+
 function cfgReady(v) {
     return !!(v && v.apiKey && cfgModel(v) && (v.endpoint || v.apiType === 'naistera'));
 }
@@ -2741,7 +2771,7 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
     const endpoint = String(imgCfg.endpoint || '').trim().replace(/\/$/, '');
     if (!cfgReady(imgCfg)) throw new Error('Картинко-API не настроен (endpoint/key/model в настройках картинко-расширения)');
 
-    const model = st.imageGenModel || cfgModel(imgCfg);
+    const model = effectiveModel(imgCfg);
     // post.aspect (сторис 9:16, стрим 16:9) важнее глобального квадрата
     const aspect = post.aspect || (st.imageGenSquare !== false ? '1:1' : (imgCfg.aspectRatio || '1:1'));
 

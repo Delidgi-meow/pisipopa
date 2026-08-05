@@ -1447,7 +1447,9 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     if (rp) block += `\n=== RECENT ROLEPLAY EXCERPT (current events) ===\n${rp}\n=== END OF EXCERPT ===\n`;
     const dt = getRpDateTime();
     if (dt) block += `\n=== AUTHORITATIVE RP CLOCK ===\nCurrent in-world date/time: ${String(dt.day).padStart(2, '0')}.${String(dt.month).padStart(2, '0')}.${dt.year}${dt.hours === undefined ? '' : ` ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes || 0).padStart(2, '0')}`}. This overrides the computer/server date. Relative phrases in posts (today/tomorrow/tonight) must be interpreted from this clock.\n`;
-    block += `\n=== CULTURAL / NAME CONSISTENCY ===\nInfer the story's actual country, city, language community and cultural naming pool from WORLD/LOREBOOK, character card, persona and RP excerpt. The UI/output language is NOT evidence of country. Invented stranger accounts must use names, handles, places, institutions and prices natural for that inferred setting. If evidence is mixed or absent, prefer setting-neutral handles instead of assuming Russian, American, Japanese or any other nationality. Known characters keep their exact display names.\n`;
+    // Один блок на все генерации: посты, комментарии, магазин, новости,
+    // курьер, стримы — всё должно попадать в страну и место действия
+    block += `\n=== SETTING: COUNTRY, PLACE, ERA ===\nInfer from WORLD/LOREBOOK, character card, persona and the RP excerpt: the country and city (or the world and region, if the setting is not our Earth), the era, the season and the kind of place the scene is in — a megalopolis, a small town, a village, a station, a fantasy realm. The UI/output language is NOT evidence of country: a story in Russian may be set anywhere.\nEverything you invent must belong to THAT place and time: names, handles and slang; shops, cafés, brands, delivery services, banks and mobile operators; streets, districts, transport and landmarks; prices and currency; weather, daylight and season; holidays, news topics, local habits and what people argue about. No cross-border props — no American chains in a Russian town, no rubles in medieval France, no Instagram in a world without electricity (there use whatever the setting has instead).\nIf the evidence is mixed or absent, stay neutral: generic names and places, no nationality guessed by default. Known characters keep their exact display names.\n`;
     return block;
 }
 
@@ -2170,7 +2172,7 @@ export async function generateCommentAvatar(comment) {
         const mod = await loadImageExt();
         if (!mod) return '';
         const subject = `${comment.author || 'anonymous social media user'} (${comment.handle || makeHandle(comment.author)})`;
-        const prompt = `square social-media profile avatar, close-up head-and-shoulders portrait of ${subject}, one person, clean readable face, simple unobtrusive background, no text, no logo, no watermark`;
+        const prompt = `square social-media profile avatar, close-up head-and-shoulders portrait of ${subject}, one person, clean readable face, appearance and clothing typical for the story's country and era, simple unobtrusive background, no text, no logo, no watermark`;
         const temp = { author: comment.author || 'Account', ak: 'random', kind: 'avatar' };
         let src = '';
         if (mod.builtin) {
@@ -2439,6 +2441,7 @@ Rules:
 - Then: appearance (hair length+color, eye color, body), clothing OR state of undress, pose, facial expression, setting/background, lighting.
 - End with quality tags (masterpiece, best quality, highly detailed).
 - Comma-separated, lowercase, ENGLISH ONLY, tags NOT sentences, no Russian, no explanations.
+- Setting matters: clothing, interior, street and season tags must fit the story's country, era and place.
 ${who} ${nsfw}
 Output ONLY the comma-separated tags.`;
     try {

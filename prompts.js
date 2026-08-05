@@ -98,7 +98,7 @@ function buildPrompt() {
         if (getSettings().timeTag !== false) {
             c += `0. End EVERY reply with the in-world clock as the last line: <!--tel:time:HH:MM DD.MM.YYYY--> (advance it by how much time this reply took).\n`;
         }
-        c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"+7 ..."}-->\n`;
+        c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"phone in the local format"}-->\n`;
         c += `2. Character texts {{user}}'s phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say). Only if they plausibly have {{user}}'s number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
         c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from {{user}}'s phone (NOT spoken; scene paused). \`[Голосовое → X]\` / \`[Voice → X]\` = {{user}}'s VOICE message, text = transcript (the character hears {{user}}'s voice). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on {{user}}'s next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
@@ -143,7 +143,7 @@ function buildPrompt() {
     // Базовые правила нужны всегда: номер могут дать и смс прислать в любой ход
     p += `[RULE 1 — CONTACT TAG] If in THIS reply a character gives {{user}} their own number (says it, writes it down, exchanges numbers), append at the very END, on its own line, VERBATIM:\n`;
     p += `<!--tel:contact:{"name":"CharacterName","number":"+7 9XX XXX-XX-XX"}-->\n`;
-    p += `Invent a plausible number if the story has none. One tag per NEW contact; never re-add those listed above.\n\n`;
+    p += `Invent a plausible number if the story has none, in the phone format of the country where the story takes place (the example above shows the TAG shape, not the country). One tag per NEW contact; never re-add those listed above.\n\n`;
 
     p += `[RULE 2 — SMS TAG] If in THIS reply a character texts {{user}}'s phone, append ONE hidden comment PER message at the very END:\n`;
     p += `<!--tel:sms:{"from":"CharacterName","text":"the exact message text"}-->\n`;

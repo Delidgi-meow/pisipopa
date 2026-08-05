@@ -1707,10 +1707,10 @@ Format: [{"store":"Store name","items":[{"name":"Товар","price":1234,"desc"
 export async function generateScamSms(recent = []) {
     const seen = (recent || []).slice(0, 8).map(x => `- ${x}`).join('\n');
     const prompt = `${await taskHeader(`invent ONE scam/spam SMS that ${getUserName()} just received from an unknown number.`)}
-Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
+Invent a scam or spam text fitting the setting: fake bank security alert, phishing link, casino/lottery spam, «мама, я с чужого номера, срочно нужны деньги», fake delivery fee, crypto pump, subscription trap. Scammers impersonate LOCAL institutions: the bank, delivery service, tax office, police or operator must be ones that exist where the story takes place — in Tokyo it is a Japanese bank and a Japanese courier, never a foreign one. Phone format, currency and the sender name follow the same country. If the setting is not modern — adapt the fraud to the world (guild lottery, cursed amulet seller, «маг-целитель снимет порчу»). Believable, specific, slightly off — like real scam. May include a fake link or callback number. Same language as the roleplay excerpt.
 ${seen ? `They ALREADY received these scam messages — invent a COMPLETELY different scheme, sender type and wording (do not rehash any of them):\n${seen}\n` : ''}${uiLangLine()}
 ${JSON_RULES}
-Format: [{"from":"sender: short name or number like +7 9XX XXX-XX-XX","text":"the scam message, max 280 chars"}]`;
+Format: [{"from":"sender: short name or a phone number in the local format","text":"the scam message, max 280 chars"}]`;
     const arr = await socialGenArray(prompt, { maxTokens: 400, prefill: '[{"from":"' });
     const it = Array.isArray(arr) ? arr[0] : null;
     if (!it || !it.from || !it.text) return null;

@@ -1447,8 +1447,6 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     if (rp) block += `\n=== RECENT ROLEPLAY EXCERPT (current events) ===\n${rp}\n=== END OF EXCERPT ===\n`;
     const dt = getRpDateTime();
     if (dt) block += `\n=== AUTHORITATIVE RP CLOCK ===\nCurrent in-world date/time: ${String(dt.day).padStart(2, '0')}.${String(dt.month).padStart(2, '0')}.${dt.year}${dt.hours === undefined ? '' : ` ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes || 0).padStart(2, '0')}`}. This overrides the computer/server date. Relative phrases in posts (today/tomorrow/tonight) must be interpreted from this clock.\n`;
-    // Один блок на все генерации: посты, комментарии, магазин, новости,
-    // курьер, стримы — всё должно попадать в страну и место действия
     block += `\n=== SETTING: COUNTRY, PLACE, ERA ===\nInfer from WORLD/LOREBOOK, character card, persona and the RP excerpt: the country and city (or the world and region, if the setting is not our Earth), the era, the season and the kind of place the scene is in — a megalopolis, a small town, a village, a station, a fantasy realm. The UI/output language is NOT evidence of country: a story in Russian may be set anywhere.\nEverything you invent must belong to THAT place and time: names, handles and slang; shops, cafés, brands, delivery services, banks and mobile operators; streets, districts, transport and landmarks; prices and currency; weather, daylight and season; holidays, news topics, local habits and what people argue about. No cross-border props — no American chains in a Russian town, no rubles in medieval France, no Instagram in a world without electricity (there use whatever the setting has instead).\nIf the evidence is mixed or absent, stay neutral: generic names and places, no nationality guessed by default. Known characters keep their exact display names.\n`;
     return block;
 }
@@ -1505,7 +1503,6 @@ Format: [{"photo":"what the frame shows","caption":"..."}]`;
     return true;
 }
 
-// Заменить чужие посты в ленте свежими: старые убираем, свои оставляем
 export async function refreshFeed(kind = 'tw') {
     const s = getSocial();
     if (kind === 'ig') {
@@ -2711,7 +2708,6 @@ function cfgReady(v) {
     return !!(v && v.apiKey && cfgModel(v) && (v.endpoint || v.apiType === 'naistera'));
 }
 
-// Все найденные картинко-вёдра — для выбора в настройках телефона
 export function listImageBuckets() {
     const out = [];
     try {

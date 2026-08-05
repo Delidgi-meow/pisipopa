@@ -154,8 +154,8 @@ export function buyItem(catId, storeId, itemId) {
 
 // Минуты RP-времени: [минимум, максимум] — конкретный срок разыгрывается при заказе
 const DELIVERY_ETA = {
-    food: [20, 50],
-    grocery: [45, 120],
+    food: [30, 75],
+    grocery: [60, 150],
     clothes: [1440, 4320],
     beauty: [1440, 2880],
     kids: [1440, 4320],
@@ -175,8 +175,20 @@ function rpMinutes() {
     if (!d || !Number.isFinite(d.year)) return null;
     return Math.floor(Date.UTC(d.year, (d.month || 1) - 1, d.day || 1, d.hours || 0, d.minutes || 0) / 60000);
 }
+// Ходы ролевой, а не длина массива: телефон сам дописывает в чат строки
+// журнала («Событие мира…»), и без фильтра собственная публикация поста
+// подгоняла курьера.
 function chatLen() {
-    try { return SillyTavern.getContext()?.chat?.length || 0; } catch (e) { return 0; }
+    try {
+        const chat = SillyTavern.getContext()?.chat || [];
+        let n = 0;
+        for (const m of chat) {
+            if (!m || m.is_system) continue;
+            if (/<!--\s*tel:log/i.test(String(m.mes || ''))) continue;
+            n++;
+        }
+        return n;
+    } catch (e) { return 0; }
 }
 
 // Человеческий срок: «~35 мин», «~2 часа», «~3 дня».
@@ -214,7 +226,9 @@ function orderProgress(o) {
     // строго по ним. Иначе заказ приезжал бы просто потому, что «прошло
     // три сообщения», хотя в сюжете не прошло и минуты.
     if (haveRp && rpTimeTagged()) return byRp;
-    const turnsNeeded = Math.min(20, Math.max(2, Math.round(o.eta / MIN_PER_TURN)));
+    // Не меньше трёх ходов даже у самой быстрой доставки: за один ответ
+    // ролевой курьер приехать не может
+    const turnsNeeded = Math.min(20, Math.max(3, Math.round(o.eta / MIN_PER_TURN)));
     const byTurns = Math.max(0, chatLen() - (o.placedTurn || 0)) / turnsNeeded;
     return Math.max(byRp, byTurns);
 }

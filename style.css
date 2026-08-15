@@ -2319,6 +2319,11 @@ body.gp-theme-minimal .gp-toast-ava {
 .gp-work-past { font-size: 11.5px; opacity: .6; padding: 6px 8px; border-bottom: 1px solid var(--gp-border-soft); }
 .gp-work-past small { opacity: .7; margin-left: 6px; }
 
+.gp-work-tasks { padding: 9px 10px; border-radius: 10px; background: rgba(255,255,255,.05); font-size: 11.5px; display: flex; flex-direction: column; gap: 5px; }
+.gp-work-task { display: flex; align-items: flex-start; gap: 7px; cursor: pointer; line-height: 1.35; }
+.gp-work-task input { margin-top: 2px; flex: 0 0 auto; }
+.gp-work-task.gp-done span { opacity: .45; text-decoration: line-through; }
+
 /* Витрина товара */
 .gp-shop-item-img {
     position: relative;

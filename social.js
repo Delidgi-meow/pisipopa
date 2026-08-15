@@ -1789,8 +1789,9 @@ ${existing.length ? `Already listed (invent different ones): ${existing.join('; 
 Invent 5-7 openings that fit ${getUserName()}'s world, city and background: what a person like them could realistically apply for, from simple shifts to qualified work. For each: title, company, field, monthly salary as a NUMBER in the local currency, schedule, short requirements, short duties, and a career ladder of 2-4 steps upward with the salary of each step (the first step is the promotion right after this position).
 Salaries must be believable for that country and era, and grow along the ladder.
 ${uiLangLine()}
+Also give 2-3 starting tasks the newcomer would be given in the first days — concrete, small, checkable.
 ${JSON_RULES}
-Format: [{"title":"...","company":"...","field":"...","salary":45000,"schedule":"...","requirements":"...","duties":"...","ladder":[{"title":"...","salary":60000}]}]`;
+Format: [{"title":"...","company":"...","field":"...","salary":45000,"schedule":"...","requirements":"...","duties":"...","tasks":["...","..."],"ladder":[{"title":"...","salary":60000}]}]`;
     return await socialGenArray(prompt, { maxTokens: 2600, prefill: '[{"title":"' });
 }
 
@@ -1800,8 +1801,9 @@ Job: ${job.title}${job.company ? ` at ${job.company}` : ''} (${job.field || 'gen
 Shifts worked so far: ${job.shifts}. How they have been coping lately: ${job.performance}/100.
 Write what happened during this shift: 2-4 sentences, concrete and ordinary — colleagues, customers, small wins and screw-ups, fatigue, an unexpected task. Tie it to the current roleplay if something there is relevant. Then rate how it went: performance_delta from -15 (a disaster) to +15 (excellent), usually between -5 and +7.
 ${uiLangLine()}
+If the shift naturally leaves something to do next time, add 1-2 new tasks; otherwise leave the list empty.
 ${JSON_RULES}
-Format: [{"summary":"...","performance_delta":3}]`;
+Format: [{"summary":"...","performance_delta":3,"tasks":["..."]}]`;
     const arr = await socialGenArray(prompt, { maxTokens: 700, prefill: '[{"summary":"' });
     return Array.isArray(arr) ? arr[0] : null;
 }

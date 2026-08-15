@@ -30,7 +30,7 @@ import {
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
-import { getWork, currentJob, refreshListings, takeJob, leaveJob, workShift, askPromotion, nextStep, promotionReady, paySalaryIfDue } from './work.js';
+import { getWork, currentJob, refreshListings, takeJob, leaveJob, workShift, askPromotion, nextStep, promotionReady, paySalaryIfDue, toggleTask, harvestWorkTags } from './work.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
 import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer, addDMember, delDMember } from './discord.js';
@@ -4304,6 +4304,13 @@ function renderWork(screen) {
                 <span>${ic('fa-chart-line')} как справляется: <b>${job.performance}</b>/100</span>
             </div>
             <div class="gp-work-bar"><i style="width:${Math.max(2, Math.min(100, job.performance))}%"></i></div>
+            ${(job.tasks || []).length ? `<div class="gp-work-tasks">
+                <b>Задания</b>
+                ${job.tasks.map(t => `<label class="gp-work-task${t.done ? ' gp-done' : ''}">
+                    <input type="checkbox" data-worktask="${esc(t.id)}" ${t.done ? 'checked' : ''}>
+                    <span>${esc(t.text)}</span>
+                </label>`).join('')}
+            </div>` : ''}
             ${job.lastShift ? `<div class="gp-work-shift">
                 <b>Последняя смена</b>
                 <p>${esc(job.lastShift.summary)}</p>
@@ -4379,6 +4386,11 @@ function renderWork(screen) {
         toast(`Ты принята: ${l.title}`, 'fa-briefcase');
     }));
 
+    screen.querySelectorAll('[data-worktask]').forEach(b => b.addEventListener('change', () => {
+        toggleTask(b.getAttribute('data-worktask'));
+        updatePhoneInjection();
+        render();
+    }));
     screen.querySelector('#gp-work-shift')?.addEventListener('click', () => busyRun(async () => {
         const res = await workShift();
         updatePhoneInjection();

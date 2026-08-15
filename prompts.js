@@ -4,6 +4,7 @@ import { getSettings, getMeta, scanChat, getBlockedSmsKeys, keyOf, EXT_NAME } fr
 import { getSocialActivitySummary } from './social.js';
 import { getBankSummaryLine, bankInjectRule } from './bank.js';
 import { notesInjectBlock } from './notes.js';
+import { workInjectLine } from './work.js';
 import { pendingConsequences } from './social-events.js';
 
 const CHAT_KEY = EXT_NAME;
@@ -114,6 +115,10 @@ function buildPrompt() {
             if (bankSum) c += `${bankSum}\n`;
         } catch (e) { /* ignore */ }
         try {
+            const workLine = workInjectLine();
+            if (workLine) c += `\n[{{user}}'S JOB]\n${workLine}\n`;
+        } catch (e) { /* ignore */ }
+        try {
             const notesBlock = notesInjectBlock();
             if (notesBlock) c += `\n${notesBlock}\n`;
         } catch (e) { /* ignore */ }
@@ -184,6 +189,11 @@ function buildPrompt() {
             const bankSum = getBankSummaryLine();
             if (bankSum) p += `[{{user}}'S FINANCES] ${bankSum}\n`;
         }
+    } catch (e) { /* ignore */ }
+    // Работа: персонажи, которые знают {{user}}, могут о ней спрашивать
+    try {
+        const workLine = workInjectLine();
+        if (workLine) p += `\n[{{user}}'S JOB — established fact]\n${workLine}\n`;
     } catch (e) { /* ignore */ }
     // Заметки — только расшаренные (секретные не инжектятся никогда)
     try {

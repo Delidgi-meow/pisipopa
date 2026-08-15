@@ -352,6 +352,12 @@ export async function courierArrived(orderId) {
     return reply;
 }
 
+export function findShopItem(catId, storeId, itemId) {
+    const cat = getShop().cats[catId];
+    const store = cat?.stores?.find(x => x.id === storeId);
+    return store?.items?.find(x => x.id === itemId) || null;
+}
+
 export function getOrders() { return getShop().orders; }
 export function deleteOrder(id) {
     const s = getShop();

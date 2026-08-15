@@ -13,7 +13,7 @@ import {
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency, convertCurrency,
 } from './bank.js';
-import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
+import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, findShopItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
@@ -30,6 +30,7 @@ import {
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
+import { getWork, currentJob, refreshListings, takeJob, leaveJob, workShift, askPromotion, nextStep, promotionReady, paySalaryIfDue, toggleTask, harvestWorkTags } from './work.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
 import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer, addDMember, delDMember } from './discord.js';
@@ -548,6 +549,11 @@ export function openPhone(threadKey = null) {
     // Стадии заказов двигает время ролевой: пока телефон был закрыт, курьер мог
     // выехать. Догоняем при открытии, иначе заказ висел бы «в сборке».
     notifyDeliveries();
+    // Оклад за новый месяц ролевого времени
+    try {
+        const paid = paySalaryIfDue();
+        if (paid) toast(`Зарплата: ${fmtMoney(paid.amount)} — ${paid.title}`, 'fa-briefcase');
+    } catch (e) { /* ignore */ }
     if (threadKey) {
         // Пришли по тосту в конкретный тред — экран блокировки только мешает
         currentScreen = 'thread';
@@ -654,6 +660,7 @@ export function render() {
     else if (currentScreen === 'shop') renderShop(screen);
     else if (currentScreen === 'shopcat') renderShopCat(screen);
     else if (currentScreen === 'shoporders') renderShopOrders(screen);
+    else if (currentScreen === 'work') renderWork(screen);
     else if (currentScreen === 'ordchat') renderCourierChat(screen);
     else if (currentScreen === 'casino') renderCasino(screen);
     else if (currentScreen === 'news') renderNews(screen);
@@ -1193,6 +1200,10 @@ function renderHome(screen) {
                 <div class="gp-app" data-app="shop">
                     <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}${pendingOrders() > 0 ? `<span class="gp-app-badge">${pendingOrders()}</span>` : ''}</div>
                     <div class="gp-app-name">Магазин</div>
+                </div>
+                <div class="gp-app" data-app="work">
+                    <div class="gp-app-icon gp-app-work">${ic('fa-briefcase')}</div>
+                    <div class="gp-app-name">Работа</div>
                 </div>
                 <div class="gp-app" data-app="casino">
                     <div class="gp-app-icon gp-app-casino">${ic('fa-dice')}</div>
@@ -1865,6 +1876,7 @@ function renderThread(screen) {
             ${!t.isGroup ? `<button class="gp-iconbtn" id="gp-nick" title="Ник для соцсетей">${ic('fa-at')}</button>` : ''}
             ${!t.isGroup ? `<button class="gp-iconbtn${blocked ? ' gp-danger' : ''}" id="gp-sms-block" title="${blocked ? 'Разблокировать SMS' : 'Заблокировать SMS'}">${ic(blocked ? 'fa-lock-open' : 'fa-ban')}</button>` : ''}
             ${t.isGroup ? `<button class="gp-iconbtn" id="gp-add-member" title="Добавить участника">${ic('fa-user-plus')}</button>` : ''}
+            ${t.isGroup && (t.members || []).length ? `<button class="gp-iconbtn" id="gp-kick-member" title="Убрать участника">${ic('fa-user-minus')}</button>` : ''}
             <button class="gp-iconbtn gp-danger" id="gp-del" title="Удалить ${t.isGroup ? 'чат' : 'контакт'}">${ic('fa-trash-can')}</button>
         </div>
         <div class="gp-msgs" id="gp-msgs">
@@ -1982,6 +1994,41 @@ function renderThread(screen) {
             }, dur * 1000);
         }
     }));
+
+    // Убрать участника из группового чата
+    screen.querySelector('#gp-kick-member')?.addEventListener('click', () => {
+        const members = [...(t.members || [])];
+        if (!members.length) { toast('В чате никого нет', 'fa-circle-exclamation'); return; }
+        const overlay = document.createElement('div');
+        overlay.className = 'gp-member-overlay';
+        overlay.innerHTML = `
+            <div class="gp-member-overlay-panel">
+                <div class="gp-member-overlay-header">
+                    <span>Убрать участника</span>
+                    <button class="gp-iconbtn" id="gp-kick-close">${ic('fa-xmark')}</button>
+                </div>
+                <div class="gp-member-overlay-list">${members.map(m => `<label class="gp-member-check"><input type="checkbox" value="${esc(m)}"><span>${esc(m)}</span></label>`).join('')}</div>
+                <button class="gp-primary gp-danger" id="gp-kick-apply">${ic('fa-user-minus')} Убрать</button>
+            </div>`;
+        screen.appendChild(overlay);
+        const close = () => overlay.remove();
+        overlay.querySelector('#gp-kick-close')?.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        overlay.querySelector('#gp-kick-apply')?.addEventListener('click', () => {
+            const gone = [...overlay.querySelectorAll('input:checked')].map(i => i.value);
+            if (!gone.length) { close(); return; }
+            const left = members.filter(m => !gone.includes(m));
+            updateGroupMembers(t.key, left);
+            // Ролевая должна знать: человека убрали из чата, а не он сам ушёл
+            try {
+                logSocialToChat(`${getUserName()} убирает из группового чата «${t.name}»: ${gone.join(', ')}`);
+            } catch (e) { /* ignore */ }
+            updatePhoneInjection();
+            close();
+            render();
+            toast(`Убрали: ${gone.join(', ')}`, 'fa-user-minus');
+        });
+    });
 
     // Добавить участника из телефонной книги в групповой чат
     screen.querySelector('#gp-add-member')?.addEventListener('click', () => {
@@ -3985,6 +4032,7 @@ function renderShopCat(screen) {
                 <div class="gp-shop-store-name">${ic('fa-store')} ${esc(st.name)}</div>
                 ${st.items.map(it => `
                     <div class="gp-shop-item">
+                        ${shopItemImage(it, st.id)}
                         <div class="gp-shop-item-body">
                             <div class="gp-shop-item-name">${esc(it.name)}</div>
                             ${it.desc ? `<div class="gp-shop-item-desc">${esc(it.desc)}</div>` : ''}
@@ -4007,6 +4055,36 @@ function renderShopCat(screen) {
         <div class="gp-shop-scroll">${body}</div>`);
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shop'));
+    // Картинка товара: витрина оживает, но рисуем только по просьбе —
+    // каталог на десятки позиций разорил бы на генерациях
+    screen.querySelectorAll('[data-shopimg]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const [storeId, itemId] = b.getAttribute('data-shopimg').split('|');
+        const item = findShopItem(cat.id, storeId, itemId);
+        if (!item || _imgGenBusy.has(itemId)) return;
+        if (!(await isImageGenAvailable())) {
+            toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation');
+            return;
+        }
+        _imgGenBusy.add(itemId);
+        render();
+        try {
+            const src = await generatePostImage({
+                kind: 'shop', author: '', ak: 'random', aspect: '1:1',
+                imgDesc: `${item.name}. ${item.desc || ''}`.trim(),
+                framing: 'product photo for an online store listing, clean background, no text, no watermark',
+            }, null, itemId);
+            item.image = src;
+            saveMeta();
+            toast('Фото товара готово', 'fa-image');
+        } catch (err) {
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally {
+            _imgGenBusy.delete(itemId);
+            render();
+        }
+    }));
     screen.querySelector('#gp-shop-gen')?.addEventListener('click', () => doShopGen(cat.id));
     screen.querySelector('#gp-shop-refresh')?.addEventListener('click', () => doShopGen(cat.id));
     screen.querySelectorAll('[data-buy]').forEach(btn => btn.addEventListener('click', () => {
@@ -4185,6 +4263,153 @@ export function notifyDeliveries() {
             }
         }
     } catch (e) { /* ignore */ }
+}
+
+// Превью товара: фото, если нарисовано, иначе кнопка генерации
+function shopItemImage(it, storeId) {
+    const busy = _imgGenBusy.has(it.id);
+    if (it.image) {
+        return `<div class="gp-shop-item-img"><img src="${esc(it.image)}" alt="">${busy ? `<div class="gp-shop-item-imgbusy">${ic('fa-spinner fa-spin')}${stopGenBtn(it.id)}</div>` : ''}</div>`;
+    }
+    return `<button class="gp-shop-item-img gp-shop-item-img-empty" data-shopimg="${esc(storeId)}|${esc(it.id)}" title="Нарисовать товар">
+        ${busy ? `${ic('fa-spinner fa-spin')}${stopGenBtn(it.id)}` : ic('fa-image')}
+    </button>`;
+}
+
+// ═══ РАБОТА ═══
+// Объявления, текущее место, смены и карьерная лестница.
+
+let _workBusy = false;
+
+function renderWork(screen) {
+    currentScreen = 'work';
+    const w = getWork();
+    const job = w.job;
+    const step = nextStep(job);
+    const ready = job ? promotionReady(job) : null;
+
+    const jobCard = job ? `
+        <div class="gp-work-job">
+            <div class="gp-work-job-head">
+                <div>
+                    <div class="gp-work-title">${esc(job.title)}</div>
+                    ${job.company ? `<div class="gp-work-company">${esc(job.company)}</div>` : ''}
+                </div>
+                <div class="gp-work-salary">${esc(fmtMoney(job.salary))}<small>в месяц</small></div>
+            </div>
+            ${job.schedule ? `<div class="gp-work-line">${ic('fa-clock')} ${esc(job.schedule)}</div>` : ''}
+            ${job.duties ? `<div class="gp-work-line gp-work-duties">${esc(job.duties)}</div>` : ''}
+            <div class="gp-work-stats">
+                <span>${ic('fa-briefcase')} смен: <b>${job.shifts}</b></span>
+                <span>${ic('fa-chart-line')} как справляется: <b>${job.performance}</b>/100</span>
+            </div>
+            <div class="gp-work-bar"><i style="width:${Math.max(2, Math.min(100, job.performance))}%"></i></div>
+            ${(job.tasks || []).length ? `<div class="gp-work-tasks">
+                <b>Задания</b>
+                ${job.tasks.map(t => `<label class="gp-work-task${t.done ? ' gp-done' : ''}">
+                    <input type="checkbox" data-worktask="${esc(t.id)}" ${t.done ? 'checked' : ''}>
+                    <span>${esc(t.text)}</span>
+                </label>`).join('')}
+            </div>` : ''}
+            ${job.lastShift ? `<div class="gp-work-shift">
+                <b>Последняя смена</b>
+                <p>${esc(job.lastShift.summary)}</p>
+                <small>${job.lastShift.delta >= 0 ? '+' : ''}${job.lastShift.delta} к работе · ${esc(fmtMoney(job.lastShift.pay))}</small>
+            </div>` : ''}
+            ${job.lastVerdict ? `<div class="gp-work-verdict ${job.lastVerdict.granted ? 'gp-ok' : 'gp-no'}">
+                ${ic(job.lastVerdict.granted ? 'fa-arrow-up' : 'fa-hand')} ${esc(job.lastVerdict.text)}
+            </div>` : ''}
+            ${step ? `<div class="gp-work-ladder">
+                <b>Следующая ступень:</b> ${esc(step.title)} — ${esc(fmtMoney(step.salary))}
+                ${ready.ready ? '<span class="gp-work-ready">можно просить</span>'
+                    : `<small>нужно ${ready.need.shifts} смен и ${ready.need.performance}/100</small>`}
+            </div>` : '<div class="gp-work-ladder"><b>Выше расти некуда.</b></div>'}
+            <div class="gp-work-actions">
+                <button class="gp-primary" id="gp-work-shift" ${_workBusy ? 'disabled' : ''}>${_workBusy ? ic('fa-spinner fa-spin') : ic('fa-briefcase')} Отработать смену</button>
+                ${step ? `<button class="gp-secondary" id="gp-work-promo" ${_workBusy ? 'disabled' : ''}>${ic('fa-arrow-up')} Просить повышение</button>` : ''}
+                <button class="gp-secondary gp-danger" id="gp-work-quit">${ic('fa-door-open')} Уволиться</button>
+            </div>
+        </div>` : '';
+
+    const listings = w.listings.map(l => `
+        <div class="gp-work-card">
+            <div class="gp-work-card-head">
+                <div>
+                    <div class="gp-work-title">${esc(l.title)}</div>
+                    <div class="gp-work-company">${esc(l.company)}${l.field ? ` · ${esc(l.field)}` : ''}</div>
+                </div>
+                <div class="gp-work-salary">${esc(fmtMoney(l.salary))}<small>в месяц</small></div>
+            </div>
+            ${l.schedule ? `<div class="gp-work-line">${ic('fa-clock')} ${esc(l.schedule)}</div>` : ''}
+            ${l.requirements ? `<div class="gp-work-line">${ic('fa-list-check')} ${esc(l.requirements)}</div>` : ''}
+            ${l.duties ? `<div class="gp-work-line gp-work-duties">${esc(l.duties)}</div>` : ''}
+            ${l.ladder?.length ? `<div class="gp-work-steps">${l.ladder.map(x => `<span>${esc(x.title)} · ${esc(fmtMoney(x.salary))}</span>`).join(ic('fa-arrow-right'))}</div>` : ''}
+            <button class="gp-primary" data-takejob="${esc(l.id)}">${ic('fa-pen-to-square')} Откликнуться</button>
+        </div>`).join('');
+
+    setHtmlKeepScroll(screen, '.gp-work-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">${ic('fa-newspaper')} Работа</div>
+            <button class="gp-iconbtn" id="gp-work-refresh" title="Свежие объявления" ${_workBusy ? 'disabled' : ''}>${_workBusy ? ic('fa-spinner fa-spin') : ic('fa-rotate')}</button>
+        </div>
+        <div class="gp-work-scroll">
+            ${jobCard}
+            <div class="gp-work-section">${job ? 'Другие объявления' : 'Вакансии'}</div>
+            ${listings || `<div class="gp-empty"><div class="gp-empty-icon">${ic('fa-newspaper')}</div><div class="gp-empty-text">Нажми ↻ — модель составит объявления<br>под твой мир и биографию</div></div>`}
+            ${w.history.length ? `<div class="gp-work-section">Где работала раньше</div>
+                ${w.history.map(h => `<div class="gp-work-past">${esc(h.title)}${h.company ? ` · ${esc(h.company)}` : ''} <small>${h.shifts} смен</small></div>`).join('')}` : ''}
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+
+    const busyRun = async (fn, okIcon) => {
+        if (_workBusy) return;
+        _workBusy = true; render();
+        try { await fn(); }
+        catch (e) { toast(String(e?.message || e).slice(0, 70), 'fa-circle-exclamation'); }
+        finally { _workBusy = false; render(); }
+    };
+
+    screen.querySelector('#gp-work-refresh')?.addEventListener('click', () => busyRun(async () => {
+        const n = await refreshListings();
+        toast(`Объявлений: ${n}`, 'fa-newspaper');
+    }));
+
+    screen.querySelectorAll('[data-takejob]').forEach(b => b.addEventListener('click', () => {
+        const l = getWork().listings.find(x => x.id === b.getAttribute('data-takejob'));
+        if (!l) return;
+        if (job && !confirm(`Уйти с «${job.title}» и устроиться на «${l.title}»?`)) return;
+        takeJob(l.id);
+        updatePhoneInjection();
+        render();
+        toast(`Ты принята: ${l.title}`, 'fa-briefcase');
+    }));
+
+    screen.querySelectorAll('[data-worktask]').forEach(b => b.addEventListener('change', () => {
+        toggleTask(b.getAttribute('data-worktask'));
+        updatePhoneInjection();
+        render();
+    }));
+    screen.querySelector('#gp-work-shift')?.addEventListener('click', () => busyRun(async () => {
+        const res = await workShift();
+        updatePhoneInjection();
+        toast(`Смена отработана · ${fmtMoney(res.pay)}`, 'fa-briefcase');
+    }));
+
+    screen.querySelector('#gp-work-promo')?.addEventListener('click', () => busyRun(async () => {
+        const v = await askPromotion();
+        updatePhoneInjection();
+        toast(v.granted ? 'Повышение!' : 'Отказали', v.granted ? 'fa-arrow-up' : 'fa-hand');
+    }));
+
+    screen.querySelector('#gp-work-quit')?.addEventListener('click', () => {
+        if (!confirm('Уволиться с текущего места?')) return;
+        leaveJob();
+        updatePhoneInjection();
+        render();
+        toast('Ты уволилась', 'fa-door-open');
+    });
 }
 
 function renderShopOrders(screen) {

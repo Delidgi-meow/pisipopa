@@ -1,6 +1,6 @@
 
-import { getMeta, saveMeta, getRpDateTime, rpTimeTagged } from './state.js';
-import { generateShopContent, logSocialToChat, getUserName, generateCourier, generateCourierReply } from './social.js';
+import { getMeta, saveMeta, getRpDateTime } from './state.js';
+import { generateShopContent, generateShopSearch, logSocialToChat, getUserName, generateCourier, generateCourierReply } from './social.js';
 import { addTransaction, getBank, fmtMoney } from './bank.js';
 import { lang } from './i18n.js';
 
@@ -98,6 +98,41 @@ async function _generateCategory(catId, onStatus) {
     return stores;
 }
 
+// ── Поиск: ИИ подбирает товары под запрос и докидывает их в существующие магазины ──
+let _searchChain = Promise.resolve();
+export function searchShopItems(catId, query) {
+    const run = () => _searchShopItems(catId, query);
+    const p = _searchChain.then(run, run);
+    _searchChain = p.then(() => {}, () => {});
+    return p;
+}
+
+async function _searchShopItems(catId, query) {
+    const cat = catById(catId);
+    if (!cat) throw new Error('Неизвестная категория');
+    const data = getCategory(catId);
+    if (!data?.stores?.length) throw new Error('Каталог пуст — сначала загрузи его');
+    const q = String(query || '').trim();
+    if (!q) return [];
+    const arr = await generateShopSearch(cat.name, data.stores.map(s => s.name), q, getBank().currency);
+    if (!Array.isArray(arr) || !arr.length) throw new Error('Ничего не нашлось — попробуй переформулировать');
+    const added = [];
+    for (const st of arr) {
+        const target = data.stores.find(x => x.name.toLowerCase() === String(st.store || '').toLowerCase()) || data.stores[0];
+        for (const it of (Array.isArray(st.items) ? st.items : [])) {
+            const name = String(it?.name || '').trim().slice(0, 70);
+            if (!name) continue;
+            if (target.items.some(x => x.name.toLowerCase() === name.toLowerCase())) continue;
+            if (target.items.length >= 40) break;   // магазин не бездонный
+            const item = { id: genId(), name, price: Math.max(1, Math.round(Number(it.price) || 0)), desc: String(it.desc || '').slice(0, 160) };
+            target.items.push(item);
+            added.push({ storeId: target.id, item });
+        }
+    }
+    if (added.length) saveMeta();
+    return added;
+}
+
 // Купить товар: списываем с банка, пишем заказ, событие в чат (ролевая узнаёт)
 export function buyItem(catId, storeId, itemId) {
     const s = getShop();
@@ -121,7 +156,7 @@ export function buyItem(catId, storeId, itemId) {
         open.price += item.price;
         saveMeta();
         try {
-            logSocialToChat(`${getUserName()} добавила «${item.name}» (${store.name}) к заказу за ${fmtMoney(item.price)}`);
+            logSocialToChat(`${getUserName()} добавляет «${item.name}» (${store.name}) к заказу за ${fmtMoney(item.price)}`);
         } catch (e) { /* ignore */ }
         return { ...open, merged: true };
     }
@@ -142,7 +177,7 @@ export function buyItem(catId, storeId, itemId) {
 
     // Событие для ролевой (скрытая строка в чат, уважает настройку журнала)
     try {
-        const verb = catId === 'hotels' ? 'забронировала' : (catId === 'travel' ? 'оформила тур' : 'заказала');
+        const verb = catId === 'hotels' ? 'бронирует' : (catId === 'travel' ? 'оформляет тур' : 'заказывает');
         logSocialToChat(`${getUserName()} ${verb} «${item.name}» (${store.name}) за ${fmtMoney(item.price)}`);
     } catch (e) { /* ignore */ }
     return order;
@@ -154,8 +189,8 @@ export function buyItem(catId, storeId, itemId) {
 
 // Минуты RP-времени: [минимум, максимум] — конкретный срок разыгрывается при заказе
 const DELIVERY_ETA = {
-    food: [20, 50],
-    grocery: [45, 120],
+    food: [30, 75],
+    grocery: [60, 150],
     clothes: [1440, 4320],
     beauty: [1440, 2880],
     kids: [1440, 4320],
@@ -175,8 +210,20 @@ function rpMinutes() {
     if (!d || !Number.isFinite(d.year)) return null;
     return Math.floor(Date.UTC(d.year, (d.month || 1) - 1, d.day || 1, d.hours || 0, d.minutes || 0) / 60000);
 }
+// Ходы ролевой, а не длина массива: телефон сам дописывает в чат строки
+// журнала («Событие мира…»), и без фильтра собственная публикация поста
+// подгоняла курьера.
 function chatLen() {
-    try { return SillyTavern.getContext()?.chat?.length || 0; } catch (e) { return 0; }
+    try {
+        const chat = SillyTavern.getContext()?.chat || [];
+        let n = 0;
+        for (const m of chat) {
+            if (!m || m.is_system) continue;
+            if (/<!--\s*tel:log/i.test(String(m.mes || ''))) continue;
+            n++;
+        }
+        return n;
+    } catch (e) { return 0; }
 }
 
 // Человеческий срок: «~35 мин», «~2 часа», «~3 дня».
@@ -197,9 +244,11 @@ export function fmtEta(min) {
     return en ? `~${d} d` : `~${d} ${d === 1 ? 'день' : d < 5 ? 'дня' : 'дней'}`;
 }
 
-// Доля пройденного пути 0..1. Берём максимум из двух шкал: RP-время
-// (если в ролевой есть даты) и ходы чата — так дальняя доставка доедет
-// максимум за ~20 ходов даже в ролевой без единой даты.
+// Доля пройденного пути 0..1. RP-время (если в ролевой есть даты) МОЖЕТ
+// только ускорить курьера, но не остановить: ходовой счётчик — постоянный
+// пол. Строгий режим «только по часам сюжета» отменён: модель внутри сцены
+// держит одну метку времени десятки реплик, часы стоят — и заказ висел
+// сутками, пока пользователь не шевелил сцену письмом курьеру.
 function orderProgress(o) {
     if (!o.eta) return 1;
     let byRp = 0;
@@ -210,11 +259,9 @@ function orderProgress(o) {
         // Отрицательное — флешбэк/скачок назад; огромное — смена ролевой
         if (d >= 0 && d < 60 * 1440 * 60) byRp = d / o.eta;
     }
-    // Когда модель ставит метки времени, часы сюжета достоверны — считаем
-    // строго по ним. Иначе заказ приезжал бы просто потому, что «прошло
-    // три сообщения», хотя в сюжете не прошло и минуты.
-    if (haveRp && rpTimeTagged()) return byRp;
-    const turnsNeeded = Math.min(20, Math.max(2, Math.round(o.eta / MIN_PER_TURN)));
+    // Не меньше трёх ходов даже у самой быстрой доставки: за один ответ
+    // ролевой курьер приехать не может
+    const turnsNeeded = Math.min(20, Math.max(3, Math.round(o.eta / MIN_PER_TURN)));
     const byTurns = Math.max(0, chatLen() - (o.placedTurn || 0)) / turnsNeeded;
     return Math.max(byRp, byTurns);
 }
@@ -240,7 +287,12 @@ export function advanceOrders() {
     for (const o of getShop().orders) {
         // Заказы до появления доставки и брони отелей/туров не едут
         if (!o.stage || o.stage === 'done' || o.stage === 'booked') continue;
-        const next = stageFor(o);
+        let next = stageFor(o);
+        // Не больше одной ступени за раз. Часы сюжета умеют прыгать (модель
+        // отсчитала полдня одной репликой, метка съехала после свайпа) — без
+        // этого свежий заказ приезжал бы мгновенно, не побывав в пути и даже
+        // не получив курьера.
+        if (o.stage === 'placed' && next === 'done') next = 'way';
         if (next === o.stage) continue;
         o.stage = next;
         dirty = true;
@@ -309,7 +361,7 @@ export async function writeToCourier(orderId, text) {
     o.chat.push({ text: text.slice(0, 500), ts: Date.now(), user: true });
     saveMeta();
     try {
-        logSocialToChat(`${getUserName()} написала курьеру ${o.courier.name}: «${text}»`);
+        logSocialToChat(`${getUserName()} пишет курьеру ${o.courier.name}: «${text}»`);
     } catch (e) { /* ignore */ }
     const reply = await generateCourierReply(o, o.courier, o.chat, text);
     const cur = findOrder(orderId);

@@ -13,15 +13,17 @@ import {
     totalDebt, monthlyLoanPayment, addRecurring, delRecurring, payRecurring, monthlyObligations,
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency, convertCurrency,
 } from './bank.js';
-import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
+import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived, searchShopItems } from './shop.js';
+import { getMusicState, getMusicCfg, setMusicKeys, searchMusic, playTrack, playIndex, togglePlay, nextTrack, prevTrack, removeAt, clearQueue, seekFrac, setVolume, searchRadioStations, playRadioStation, pickForScene, onMusicChange, enqueue, SOMA_STATIONS } from './music.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
     getOfPosts, postOf, likeOf, delOf, addOfComment, delOfComment, generateOfComments, getSocial,
     withdrawOf, setOfWallet,
     generateTweetFeed, generateTweetComments, generateAuthorReply, generateReplyToComment, generateIgFeed, generateIgComments,
+    regenerateTweet, regenerateIgPost, refreshFeed,
     compressImage, setContactAvatar, getContactAvatar, avatarForAuthor, setUserAvatar, getUserAvatar,
-    timeAgo, makeHandle, getUserName, generatePostImage, isImageGenAvailable,
+    timeAgo, makeHandle, getUserName, generatePostImage, cancelImageGen, isImageGenAvailable,
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generateSmsPhotoReply, logSocialToChat, getSocialJournalEntries,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
@@ -613,9 +615,176 @@ function tickClock() {
 
 // ═══ Рендер экранов ═══
 
+// Приложения со своим оформлением (дискорд, твич, сторис, экран блокировки)
+// рисуют фон сами и должны доходить до краёв корпуса — общие поля экрана им
+// только мешают.
+const BLEED_SCREENS = new Set(['discord', 'dchannel', 'twitch', 'stream', 'mystream', 'igstory', 'lock']);
+
+// ═══ Музыка ═══
+let _musTab = 'search';       // search | queue | radio
+let _musSource = 'youtube';   // youtube | jamendo
+let _musQuery = '';
+let _musRadioQuery = '';
+
+// Смена трека/пауза приходят из движка асинхронно — обновляем экран, только если он открыт
+onMusicChange(() => { if (currentScreen === 'music') render(); });
+
+function renderMusic(screen) {
+    const st = getMusicState();
+    const cfg = getMusicCfg();
+
+    let body = '';
+    if (_musTab === 'search') {
+        const rows = st.searchResults.map((t, i) => `
+            <div class="gp-mus-track" data-play-idx="${i}">
+                <div class="gp-mus-track-body">
+                    <div class="gp-mus-track-title">${esc(t.title)}</div>
+                    <div class="gp-mus-track-artist">${esc(t.artist || '')} · ${esc(t.source)}</div>
+                </div>
+                <button class="gp-iconbtn" data-add-idx="${i}" title="В очередь">${ic('fa-plus')}</button>
+            </div>`).join('');
+        body = `
+            <div class="gp-shop-search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input id="gp-mus-q" type="text" placeholder="Трек, исполнитель или ссылка YouTube..." value="${esc(_musQuery)}" autocomplete="off">
+                <button class="gp-iconbtn" id="gp-mus-go" title="Искать" ${st.searching ? 'disabled' : ''}>${st.searching ? ic('fa-spinner fa-spin') : ic('fa-arrow-right')}</button>
+            </div>
+            <div class="gp-mus-srcs">
+                <button class="gp-mus-src${_musSource === 'youtube' ? ' on' : ''}" data-src="youtube">YouTube</button>
+                <button class="gp-mus-src${_musSource === 'jamendo' ? ' on' : ''}" data-src="jamendo">Jamendo</button>
+            </div>
+            ${st.statusMsg ? `<div class="gp-empty-text" style="padding:8px;text-align:center">${esc(st.statusMsg)}</div>` : ''}
+            ${rows}
+            <div class="gp-mus-keys">
+                <div class="gp-mus-keys-title">${ic('fa-key')} API-ключи</div>
+                <input id="gp-mus-key-jam" type="text" placeholder="Jamendo Client ID" value="${esc(cfg.jamendoKey)}" autocomplete="off">
+                <input id="gp-mus-key-yt" type="text" placeholder="YouTube API key (пусто = Invidious)" value="${esc(cfg.ytKey)}" autocomplete="off">
+            </div>`;
+    } else if (_musTab === 'queue') {
+        body = st.queue.length ? `
+            <div class="gp-mus-qhead">
+                <span>Очередь: ${st.queue.length}</span>
+                <button class="gp-iconbtn" id="gp-mus-clear" title="Очистить">${ic('fa-trash')}</button>
+            </div>
+            ${st.queue.map((t, i) => `
+                <div class="gp-mus-track${i === st.curIdx ? ' current' : ''}" data-q-idx="${i}">
+                    <div class="gp-mus-track-body">
+                        <div class="gp-mus-track-title">${i === st.curIdx && st.playing ? '▶ ' : ''}${esc(t.title)}</div>
+                        <div class="gp-mus-track-artist">${esc(t.artist || '')} · ${esc(t.source)}</div>
+                    </div>
+                    <button class="gp-iconbtn" data-q-del="${i}" title="Убрать">${ic('fa-xmark')}</button>
+                </div>`).join('')}`
+            : `<div class="gp-empty-text" style="padding:20px;text-align:center">Очередь пуста — найди что-нибудь в поиске</div>`;
+    } else {
+        const list = st.radioResults ?? SOMA_STATIONS.map(s => ({ kind: 'radio', url: s.url, title: s.name, artist: s.tag, source: 'SomaFM' }));
+        body = `
+            <div class="gp-shop-search">
+                <i class="fa-solid fa-radio"></i>
+                <input id="gp-mus-rq" type="text" placeholder="Поиск станций по миру..." value="${esc(_musRadioQuery)}" autocomplete="off">
+                <button class="gp-iconbtn" id="gp-mus-rgo" title="Искать" ${st.searching ? 'disabled' : ''}>${st.searching ? ic('fa-spinner fa-spin') : ic('fa-arrow-right')}</button>
+            </div>
+            ${st.radioResults ? `<div class="gp-mus-qhead"><span>Найдено: ${st.radioResults.length}</span><button class="gp-iconbtn" id="gp-mus-rback" title="К SomaFM">${ic('fa-rotate-left')}</button></div>` : ''}
+            ${list.map((t, i) => `
+                <div class="gp-mus-track" data-r-idx="${i}">
+                    <div class="gp-mus-track-body">
+                        <div class="gp-mus-track-title">${esc(t.title)}</div>
+                        <div class="gp-mus-track-artist">${esc(t.artist || '')} · ${esc(t.source)}</div>
+                    </div>
+                    <i class="fa-solid fa-play gp-mus-play-ic"></i>
+                </div>`).join('')}`;
+    }
+
+    const t = st.current;
+    const nowBar = t ? `
+        <div class="gp-mus-now">
+            <div class="gp-mus-now-info">
+                <div class="gp-mus-track-title">${esc(t.title)}</div>
+                <div class="gp-mus-track-artist">${esc(t.artist || '')} · ${esc(t.source)}</div>
+            </div>
+            <div class="gp-mus-controls">
+                <button class="gp-iconbtn" id="gp-mus-prev">${ic('fa-backward-step')}</button>
+                <button class="gp-iconbtn gp-mus-playbtn" id="gp-mus-toggle">${ic(st.playing ? 'fa-pause' : 'fa-play')}</button>
+                <button class="gp-iconbtn" id="gp-mus-next">${ic('fa-forward-step')}</button>
+            </div>
+            <div class="gp-mus-progress">
+                <span id="gp-mus-cur">--:--</span>
+                <div class="gp-mus-bar" id="gp-mus-bar"><div class="gp-mus-bar-fill" id="gp-mus-bar-fill"></div></div>
+                <span id="gp-mus-dur">--:--</span>
+            </div>
+            <div class="gp-mus-vol">
+                ${ic('fa-volume-low')}
+                <input type="range" id="gp-mus-vol" min="0" max="100" value="${Math.round(cfg.volume * 100)}">
+            </div>
+        </div>` : '';
+
+    setHtmlKeepScroll(screen, '.gp-mus-body', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app gp-shop-title">${ic('fa-music')} Музыка</div>
+            <button class="gp-iconbtn" id="gp-mus-pick" title="Подобрать под сцену" ${st.picking ? 'disabled' : ''}>${st.picking ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+        </div>
+        <div class="gp-mus-tabs">
+            <button class="gp-mus-tab${_musTab === 'search' ? ' on' : ''}" data-tab="search">Поиск</button>
+            <button class="gp-mus-tab${_musTab === 'queue' ? ' on' : ''}" data-tab="queue">Очередь${st.queue.length ? ` (${st.queue.length})` : ''}</button>
+            <button class="gp-mus-tab${_musTab === 'radio' ? ' on' : ''}" data-tab="radio">Радио</button>
+        </div>
+        <div class="gp-mus-body gp-mus-scroll">${body}</div>
+        ${nowBar}`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelectorAll('.gp-mus-tab').forEach(b => b.addEventListener('click', () => { _musTab = b.getAttribute('data-tab'); render(); }));
+    screen.querySelectorAll('.gp-mus-src').forEach(b => b.addEventListener('click', () => { _musSource = b.getAttribute('data-src'); render(); }));
+
+    const doSearch = () => { _musQuery = screen.querySelector('#gp-mus-q')?.value || ''; searchMusic(_musQuery, _musSource); };
+    screen.querySelector('#gp-mus-go')?.addEventListener('click', doSearch);
+    screen.querySelector('#gp-mus-q')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+    screen.querySelectorAll('[data-play-idx]').forEach(el => el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-add-idx]')) return;
+        const t = st.searchResults[Number(el.getAttribute('data-play-idx'))];
+        if (t) { playTrack(t); toast(t.title.slice(0, 40), 'fa-play'); }
+    }));
+    screen.querySelectorAll('[data-add-idx]').forEach(el => el.addEventListener('click', () => {
+        const t = st.searchResults[Number(el.getAttribute('data-add-idx'))];
+        if (t) { enqueue(t); toast('В очередь: ' + t.title.slice(0, 34), 'fa-plus'); }
+    }));
+    screen.querySelectorAll('[data-q-idx]').forEach(el => el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-q-del]')) return;
+        playIndex(Number(el.getAttribute('data-q-idx')));
+    }));
+    screen.querySelectorAll('[data-q-del]').forEach(el => el.addEventListener('click', () => removeAt(Number(el.getAttribute('data-q-del')))));
+    screen.querySelector('#gp-mus-clear')?.addEventListener('click', () => clearQueue());
+
+    const doRadioSearch = () => { _musRadioQuery = screen.querySelector('#gp-mus-rq')?.value || ''; searchRadioStations(_musRadioQuery); };
+    screen.querySelector('#gp-mus-rgo')?.addEventListener('click', doRadioSearch);
+    screen.querySelector('#gp-mus-rq')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRadioSearch(); });
+    screen.querySelector('#gp-mus-rback')?.addEventListener('click', () => { _musRadioQuery = ''; searchRadioStations(''); });
+    screen.querySelectorAll('[data-r-idx]').forEach(el => el.addEventListener('click', () => {
+        const list = st.radioResults ?? SOMA_STATIONS;
+        const t = list[Number(el.getAttribute('data-r-idx'))];
+        if (t) { playRadioStation(t); toast((t.title || t.name).slice(0, 40), 'fa-radio'); }
+    }));
+
+    screen.querySelector('#gp-mus-pick')?.addEventListener('click', async () => {
+        const r = await pickForScene();
+        if (r) toast(`${r.mood ? r.mood + ' → ' : ''}${r.track.title.slice(0, 40)}`, 'fa-wand-magic-sparkles');
+    });
+    screen.querySelector('#gp-mus-toggle')?.addEventListener('click', () => togglePlay());
+    screen.querySelector('#gp-mus-next')?.addEventListener('click', () => nextTrack());
+    screen.querySelector('#gp-mus-prev')?.addEventListener('click', () => prevTrack());
+    screen.querySelector('#gp-mus-bar')?.addEventListener('click', (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        if (r.width > 0) seekFrac((e.clientX - r.left) / r.width);
+    });
+    screen.querySelector('#gp-mus-vol')?.addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
+    screen.querySelector('#gp-mus-key-jam')?.addEventListener('change', (e) => { setMusicKeys({ jamendoKey: e.target.value }); toast('Ключ Jamendo сохранён', 'fa-key'); });
+    screen.querySelector('#gp-mus-key-yt')?.addEventListener('change', (e) => { setMusicKeys({ ytKey: e.target.value }); toast('Ключ YouTube сохранён', 'fa-key'); });
+}
+
 export function render() {
     const screen = document.getElementById('gp-screen');
     if (!screen || !isPhoneOpen()) return;
+    bindStopGen(screen);
+    screen.classList.toggle('gp-screen-bleed', BLEED_SCREENS.has(currentScreen));
     // «Оформление» — экран настроек: ему нечего показывать из ролевой, а
     // перерисовка приходит на каждое сообщение и сбивает прокрутку каруселей
     // и ползунков. Свои изменения он рисует сам, вызывая renderAppearance.
@@ -656,6 +825,7 @@ export function render() {
     else if (currentScreen === 'mystream') renderMyStream(screen);
     else if (currentScreen === 'notes') renderNotes(screen);
     else if (currentScreen === 'appearance') renderAppearance(screen);
+    else if (currentScreen === 'music') renderMusic(screen);
     else renderHome(screen);
     // Возвращаем набранный текст: перерисовка (генерация картинки, публикация,
     // новое сообщение) больше не стирает то, что юзер печатает
@@ -745,8 +915,13 @@ function socialImpactToast(platform, post, addedComments = 0, addedFeed = 0) {
         platform === 'twitter' ? 'fa-x-twitter' : 'fa-instagram');
 }
 
+// Соц-системы включены? Выключенные оставляют соцсети как есть, но без
+// охватов, подписчиков, репутации, рекламы и сюжетных поворотов.
+function systemsOn() { return getSettings().socialSystems !== false; }
+
 async function finalizeSocialPost(platform, post, { addedComments = 0, addedFeed = 0 } = {}) {
     if (!post || post.ak !== 'user' || post.performance?.settled) return null;
+    if (!systemsOn()) return null;
     const perf = settleSocialPost(platform, post);
     updatePhoneInjection();
     if (perf) {
@@ -781,6 +956,31 @@ function openStoryResult(id) {
 
 function renderSocialHub(screen) {
     currentScreen = 'socialhub';
+    // Системы выключены — экран сводится к одному переключателю. Данные при
+    // этом никуда не деваются: включишь обратно и увидишь прежние цифры.
+    if (!systemsOn()) {
+        screen.innerHTML = `<div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">Социальный профиль</div>
+            <span style="width:32px"></span>
+        </div>
+        <div class="gp-feed gp-social-hub">
+            <div class="gp-empty">
+                <div class="gp-empty-icon">${ic('fa-wand-sparkles')}</div>
+                <div class="gp-empty-text">Подписчики, охваты, репутация, реклама и сюжетные повороты выключены. Посты и комментарии работают как обычно.</div>
+            </div>
+            <button class="gp-save-preset" id="gp-systems-on" type="button">${ic('fa-power-off')} Включить</button>
+        </div>`;
+        screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+        screen.querySelector('#gp-systems-on')?.addEventListener('click', () => {
+            getSettings().socialSystems = true;
+            saveSettingsDebounced();
+            updatePhoneInjection();
+            toast('Системы включены', 'fa-wand-sparkles');
+            render();
+        });
+        return;
+    }
     // Самовосстановление незавершённых рекламных интеграций. Это покрывает
     // сохранения, где пост уже получил реакции/результат, но активное предложение
     // осталось в состоянии published и деньги не были начислены.
@@ -799,6 +999,7 @@ function renderSocialHub(screen) {
     screen.innerHTML = `<div class="gp-header gp-thread-header">
         <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app">Социальный профиль</div>
         <button class="gp-iconbtn" id="gp-open-journal" title="Журнал памяти">${ic('fa-book-open')}</button>
+        <button class="gp-iconbtn" id="gp-systems-off" title="Выключить системы">${ic('fa-power-off')}</button>
         ${event ? `<button class="gp-iconbtn gp-event-pulse" data-open-story title="Сюжетный поворот">${ic('fa-wand-sparkles')}</button>` : ''}
     </div><div class="gp-feed gp-social-hub">
         <div class="gp-profile-grid">
@@ -828,6 +1029,13 @@ function renderSocialHub(screen) {
     </div>`;
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
     screen.querySelector('#gp-open-journal')?.addEventListener('click', () => goto('socialjournal'));
+    screen.querySelector('#gp-systems-off')?.addEventListener('click', () => {
+        getSettings().socialSystems = false;
+        saveSettingsDebounced();
+        updatePhoneInjection();
+        toast('Системы выключены', 'fa-power-off');
+        render();
+    });
     screen.querySelectorAll('[data-ad-accept]').forEach(b => b.addEventListener('click', () => { acceptAdOffer(b.getAttribute('data-ad-accept')); toast('Рекламное задание принято', 'fa-star'); render(); }));
     screen.querySelectorAll('[data-ad-decline]').forEach(b => b.addEventListener('click', () => { declineAdOffer(b.getAttribute('data-ad-decline')); render(); }));
     screen.querySelector('#gp-ad-generate')?.addEventListener('click', async () => {
@@ -1097,7 +1305,7 @@ function renderLock(screen) {
 function renderHome(screen) {
     currentScreen = 'home';
     const unread = getTotalUnread();
-    const activeStoryEvent = getSystemsView().storyEvents.active;
+    const activeStoryEvent = systemsOn() ? getSystemsView().storyEvents.active : null;
     const rpDt = getRpDateTime();
     const d = new Date();
     const DAYS = DAYS_I18N[lang()];
@@ -1167,6 +1375,10 @@ function renderHome(screen) {
                 <div class="gp-app" data-app="notes">
                     <div class="gp-app-icon gp-app-notes">${ic('fa-note-sticky')}</div>
                     <div class="gp-app-name">Заметки</div>
+                </div>
+                <div class="gp-app" data-app="music">
+                    <div class="gp-app-icon gp-app-music">${ic('fa-music')}${getMusicState().playing ? '<span class="gp-app-badge gp-mus-eq">♪</span>' : ''}</div>
+                    <div class="gp-app-name">Музыка</div>
                 </div>
                 <div class="gp-app" data-app="appearance">
                     <div class="gp-app-icon gp-app-appearance">${ic('fa-palette')}</div>
@@ -1776,7 +1988,7 @@ function renderThread(screen) {
         } else if (m.photoDesc) {
             const genKey = m.eventId || `${m.idx}:${m.tagStart}`;
             const busy = _mmsGenBusy.has(genKey);
-            media = `<div class="gp-bubble-img gp-bubble-img-gen" style="${avatarStyle((m.from || t.name) + m.photoDesc)}"><span>${ic('fa-image')}</span><i data-mmsdesc="${esc(genKey)}">${esc(m.photoDesc)}</i><button class="gp-mms-gen" data-mmsgen="${mi}" title="Сгенерировать фото" ${busy ? 'disabled' : ''}>${ic(busy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button></div>`;
+            media = `<div class="gp-bubble-img gp-bubble-img-gen" style="${avatarStyle((m.from || t.name) + m.photoDesc)}"><span>${ic('fa-image')}</span><i data-mmsdesc="${esc(genKey)}">${esc(m.photoDesc)}</i><button class="gp-mms-gen" data-mmsgen="${mi}" title="Сгенерировать фото" ${busy ? 'disabled' : ''}>${ic(busy ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles')}</button>${busy ? stopGenBtn(genKey) : ''}</div>`;
         }
         // В группе подписываем отправителя входящих — КАЖДОМУ свой цвет
         // (тот же хэш, что у аватара-градиента → цвет ника совпадает с аватаром)
@@ -2064,6 +2276,7 @@ function renderThread(screen) {
                     const el = document.querySelector(`[data-mmsdesc="${CSS.escape(genKey)}"]`);
                     if (el) el.textContent = status;
                 },
+                genKey,
             );
             // Персистим через общий rewriteSmsTag: он ищет тег по его ТЕКСТУ.
             // (Раньше здесь была своя копия логики, резавшая по индексам —
@@ -2078,8 +2291,12 @@ function renderThread(screen) {
                 toast('Фото сгенерилось, но не привязалось к сообщению', 'fa-circle-exclamation');
             }
         } catch (err) {
-            console.error('[GlassPhone] MMS image gen failed:', err);
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') {
+                toast('Генерация остановлена', 'fa-circle-stop');
+            } else {
+                console.error('[GlassPhone] MMS image gen failed:', err);
+                toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            }
         } finally {
             _mmsGenBusy.delete(genKey);
             render();
@@ -2254,7 +2471,8 @@ function twCard(t, { clickable = true } = {}) {
                 <span class="gp-tw-time">· ${esc(timeAgo(t.time))}</span>
                 ${isUser
                     ? `<button class="gp-tw-del" data-del="${esc(t.id)}" title="Удалить">${ic('fa-xmark')}</button>`
-                    : `<button class="gp-tw-del gp-ban-btn" data-ban-tw="${esc(t.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
+                    : `<button class="gp-tw-del" data-regen-tw="${esc(t.id)}" title="Перегенерировать пост">${ic('fa-rotate-right')}</button>
+                       <button class="gp-tw-del gp-ban-btn" data-ban-tw="${esc(t.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
             </div>
             <div class="gp-tw-text">${esc(t.text)}</div>
             ${quoteHtml}
@@ -2279,6 +2497,17 @@ function bindTwCardActions(root, rerender) {
     root.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
         if (confirm('Удалить твит?')) { delTweet(b.getAttribute('data-del')); rerender(); }
+    }));
+    root.querySelectorAll('[data-regen-tw]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const ok = await regenerateTweet(b.getAttribute('data-regen-tw'));
+            toast(ok ? 'Пост переписан' : 'Не получилось переписать пост', ok ? 'fa-x-twitter' : 'fa-circle-exclamation');
+        } catch (err) {
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally { genBusy = false; render(); }
     }));
     root.querySelectorAll('[data-ban-tw]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2308,7 +2537,8 @@ function renderTw(screen) {
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
             <div class="gp-title gp-title-app">${brand('fa-x-twitter')}</div>
             <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
-            <button class="gp-iconbtn" id="gp-tw-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+            <button class="gp-iconbtn" id="gp-tw-refresh" title="Пересобрать ленту заново" ${genBusy ? 'disabled' : ''}>${ic('fa-rotate')}</button>
+            <button class="gp-iconbtn" id="gp-tw-gen" title="Дописать в ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-tw-compose">
             ${avatarHtml(getUserName(), avatarForAuthor('user'), 'gp-avatar gp-avatar-sm')}
@@ -2341,7 +2571,7 @@ function renderTw(screen) {
         const userPost = postTweet(v);
         const ad = attachActiveAd('twitter', userPost);
         if (ad) toast(`Реклама ${ad.brand} опубликована`, 'fa-star');
-        logSocialToChat(`${getUserName()} опубликовала твит: «${v}»`); // в историю чата (память/саммарайз)
+        logSocialToChat(`${getUserName()} публикует твит: «${v}»`); // в историю чата (память/саммарайз)
         updatePhoneInjection(); // персонажи «видят» твит юзера
         
         genBusy = true;
@@ -2373,6 +2603,22 @@ function renderTw(screen) {
         } catch (e) {
             console.error('[GlassPhone] tw feed failed:', e);
             toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'tw') render();
+        }
+    });
+
+    screen.querySelector('#gp-tw-refresh')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        // Свои твиты остаются: пересобирается только то, что придумала модель
+        if (!confirm('Пересобрать ленту заново?\n\nЧужие твиты заменятся новыми, твои останутся.')) return;
+        genBusy = true; render();
+        try {
+            const n = await refreshFeed('tw');
+            toast(n > 0 ? `Лента пересобрана: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-x-twitter' : 'fa-circle-exclamation');
+        } catch (e) {
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'tw') render();
@@ -2498,7 +2744,7 @@ function renderTwThread(screen) {
             // Журнал: её ответ + значимые ответы одной строкой
             const added = (t.replies || []).slice(beforeGen).filter(r => r.ak !== 'user');
             const cparts = added.map(r => `${r.author || 'Аккаунт'}: «${String(r.text || '').slice(0, 120)}»`);
-            let line = `${getUserName()} ответила под твитом ${t.author} («${String(t.text).slice(0, 50)}»): «${v}»`;
+            let line = `${getUserName()} отвечает под твитом ${t.author} («${String(t.text).slice(0, 50)}»): «${v}»`;
             if (cparts.length) line += ` — ответы: ${cparts.join('; ')}`;
             logSocialToChat(line);
         } catch (e) {
@@ -2568,6 +2814,25 @@ function logNewReplies(kindLabel, postText, arr, beforeLen) {
 let _imgGenReady = false;
 isImageGenAvailable().then(v => { _imgGenReady = v; }).catch(() => {});
 
+// key — тот же, по которому генерация зарегистрирована в social.js
+// Кнопки «стоп» живут на разных экранах и перерисовываются — вешаем один
+// делегат на контейнер, а не слушатель на каждую кнопку
+function bindStopGen(screen) {
+    if (screen.dataset.stopGenBound) return;
+    screen.dataset.stopGenBound = '1';
+    screen.addEventListener('click', (e) => {
+        const btn = e.target.closest?.('[data-genstop]');
+        if (!btn) return;
+        e.stopPropagation();
+        e.preventDefault();
+        cancelImageGen(btn.getAttribute('data-genstop'));
+    });
+}
+
+function stopGenBtn(key) {
+    return `<button class="gp-gen-stop" data-genstop="${esc(key)}" title="Остановить генерацию" aria-label="Остановить">${ic('fa-xmark')}</button>`;
+}
+
 function igImageHtml(p) {
     if (p.image) {
         const busy = _imgGenBusy.has(p.id);
@@ -2576,7 +2841,7 @@ function igImageHtml(p) {
         return `<div class="gp-ig-img gp-ig-img-has">
             <img src="${esc(src)}" alt="">
             ${busy
-                ? `<div class="gp-ig-regen-overlay">${ic('fa-spinner fa-spin')}<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Перегенерация...</div></div>`
+                ? `<div class="gp-ig-regen-overlay">${ic('fa-spinner fa-spin')}<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Перегенерация...</div>${stopGenBtn(p.id)}</div>`
                 : `<button class="gp-ig-regenbtn" data-regenimg="${esc(p.id)}" title="Перегенерировать">${ic('fa-rotate-right')}</button>`}
         </div>`;
     }
@@ -2587,7 +2852,7 @@ function igImageHtml(p) {
         <div class="gp-ig-img-inner">
             ${busy ? ic('fa-spinner fa-spin') : ic('fa-image')}
             ${p.imgDesc ? `<div class="gp-ig-img-desc">${esc(p.imgDesc)}</div>` : ''}
-            ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>` : ''}
+            ${busy ? `<div class="gp-ig-genstatus" data-genstatus="${esc(p.id)}">Генерация...</div>${stopGenBtn(p.id)}` : ''}
             ${!busy ? `<button class="gp-ig-genbtn" data-genimg="${esc(p.id)}">${ic('fa-wand-magic-sparkles')} Нарисовать</button>` : ''}
         </div>
     </div>`;
@@ -2607,7 +2872,8 @@ function igCard(p, { clickable = true } = {}) {
             <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
             ${isUser
                 ? `<button class="gp-tw-del" data-del-ig="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>`
-                : `<button class="gp-tw-del gp-ban-btn" data-ban-ig="${esc(p.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
+                : `<button class="gp-tw-del" data-regen-ig="${esc(p.id)}" title="Перегенерировать пост">${ic('fa-rotate-right')}</button>
+                   <button class="gp-tw-del gp-ban-btn" data-ban-ig="${esc(p.id)}" title="Заблокировать аккаунт">${ic('fa-ban')}</button>`}
         </div>
         <div class="${clickable ? 'gp-clickable' : ''}" data-open-ig="${esc(p.id)}">${igImageHtml(p)}</div>
         <div class="gp-ig-actions">
@@ -2643,12 +2909,17 @@ function bindIgCardActions(root) {
             await generatePostImage(post, (status) => {
                 const el = document.querySelector(`[data-genstatus="${CSS.escape(id)}"]`);
                 if (el) el.textContent = status;
-            });
+            }, id);
             post._imgTs = Date.now(); // cache-busting для перезагрузки нового фото
             toast('Фото готово', 'fa-instagram');
         } catch (err) {
-            console.error('[GlassPhone] image gen failed:', err);
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            // Отмена — не ошибка: молча снимаем индикатор
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') {
+                toast('Генерация остановлена', 'fa-circle-stop');
+            } else {
+                console.error('[GlassPhone] image gen failed:', err);
+                toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            }
         } finally {
             _imgGenBusy.delete(id);
             render();
@@ -2679,6 +2950,17 @@ function bindIgCardActions(root) {
         else render();
         toast(`«${post.author}» заблокирован`, 'fa-ban');
     }));
+    root.querySelectorAll('[data-regen-ig]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (genBusy) return;
+        genBusy = true; render();
+        try {
+            const ok = await regenerateIgPost(b.getAttribute('data-regen-ig'));
+            toast(ok ? 'Пост переписан' : 'Не получилось переписать пост', ok ? 'fa-instagram' : 'fa-circle-exclamation');
+        } catch (err) {
+            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally { genBusy = false; render(); }
+    }));
     const open = (id) => { currentPostId = id; goto('igview'); };
     root.querySelectorAll('[data-open-ig]').forEach(b => b.addEventListener('click', () => open(b.getAttribute('data-open-ig'))));
     root.querySelectorAll('[data-open-ig2]').forEach(b => b.addEventListener('click', (e) => {
@@ -2697,7 +2979,8 @@ function renderIg(screen) {
             <div class="gp-title gp-title-app">${brand('fa-instagram')}</div>
             <button class="gp-iconbtn" data-open-social title="Профиль и задания">${ic('fa-chart-line')}</button>
             <button class="gp-iconbtn" id="gp-ig-new" title="Новый пост">${ic('fa-plus')}</button>
-            <button class="gp-iconbtn" id="gp-ig-gen" title="Обновить ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+            <button class="gp-iconbtn" id="gp-ig-refresh" title="Пересобрать ленту заново" ${genBusy ? 'disabled' : ''}>${ic('fa-rotate')}</button>
+            <button class="gp-iconbtn" id="gp-ig-gen" title="Дописать в ленту" ${genBusy ? 'disabled' : ''}>${genBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
         </div>
         <div class="gp-feed" id="gp-ig-feed">
             ${igStoriesRow()}
@@ -2729,6 +3012,21 @@ function renderIg(screen) {
         } catch (e) {
             console.error('[GlassPhone] ig feed failed:', e);
             toast('Ошибка генерации', 'fa-circle-exclamation');
+        } finally {
+            genBusy = false;
+            if (currentScreen === 'ig') render();
+        }
+    });
+    screen.querySelector('#gp-ig-refresh')?.addEventListener('click', async () => {
+        if (genBusy) return;
+        // Свои посты остаются: пересобирается только то, что придумала модель
+        if (!confirm('Пересобрать ленту заново?\n\nЧужие посты заменятся новыми, твои останутся.')) return;
+        genBusy = true; render();
+        try {
+            const n = await refreshFeed('ig');
+            toast(n > 0 ? `Лента пересобрана: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-instagram' : 'fa-circle-exclamation');
+        } catch (e) {
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'ig') render();
@@ -2975,11 +3273,12 @@ function renderIgNewStory(screen) {
         const caption = screen.querySelector('#gp-st-caption')?.value.trim() || '';
         render();
         try {
-            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption, aspect: '9:16' });
+            const src2 = await generatePostImage({ ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, caption, aspect: '9:16' }, null, 'story-draft');
             _storyDraftImage = src2;
             toast('Фото готово', 'fa-image');
         } catch (e) {
-            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (e?.name === 'ImageGenCancelled' || e?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             _storyGenBusy = false;
             const d = document.getElementById('gp-st-desc')?.value;
@@ -3097,12 +3396,13 @@ function renderIgStory(screen) {
                 kind: 'ig',
                 aspect: '9:16',
                 stream: !isMine, // частичный неймматч с карточкой для НПС
-            });
+            }, null, `story-${st.id || _storyIdx}`);
             st.image = src2;
             saveMeta();
             toast('Фото готово', 'fa-image');
         } catch (err) {
-            toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
         } finally {
             _storyGenBusy = false;
             if (currentScreen === 'igstory') render();
@@ -3205,7 +3505,7 @@ function renderIgNew(screen) {
                 render();
                 // Журнал — уже с готовым описанием
                 await logSocialToChat(
-                    `${getUserName()} опубликовала фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
+                    `${getUserName()} публикует фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
@@ -3462,7 +3762,7 @@ function renderOfNew(screen) {
                 render();
                 // Журнал: с готовым описанием, текст жёстко помечает приватность
                 await logSocialToChat(
-                    `${getUserName()} опубликовала пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
+                    `${getUserName()} публикует пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
                     post.image,
                 );
                 applyChatHiding();
@@ -3832,6 +4132,33 @@ async function doShopGen(catId) {
     }
 }
 
+// ── Поиск по витрине: мгновенный фильтр + ИИ-подбор ──
+let _shopQuery = '';
+let _shopQueryCat = null;      // запрос привязан к категории: сменил категорию — сброс
+let _shopFoundIds = new Set(); // позиции, добратые ИИ-поиском под текущий запрос
+let _shopSearchBusy = false;
+
+// Фильтрация на уровне DOM, БЕЗ перерисовки: иначе каждая буква теряла бы фокус
+// и клавиатуру. Прячем товары и пустые магазины, считаем «ничего не нашлось».
+function _applyShopFilter(screen) {
+    const q = _shopQuery.trim().toLowerCase();
+    let visibleTotal = 0;
+    screen.querySelectorAll('.gp-shop-store').forEach(st => {
+        let visible = 0;
+        st.querySelectorAll('.gp-shop-item').forEach(it => {
+            const show = !q
+                || (it.getAttribute('data-search') || '').includes(q)
+                || _shopFoundIds.has(it.getAttribute('data-item-id'));
+            it.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        st.style.display = visible ? '' : 'none';
+        visibleTotal += visible;
+    });
+    const empty = screen.querySelector('#gp-shop-search-empty');
+    if (empty) empty.style.display = (q && !visibleTotal) ? '' : 'none';
+}
+
 function renderShopCat(screen) {
     currentScreen = 'shopcat';
     const cat = catById(currentShopCat);
@@ -3850,7 +4177,7 @@ function renderShopCat(screen) {
             <div class="gp-shop-store">
                 <div class="gp-shop-store-name">${ic('fa-store')} ${esc(st.name)}</div>
                 ${st.items.map(it => `
-                    <div class="gp-shop-item">
+                    <div class="gp-shop-item" data-item-id="${esc(it.id)}" data-search="${esc((it.name + ' ' + (it.desc || '')).toLowerCase())}">
                         <div class="gp-shop-item-body">
                             <div class="gp-shop-item-name">${esc(it.name)}</div>
                             ${it.desc ? `<div class="gp-shop-item-desc">${esc(it.desc)}</div>` : ''}
@@ -3863,6 +4190,15 @@ function renderShopCat(screen) {
             </div>`).join('');
     }
 
+    if (_shopQueryCat !== cat.id) { _shopQueryCat = cat.id; _shopQuery = ''; _shopFoundIds = new Set(); }
+    const searchBar = (data && data.stores?.length) ? `
+        <div class="gp-shop-search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="gp-shop-search" type="text" placeholder="Поиск по магазинам..." value="${esc(_shopQuery)}" autocomplete="off">
+            <button class="gp-iconbtn" id="gp-shop-search-ai" title="Подобрать через ИИ" ${_shopSearchBusy ? 'disabled' : ''}>${_shopSearchBusy ? ic('fa-spinner fa-spin') : ic('fa-wand-magic-sparkles')}</button>
+        </div>
+        <div id="gp-shop-search-empty" class="gp-empty-text" style="display:none;padding:10px;text-align:center">Ничего не нашлось — жми ${ic('fa-wand-magic-sparkles')}, подберём под запрос</div>` : '';
+
     setHtmlKeepScroll(screen, '.gp-shop-scroll', `
         <div class="gp-header gp-thread-header">
             <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
@@ -3870,11 +4206,37 @@ function renderShopCat(screen) {
             ${data && data.stores?.length ? `<button class="gp-iconbtn" id="gp-shop-refresh" title="Обновить каталог" ${busy ? 'disabled' : ''}>${busy ? ic('fa-spinner fa-spin') : ic('fa-rotate')}</button>` : '<span style="width:32px"></span>'}
         </div>
         <div class="gp-shop-balance">Баланс: <b>${esc(fmtMoney(b.balance))}</b></div>
+        ${searchBar}
         <div class="gp-shop-scroll">${body}</div>`);
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shop'));
     screen.querySelector('#gp-shop-gen')?.addEventListener('click', () => doShopGen(cat.id));
     screen.querySelector('#gp-shop-refresh')?.addEventListener('click', () => doShopGen(cat.id));
+    // Поиск: фильтр по мере набора, кнопка — ИИ-подбор под запрос
+    screen.querySelector('#gp-shop-search')?.addEventListener('input', (e) => {
+        _shopQuery = e.target.value;
+        _shopFoundIds = new Set();   // новый запрос — старые «догнавшие» позиции больше не форсируем
+        _applyShopFilter(screen);
+    });
+    screen.querySelector('#gp-shop-search-ai')?.addEventListener('click', async () => {
+        const q = _shopQuery.trim();
+        if (!q) { toast('Впиши, что искать', 'fa-magnifying-glass'); return; }
+        if (_shopSearchBusy) return;
+        _shopSearchBusy = true;
+        render();
+        try {
+            const added = await searchShopItems(cat.id, q);
+            _shopFoundIds = new Set(added.map(a => a.item.id));
+            if (added.length) toast(`Подобрал: ${added.length} поз.`, 'fa-wand-magic-sparkles');
+            else toast('Ничего нового не нашлось', 'fa-circle-exclamation');
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 70), 'fa-circle-exclamation');
+        } finally {
+            _shopSearchBusy = false;
+            render();
+        }
+    });
+    _applyShopFilter(screen);
     screen.querySelectorAll('[data-buy]').forEach(btn => btn.addEventListener('click', () => {
         const [storeId, itemId] = btn.getAttribute('data-buy').split('|');
         const order = buyItem(cat.id, storeId, itemId);
@@ -4113,7 +4475,7 @@ function flushCasinoSession() {
     if (!s || !s.spins) return;
     const net = s.won - s.wagered;
     const outcome = net > 0 ? `в плюсе на ${fmtMoney(net)}` : net < 0 ? `в минусе на ${fmtMoney(-net)}` : 'вышла в ноль';
-    logSocialToChat(`${getUserName()} играла в онлайн-казино с телефона: ставок на ${fmtMoney(s.wagered)} (${s.spins} раунд.), итог — ${outcome}.`);
+    logSocialToChat(`${getUserName()} играет в онлайн-казино с телефона: ставок на ${fmtMoney(s.wagered)} (${s.spins} раунд.), итог — ${outcome}.`);
     applyChatHiding();
 }
 let _casinoBusy = false;
@@ -4349,7 +4711,7 @@ function renderDiscord(screen) {
         </div>` : `
         <div class="gp-empty">
             <div class="gp-empty-icon">${brand('fa-discord')}</div>
-            <div class="gp-empty-text">${ic('fa-plus')} — найти серверы, где ты могла бы состоять<br>${ic('fa-crown')} — создать свой сервер</div>
+            <div class="gp-empty-text">${ic('fa-plus')} — найти серверы, где можно состоять<br>${ic('fa-crown')} — создать свой сервер</div>
         </div>`;
     screen.innerHTML = `
         <div class="gp-dc-skin">
@@ -5114,7 +5476,7 @@ async function doSend(key) {
         // Генерируем ответ «тихо» — generateQuietPrompt не триггерит JS Runner,
         // Extra блоки и другие скрипты. Результат вставляем призраком.
         const ctx = SillyTavern.getContext();
-        const msgKind = asVoice ? 'VOICE message (they hear her voice; this is the transcript)' : 'message';
+        const msgKind = asVoice ? 'VOICE message (they hear their voice; this is the transcript)' : 'message';
         const quietPrompt = isGroup
             ? `Continue the roleplay. The group chat «${name}» (members: ${(t.members || []).join(', ')}) just received this ${msgKind} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply as the group members — ONLY hidden tel:sms tags with the "chat" field (RULE 3 — PHONE-ONLY MODE), one tag per message, several members may text. No visible prose.`
             : `Continue the roleplay. ${name} just received this ${asVoice ? msgKind : 'SMS'} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
@@ -5257,7 +5619,34 @@ export function resetIncomingCounters() {
 
 // ═══ Инициализация ═══
 
+// Приложение-обёртка (Tauri Tavern и подобные) рисует свою системную панель
+// поверх страницы. Два шага: просим у вьюпорта безопасные отступы и, если
+// обёртка их всё-таки не отдаёт, помечаем body — CSS подставит запасные.
+function setupNativeShell() {
+    try {
+        const meta = document.querySelector('meta[name="viewport"]');
+        if (meta && !/viewport-fit/i.test(meta.content || '')) {
+            meta.content = `${meta.content}, viewport-fit=cover`;
+        }
+        const forced = getSettings().forceSafeArea;
+        const isNative = !!(window.__TAURI__ || window.__TAURI_INTERNALS__ || window.Capacitor || /wv|Tauri/i.test(navigator.userAgent));
+        if (!isNative && !forced) return;
+        document.body.classList.add('gp-native-shell');
+        if (forced) return;   // выставлено вручную — автопроверка не отменяет
+        // Проверяем, отдала ли обёртка настоящие отступы: если да, запасные не нужны
+        requestAnimationFrame(() => {
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;top:0;height:env(safe-area-inset-top,0px);visibility:hidden';
+            document.body.appendChild(probe);
+            const real = probe.getBoundingClientRect().height;
+            probe.remove();
+            if (real > 0) document.body.classList.remove('gp-native-shell');
+        });
+    } catch (e) { /* ignore */ }
+}
+
 export function initUI() {
+    setupNativeShell();
     createFab();
     createPhone();
     createWandButton();

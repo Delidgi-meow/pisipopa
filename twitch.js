@@ -72,7 +72,7 @@ export async function tickStream(id, userComment = null, donation = null) {
         saveMeta();
         logSocialToChat(donation
             ? `${getUserName()} задонатила стримеру ${s.streamer} ${fmtMoney(donation.amount)} на стриме «${s.title}»${userComment ? ` с сообщением: «${userComment}»` : ''}`
-            : `${getUserName()} смотрит стрим «${s.title}» (${s.streamer}) и написала в чат: «${userComment}»`);
+            : `${getUserName()} смотрит стрим «${s.title}» (${s.streamer}) и пишет в чат: «${userComment}»`);
     }
     _inflight = true;
     try {

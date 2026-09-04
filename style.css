@@ -79,6 +79,38 @@
 }
 
 .gp-hidden { display: none !important; }
+/* Кнопки действий — одной строкой, с переносом на узкой панели */
+#gp-settings-drawer .gp-settings-actions {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin-top: 5px;
+}
+#gp-settings-drawer .gp-settings-actions .gp-settings-reset {
+    flex: 1 1 auto; margin: 0; white-space: nowrap; text-align: center;
+}
+/* Стоп генерации — полупрозрачный кружок в углу превью */
+.gp-gen-stop {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 11px;
+    color: rgba(255,255,255,.85);
+    background: rgba(10,10,14,.42);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: background .15s, opacity .15s;
+    z-index: 4;
+}
+.gp-gen-stop:hover { background: rgba(10,10,14,.7); color: #fff; }
+.gp-gen-stop:active { transform: scale(.92); }
+/* в пузыре ММС превью меньше — кнопка тоже */
+.gp-bubble-img .gp-gen-stop { top: 5px; right: 5px; width: 22px; height: 22px; font-size: 10px; }
+
+/* Кнопки панели настроек, которые стирают данные */
+.gp-settings-danger { border-color: rgba(226,75,74,.5) !important; color: #ff8f8e !important; }
+.gp-settings-danger:hover { background: rgba(226,75,74,.12) !important; }
 
 /* Смс-переписка, спрятанная из ленты чата (сообщения остаются в истории/контексте) */
 #chat .mes.gp-sms-hidden { display: none !important; }
@@ -301,6 +333,25 @@
     min-height: 0;
     padding: 4px 12px 0;
 }
+/* Полноэкранные приложения: свой фон до самых краёв корпуса */
+#gp-screen.gp-screen-bleed { padding: 0; }
+#gp-screen.gp-screen-bleed > * { border-radius: 0; }
+/* Полоска «домой» ложится ПОВЕРХ контента, как на настоящем телефоне,
+   иначе снизу остаётся полоса фона корпуса */
+#gp-phone:has(> #gp-screen.gp-screen-bleed) > .gp-homebar {
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    margin: 0;
+    transform: translateX(-50%);
+    z-index: 6;
+    pointer-events: none;
+    background: rgba(255,255,255,.45);
+    box-shadow: 0 0 6px rgba(0,0,0,.5);
+}
+/* Поля ввода в полноэкранных скинах не должны уходить под эту полоску */
+#gp-screen.gp-screen-bleed .gp-dc-inputwrap,
+#gp-screen.gp-screen-bleed .gp-twch-inputbar { padding-bottom: 18px; }
 
 .gp-header {
     flex: 0 0 auto;
@@ -1678,8 +1729,28 @@
     #gp-fab { right: 12px; bottom: 150px; }
     /* остров не нужен на реальном телефоне — там свой */
     .gp-island { display: none; }
-    .gp-statusbar { padding-top: 12px; }
+    /* Системная панель устройства (часы, запись, батарея) перекрывает верх
+       телефона в приложении-обёртке. Отступаем на её высоту: env() отдаёт
+       ноль там, где выреза нет, поэтому в браузере ничего не меняется. */
+    .gp-statusbar { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+    .gp-homebar { margin-bottom: calc(9px + env(safe-area-inset-bottom, 0px)); }
+    #gp-screen.gp-screen-bleed { padding-bottom: env(safe-area-inset-bottom, 0px); }
+    #gp-phone:has(> #gp-screen.gp-screen-bleed) > .gp-homebar {
+        bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    }
 }
+/* Плавающая кнопка тоже не должна лезть под системную панель */
+#gp-fab {
+    margin-top: env(safe-area-inset-top, 0px);
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* Обёртка не отдала безопасные отступы — подставляем запасные вручную:
+   высота системной панели на телефонах примерно такая. */
+body.gp-native-shell .gp-statusbar { padding-top: 34px; }
+body.gp-native-shell .gp-homebar { margin-bottom: 20px; }
+body.gp-native-shell #gp-fab { margin-top: 34px; margin-bottom: 20px; }
+body.gp-native-shell #gp-phone:has(> #gp-screen.gp-screen-bleed) > .gp-homebar { bottom: 22px; }
+body.gp-native-shell #gp-screen.gp-screen-bleed { padding-bottom: 14px; }
 
 /* Кнопка закрытия в статус-баре (на мобильном фуллскрине «тапнуть мимо» нельзя) */
 .gp-close {
@@ -3409,3 +3480,67 @@ body.gp-theme-minimal .gp-toast-ava {
     font-family: Consolas, monospace; font-size: 10px; line-height: 1.5;
     white-space: pre-wrap; word-break: break-word;
 }
+
+/* Поиск по витрине магазина */
+.gp-shop-search {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 6px 8px; padding: 4px 8px 4px 12px;
+    border-radius: 12px; background: var(--gp-glass);
+    border: 1px solid var(--gp-border-soft);
+}
+.gp-shop-search > i { opacity: .55; font-size: 13px; flex: 0 0 auto; }
+.gp-shop-search input {
+    flex: 1 1 auto; min-width: 0; background: transparent; border: none; outline: none;
+    color: var(--gp-text); font-size: 14px; padding: 6px 0;
+}
+.gp-shop-search input::placeholder { color: var(--gp-text); opacity: .45; }
+.gp-shop-search .gp-iconbtn { flex: 0 0 auto; }
+
+/* ═══ Музыка ═══ */
+.gp-mus-tabs { display: flex; gap: 6px; padding: 0 6px 8px; }
+.gp-mus-tab {
+    flex: 1; padding: 7px 0; border-radius: 10px; border: 1px solid var(--gp-border-soft);
+    background: var(--gp-glass); color: var(--gp-text); opacity: .65; font-size: 13px; cursor: pointer;
+}
+.gp-mus-tab.on { opacity: 1; border-color: var(--gp-accent, #7aa2ff); font-weight: 600; }
+.gp-mus-srcs { display: flex; gap: 6px; margin: 0 6px 8px; }
+.gp-mus-src {
+    flex: 1; padding: 5px 0; border-radius: 9px; border: 1px solid var(--gp-border-soft);
+    background: transparent; color: var(--gp-text); opacity: .6; font-size: 12px; cursor: pointer;
+}
+.gp-mus-src.on { opacity: 1; background: var(--gp-glass); font-weight: 600; }
+.gp-mus-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 6px; }
+.gp-mus-track {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 6px 6px; padding: 8px 10px; border-radius: 12px;
+    background: var(--gp-glass); border: 1px solid var(--gp-border-soft); cursor: pointer;
+}
+.gp-mus-track.current { border-color: var(--gp-accent, #7aa2ff); }
+.gp-mus-track-body { flex: 1 1 auto; min-width: 0; }
+.gp-mus-track-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gp-mus-track-artist { font-size: 11px; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gp-mus-play-ic { opacity: .4; flex: 0 0 auto; }
+.gp-mus-qhead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 2px 12px 8px; font-size: 12px; opacity: .75;
+}
+.gp-mus-keys { margin: 10px 6px; padding: 10px; border-radius: 12px; background: var(--gp-glass); border: 1px dashed var(--gp-border-soft); }
+.gp-mus-keys-title { font-size: 11px; opacity: .6; margin-bottom: 6px; }
+.gp-mus-keys input {
+    width: 100%; box-sizing: border-box; margin-top: 6px; padding: 7px 10px; border-radius: 9px;
+    background: transparent; border: 1px solid var(--gp-border-soft); color: var(--gp-text); font-size: 12px; outline: none;
+}
+.gp-mus-now {
+    flex: 0 0 auto; margin: 0 6px 8px; padding: 10px 12px; border-radius: 14px;
+    background: var(--gp-glass); border: 1px solid var(--gp-accent, #7aa2ff);
+}
+.gp-mus-now-info { margin-bottom: 6px; }
+.gp-mus-controls { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 2px 0 6px; }
+.gp-mus-playbtn { width: 44px; height: 44px; border-radius: 50% !important; font-size: 16px; }
+.gp-mus-progress { display: flex; align-items: center; gap: 8px; font-size: 10px; opacity: .85; }
+.gp-mus-bar { flex: 1 1 auto; height: 5px; border-radius: 3px; background: rgba(127,127,127,.3); cursor: pointer; overflow: hidden; }
+.gp-mus-bar-fill { height: 100%; width: 0; background: var(--gp-accent, #7aa2ff); border-radius: 3px; transition: width .4s linear; }
+.gp-mus-vol { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; opacity: .8; }
+.gp-mus-vol input { flex: 1 1 auto; height: 14px; }
+.gp-mus-eq { background: #4caf50 !important; }
+.gp-app-music { background: linear-gradient(135deg, #e91e63, #9c27b0); }

@@ -28,7 +28,7 @@ const DICT = {
     'Разблокировать': 'Unblock', 'Заблокировать': 'Block', 'Заблокировать аккаунт': 'Block account',
     'Обновить ленту': 'Refresh feed', 'Обновить каталог': 'Refresh catalog', 'Обновить предложения': 'Refresh offers',
     'Перегенерировать': 'Regenerate', 'Другой ответ': 'Another reply', 'Не сейчас': 'Not now',
-    'Сбросить кнопку': 'Reset button', 'Отчёт: последние действия': 'Report: recent activity', 'Отчёт скопирован в буфер': 'Report copied to clipboard', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
+    'Сбросить кнопку': 'Reset button', 'Отчёт: последние действия': 'Report: recent activity', 'Экран с системной панелью (сдвинуть телефон)': 'Screen with a system bar (shift the phone)', 'Перегенерировать пост': 'Regenerate post', 'Пересобрать ленту заново': 'Rebuild the feed', 'Дописать в ленту': 'Add to the feed', 'Пост переписан': 'Post rewritten', 'Не получилось переписать пост': 'Could not rewrite the post', 'Остановить генерацию': 'Stop generating', 'Остановить': 'Stop', 'Генерация остановлена': 'Generation stopped', 'Очистить телефон в этом чате': 'Wipe the phone in this chat', 'Сброс к заводским настройкам': 'Factory reset', 'Данные телефона в этом чате стёрты': 'Phone data in this chat wiped', 'Сброшено к заводским настройкам': 'Reset to factory settings', 'Отчёт скопирован в буфер': 'Report copied to clipboard', 'Сбросить настройки': 'Reset settings', 'Убрать из истории': 'Remove from history',
     'Пусто': 'Empty', 'случайный': 'random', 'авто': 'auto', 'Сегодня': 'Today', 'сейчас': 'now',
     'Имя': 'Name', 'Номер': 'Number', 'Название': 'Title', 'Описание': 'Description',
     'Категория': 'Category', 'Сумма': 'Amount', 'Цена': 'Price', 'Стиль': 'Style',
@@ -62,7 +62,7 @@ const DICT = {
     'Серверы не сгенерировались — попробуй ещё раз': 'Servers failed to generate — try again',
     'Канал молчит — попробуй ещё раз': 'The channel is silent — try again',
     'Нажми ↻ — канал оживёт, или напиши первой': 'Tap ↻ to bring the channel alive, or post first',
-    '— найти серверы, где ты могла бы состоять': '— find servers you could be a member of',
+    '— найти серверы, где можно состоять': '— find servers you could be a member of',
     '— создать свой сервер': '— create your own server',
     'Текстовые каналы': 'Text channels', 'Покинуть сервер': 'Leave server',
     'Найти серверы': 'Find servers', 'Начало канала.': 'The beginning of the channel.',
@@ -242,6 +242,10 @@ const DICT = {
     'заказ доставлен': 'order delivered', 'Курьер не отвечает — попробуй ещё раз': 'The courier is not responding — try again',
     'Курьер не назначился — попробуй ещё раз': 'No courier assigned — try again',
     'Уведомления': 'Notifications', 'Экран блокировки': 'Lock screen',
+    'Включить': 'Turn on', 'Выключить системы': 'Turn systems off',
+    'Системы включены': 'Systems on', 'Системы выключены': 'Systems off',
+    'Подписчики, охваты, репутация, реклама и сюжетные повороты выключены. Посты и комментарии работают как обычно.':
+        'Followers, reach, reputation, ads and story twists are off. Posts and comments work as usual.',
     'Минимал': 'Minimal', 'Строгие грани': 'Hard edges',
     'Метка времени в ответах': 'Timestamp in replies',
     'Аврора': 'Aurora', 'Кольцо-таймер': 'Timer ring', 'Аватар': 'Avatar', 'Пузырь': 'Bubble',
@@ -380,6 +384,7 @@ const RULES = [
     [/^Выгнать (.+) с сервера\?$/, 'Kick $1 from the server?'],
     [/^Убрать (.+) из списка участников\?$/, 'Remove $1 from the member list?'],
     [/^Приглашён(?:а)?: (.+)$/, 'Invited: $1'],
+    [/^Данные телефона в этом чате стёрты(.*)$/, 'Phone data in this chat wiped$1'],
     [/^(.+): так выглядят уведомления$/, '$1: this is how notifications look'],
     // Доставка. Сам срок («~35 мин») собирается уже на нужном языке в fmtEta:
     // он попадает внутрь этих строк, и подстрочное правило ловило бы

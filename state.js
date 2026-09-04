@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.5.9';
+export const GP_VERSION = '2.14.3';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -39,11 +39,17 @@ const defaultSettings = () => ({
     // third-party расширений подходящее — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
     imageGenExtension: '',
+    // Какое картинко-расширение брать, если установлено несколько
+    // ('' = автоматически: настроенное побеждает пустое)
+    imageCfgKey: '',
     // Генерация картинок: модель-оверрайд ('' = модель из настроек расширения)
     imageGenModel: '',
+    // Модель расширения на момент выбора оверрайда: если её там сменили,
+    // оверрайд считается устаревшим и телефон следует за расширением
+    imageGenModelBase: '',
     // Профиль подключения картинко-расширения ТОЛЬКО для телефона
     // ('' = активный профиль основного чата). Профили живут в
-    // extension_settings.inline_image_gen.connectionProfiles (общие для форков)
+    // Профили живут в настройках самого картинко-расширения (connectionProfiles)
     imageGenProfileId: '',
     // Стиль картинко-расширения ТОЛЬКО для телефона ('' = активный стиль).
     // Стили у новорака ГЛОБАЛЬНЫЕ (не входят в профиль подключения) — поэтому
@@ -91,8 +97,15 @@ const defaultSettings = () => ({
     // Журнал соцсетей: посты юзера пишутся скрытой строкой в чат — попадают в контекст
     // по месту в истории и в саммарайз (долговременная память без роста инжекта)
     socialLogToChat: true,
+    // Экран с системной панелью (приложения-обёртки вроде Tauri Tavern):
+    // сдвигает телефон и кнопку из-под неё. Определяется автоматически,
+    // здесь — ручной оверрайд, если обёртка не отдала безопасные отступы.
+    forceSafeArea: false,
     // Компактные правила в инжекте (экономия ~60% токенов директивы)
     compactRules: false,
+    // Соц-системы: подписчики, охваты, репутация, сюжетные ивенты, реклама.
+    // Выключено — соцсети остаются, но постишь просто так, без цифр и поворотов.
+    socialSystems: true,
 });
 
 export function getSettings() {
@@ -140,6 +153,54 @@ export function getMeta() {
     // не должны появляться задним числом при очередном пересканировании chat[].
     if (!m.smsBlocks || typeof m.smsBlocks !== 'object' || Array.isArray(m.smsBlocks)) m.smsBlocks = {};
     return m;
+}
+
+// ── Сброс к заводским ──
+// Два независимых хранилища: настройки расширения общие для всех чатов,
+// данные телефона (контакты, переписки, банк, магазин, соцсети) — свои у
+// каждого чата. Что чистить, решает вызывающий.
+export function factoryReset({ settings = true, chatData = true } = {}) {
+    if (settings) {
+        extension_settings[EXT_NAME] = defaultSettings();
+    }
+    if (chatData) {
+        try { delete chat_metadata[META_KEY]; } catch (e) { chat_metadata[META_KEY] = undefined; }
+        getMeta();          // сразу пересоздаём пустую структуру
+        invalidateChatCache();
+        saveMeta();
+    }
+}
+
+// Следы телефона в САМОЙ истории чата: служебные строки журнала и скрытые
+// теги внутри реплик. Без их удаления контакты и переписки воскресают при
+// первом же пересканировании — метаданные телефона строятся из чата.
+// Возвращает {removed, cleaned} — сколько сообщений удалено и подчищено.
+export async function wipePhoneTraces() {
+    let removed = 0, cleaned = 0;
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx?.chat;
+        if (!Array.isArray(chat)) return { removed, cleaned };
+        const TAGS = /<!--\s*tel:[\s\S]*?-->\s*/gi;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            const m = chat[i];
+            if (!m || typeof m.mes !== 'string') continue;
+            // Целиком наши строки журнала — удаляем сообщение
+            if (/<!--\s*tel:log\s*-->/i.test(m.mes)) {
+                chat.splice(i, 1);
+                removed++;
+                continue;
+            }
+            if (!/<!--\s*tel:/i.test(m.mes)) continue;
+            const next = m.mes.replace(TAGS, '').replace(/\n{3,}/g, '\n\n').trim();
+            if (next !== m.mes) { m.mes = next; cleaned++; }
+        }
+        invalidateChatCache();
+        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
+    } catch (e) {
+        console.warn('[GlassPhone] wipePhoneTraces failed:', e);
+    }
+    return { removed, cleaned };
 }
 
 // ── Имя {{user}} и проверка «это она сама» ──
@@ -393,14 +454,28 @@ export function textMentionsName(text, name) {
     if (!t || !name) return false;
     const isWordChar = (c) => !!c && /[a-zа-яё0-9ё]/i.test(c);
     const words = nameAliases(name);
-    for (const w of words) {
+    const hit = (needle, maxTail) => {
         let from = 0, i;
-        while ((i = t.indexOf(w, from)) !== -1) {
+        while ((i = t.indexOf(needle, from)) !== -1) {
             const before = t[i - 1];
-            const after = t[i + w.length];
-            if (!isWordChar(before) && !isWordChar(after)) return true;
+            if (!isWordChar(before)) {
+                // Хвост — падежное окончание: «Татьяну», «Татьяной», «Елисея»
+                for (let tail = 0; tail <= maxTail; tail++) {
+                    const after = t[i + needle.length + tail];
+                    if (tail > 0 && !isWordChar(t[i + needle.length + tail - 1])) break;
+                    if (!isWordChar(after)) return true;
+                }
+            }
             from = i + 1;
         }
+        return false;
+    };
+    for (const w of words) {
+        if (hit(w, 0)) return true;
+        // Русские имена склоняются: ищем основу, разрешая до двух букв
+        // окончания. Основа короче четырёх букв ловила бы «вер» в «верно».
+        const stem = w.slice(0, -1);
+        if (stem.length >= 4 && hit(stem, 2)) return true;
     }
     return false;
 }

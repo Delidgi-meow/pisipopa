@@ -1,9 +1,9 @@
 
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { getSettings, GP_VERSION, invalidateChatCache } from './state.js';
+import { getSettings, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
-import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles } from './social.js';
+import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
+import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
@@ -65,6 +65,7 @@ function setupSettingsPanel() {
             <summary><i class="fa-solid fa-image"></i><span><b>Изображения</b><small>Модель, формат и промпты</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
             <div class="gp-settings-group-body gp-settings-grid">
                 <label class="gp-settings-field gp-settings-wide"><span>Модель картинок</span><span class="gp-settings-control-row"><input type="text" id="gp-set-imgmodel" class="text_pole" list="gp-imgmodels" placeholder="авто"><datalist id="gp-imgmodels"></datalist><button class="menu_button gp-settings-icon-button" id="gp-imgmodel-refresh" type="button" title="Загрузить список моделей" aria-label="Загрузить список моделей"><i class="fa-solid fa-rotate"></i></button></span></label>
+                <label class="gp-settings-field gp-hidden" id="gp-imgcfg-row"><span>Картинко-расширение</span><select id="gp-set-imgcfg" class="text_pole"></select></label>
                 <label class="gp-settings-field"><span>Профиль картинко-расширения</span><select id="gp-set-imgprofile" class="text_pole"></select></label>
                 <label class="gp-settings-field"><span>Стиль картинок телефона</span><select id="gp-set-imgstyle" class="text_pole"></select></label>
                 <div class="gp-settings-checks gp-settings-wide">
@@ -85,9 +86,14 @@ function setupSettingsPanel() {
                 <div class="gp-settings-checks">
                     <label><input type="checkbox" id="gp-set-sociallog" ${s.socialLogToChat !== false ? 'checked' : ''}><span>Журнал соцсетей в чат</span></label>
                     <label><input type="checkbox" id="gp-set-compact" ${s.compactRules ? 'checked' : ''}><span>Компактные правила в инжекте</span></label>
+                    <label><input type="checkbox" id="gp-set-safearea" ${s.forceSafeArea ? 'checked' : ''}><span>Экран с системной панелью (сдвинуть телефон)</span></label>
                 </div>
-                <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
-                <button class="menu_button gp-settings-reset" id="gp-show-report" type="button">Отчёт: последние действия</button>
+                <div class="gp-settings-actions">
+                    <button class="menu_button gp-settings-reset" id="gp-reset-fab" type="button">Сбросить позицию кнопки</button>
+                    <button class="menu_button gp-settings-reset" id="gp-show-report" type="button">Отчёт: последние действия</button>
+                    <button class="menu_button gp-settings-reset gp-settings-danger" id="gp-wipe-chat" type="button">Очистить телефон в этом чате</button>
+                    <button class="menu_button gp-settings-reset gp-settings-danger" id="gp-factory-reset" type="button">Сброс к заводским настройкам</button>
+                </div>
                 <pre id="gp-report-box" class="gp-report-box" hidden></pre>
             </div>
         </details>
@@ -103,6 +109,31 @@ function setupSettingsPanel() {
     $('#gp-set-imgprompt-of').val(s.imgPromptOf || '');
     $('#gp-set-imgprompt-twwatch').val(s.imgPromptTwWatch || '');
     $('#gp-set-imgprompt-twmy').val(s.imgPromptTwMy || '');
+    // Источник настроек картинок. Строку показываем, только когда установлено
+    // несколько расширений — иначе выбирать не из чего.
+    {
+        const sel = $('#gp-set-imgcfg');
+        const buckets = listImageBuckets();
+        $('#gp-imgcfg-row').toggleClass('gp-hidden', buckets.length < 2);
+        sel.empty().append(`<option value="">Определять автоматически</option>`);
+        for (const b of buckets) {
+            const note = b.ready ? (b.model || b.apiType) : 'не настроено';
+            sel.append($('<option>').val(b.key).text(`${b.key} — ${note}`));
+        }
+        if (s.imageCfgKey && !buckets.some(b => b.key === s.imageCfgKey)) s.imageCfgKey = '';
+        sel.val(s.imageCfgKey || '');
+        sel.off('change.gp').on('change.gp', function () {
+            getSettings().imageCfgKey = String($(this).val() || '');
+            $('#gp-imgmodels').empty();   // модели и профили относятся к прежнему расширению
+            // Профили и стили принадлежат прежнему расширению — сбрасываем,
+            // иначе телефон рисовал бы чужими настройками
+            getSettings().imageGenProfileId = '';
+            getSettings().imageGenStyleId = '';
+            saveSettingsDebounced();
+            $('#gp-set-imgprofile').empty().append($('<option>').val('').text('Как в основном чате'));
+            $('#gp-set-imgstyle').empty().append($('<option>').val('').text('Как в основном чате'));
+        });
+    }
     // Профили подключения картинко-расширения (общее ведро всех форков).
     // '' = телефон рисует через активный профиль основного чата
     {
@@ -199,7 +230,11 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
     });
     $('#gp-set-imgmodel').on('change', function () {
-        getSettings().imageGenModel = this.value.trim();
+        const st = getSettings();
+        st.imageGenModel = this.value.trim();
+        // Запоминаем, какая модель стояла в расширении: сменит её там —
+        // телефон перестанет держаться за выбранную здесь
+        st.imageGenModelBase = st.imageGenModel ? (currentExtModel() || '') : '';
         saveSettingsDebounced();
     });
     // Список моделей — из автоопределённого картинко-расширения
@@ -226,13 +261,25 @@ function setupSettingsPanel() {
         getSettings().imgTagMode = this.checked;
         saveSettingsDebounced();
     });
-    $('#gp-imgprompt-apply').on('click', function () {
+    // Промпты сохраняются сами, как только уходит фокус: «Применить» легко
+    // не заметить, и генерация уходила со старым текстом
+    const saveImgPrompts = () => {
         getSettings().imgPromptIg = $('#gp-set-imgprompt-ig').val() || '';
         getSettings().imgPromptOf = $('#gp-set-imgprompt-of').val() || '';
         getSettings().imgPromptTwWatch = $('#gp-set-imgprompt-twwatch').val() || '';
         getSettings().imgPromptTwMy = $('#gp-set-imgprompt-twmy').val() || '';
         saveSettingsDebounced();
+    };
+    $('#gp-set-imgprompt-ig, #gp-set-imgprompt-of, #gp-set-imgprompt-twwatch, #gp-set-imgprompt-twmy')
+        .on('change blur', saveImgPrompts);
+    $('#gp-imgprompt-apply').on('click', function () {
+        saveImgPrompts();
         toast('Промпты картинок сохранены', 'fa-check');
+    });
+    $('#gp-set-safearea').on('change', function () {
+        getSettings().forceSafeArea = this.checked;
+        saveSettingsDebounced();
+        document.body.classList.toggle('gp-native-shell', this.checked);
     });
     $('#gp-set-sociallog').on('change', function () {
         getSettings().socialLogToChat = this.checked;
@@ -255,6 +302,48 @@ function setupSettingsPanel() {
             toast('Отчёт скопирован в буфер', 'fa-clipboard-check');
         } catch (e) { /* без буфера — просто показываем */ }
     });
+    // Чистка данных телефона В ЭТОМ ЧАТЕ: контакты, переписки, соцсети, банк,
+    // магазин, дискорд, заметки. Настройки расширения не трогаем.
+    $('#gp-wipe-chat').on('click', async function () {
+        if (!confirm('Стереть все данные телефона в ЭТОМ чате?\n\nУдалятся контакты, переписки, посты, банк, заказы, дискорд и заметки. Настройки расширения останутся.\n\nОтменить это будет нельзя.')) return;
+        // Контакты и переписки строятся ИЗ ЧАТА: не убрав теги и строки
+        // журнала из истории, телефон восстановит их при первом же скане
+        const alsoChat = confirm('Убрать следы и из самой истории чата?\n\nЭто удалит служебные строки «Событие мира» и скрытые теги телефона из реплик. Без этого контакты и переписки вернутся при следующем сканировании.\n\nСообщения ролевой не пострадают.');
+        factoryReset({ settings: false, chatData: true });
+        let note = '';
+        if (alsoChat) {
+            const { removed, cleaned } = await wipePhoneTraces();
+            note = ` · история: −${removed}, правок ${cleaned}`;
+        }
+        resetIncomingCounters();
+        updatePhoneInjection();
+        updateFabBadge();
+        applyChatHiding();
+        if (isPhoneOpen()) render();
+        toast(`Данные телефона в этом чате стёрты${note}`, 'fa-broom');
+    });
+
+    // Полный сброс: настройки + данные текущего чата
+    $('#gp-factory-reset').on('click', async function () {
+        if (!confirm('Сбросить ВСЁ к заводскому состоянию?\n\nСлетят настройки расширения (тема, промпты, профили, язык) И данные телефона в этом чате.\n\nДанные в других чатах останутся — их чистить нужно там же, своей кнопкой.')) return;
+        if (!confirm('Точно? Отменить это будет нельзя.')) return;
+        const alsoChat = confirm('Убрать следы и из самой истории чата?\n\nЭто удалит служебные строки «Событие мира» и скрытые теги телефона из реплик. Без этого контакты и переписки вернутся при следующем сканировании.\n\nСообщения ролевой не пострадают.');
+        factoryReset({ settings: true, chatData: true });
+        if (alsoChat) await wipePhoneTraces();
+        saveSettingsDebounced();
+        resetIncomingCounters();
+        applySkin();
+        applyWallpaper();
+        updatePhoneInjection();
+        updateFabBadge();
+        if (isPhoneOpen()) closePhone();
+        applyChatHiding();
+        toast('Сброшено к заводским настройкам', 'fa-broom');
+        // Панель настроек построена из прежних значений — перечитываем
+        $('#gp-settings-drawer').remove();
+        setupSettingsPanel();
+    });
+
     $('#gp-report-box').on('dblclick', function () {
         clearLog();
         this.textContent = buildReport(14);

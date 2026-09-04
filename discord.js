@@ -75,7 +75,7 @@ export async function createOwnDServer(name, theme) {
         };
         d.servers = [srv, ...d.servers].slice(0, 10);
         saveMeta();
-        logSocialToChat(`${getUserName()} создала свой Discord-сервер «${srv.name}»${srv.desc ? ` (${srv.desc})` : ''}`);
+        logSocialToChat(`${getUserName()} создаёт свой Discord-сервер «${srv.name}»${srv.desc ? ` (${srv.desc})` : ''}`);
         return srv;
     } finally {
         _inflight = false;
@@ -123,8 +123,8 @@ export async function postToDChannel(sid, cid, text, replyTo = null) {
     ch.messages = [...ch.messages, entry].slice(-60);
     saveMeta();
     logSocialToChat(entry.replyTo
-        ? `${getUserName()} ответила в дискорд-канале #${ch.name} («${srv.name}») на сообщение ${entry.replyTo.author} «${entry.replyTo.text}»: «${text}»`
-        : `${getUserName()} написала в дискорд-канале #${ch.name} сервера «${srv.name}»: «${text}»`);
+        ? `${getUserName()} отвечает в дискорд-канале #${ch.name} («${srv.name}») на сообщение ${entry.replyTo.author} «${entry.replyTo.text}»: «${text}»`
+        : `${getUserName()} пишет в дискорд-канале #${ch.name} сервера «${srv.name}»: «${text}»`);
     if (_inflight) return 0;
     _inflight = true;
     try {
@@ -147,7 +147,7 @@ export function addDMember(sid, name) {
     if (srv.members.some(m => m.toLowerCase() === n.toLowerCase())) return false;
     srv.members.push(n);
     saveMeta();
-    if (srv.mine) logSocialToChat(`${getUserName()} пригласила ${n} на свой Discord-сервер «${srv.name}»`);
+    if (srv.mine) logSocialToChat(`${getUserName()} приглашает ${n} на свой Discord-сервер «${srv.name}»`);
     return true;
 }
 
@@ -158,7 +158,7 @@ export function delDMember(sid, name) {
     srv.members = srv.members.filter(m => m !== name);
     if (srv.members.length === before) return false;
     saveMeta();
-    if (srv.mine) logSocialToChat(`${getUserName()} выгнала ${name} со своего Discord-сервера «${srv.name}»`);
+    if (srv.mine) logSocialToChat(`${getUserName()} выгоняет ${name} со своего Discord-сервера «${srv.name}»`);
     return true;
 }
 

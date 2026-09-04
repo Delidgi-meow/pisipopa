@@ -53,5 +53,5 @@ export function notesInjectBlock() {
     const shared = getSharedNotes();
     if (!shared.length) return '';
     const lines = shared.slice(0, 6).map(n => `- ${n.text.slice(0, 300)}`).join('\n');
-    return `[{{user}}'S PHONE NOTES — private thoughts/plans she wrote in her notes app. Background knowledge for YOU as narrator; characters DO NOT know these unless she shows or tells them]\n${lines}`;
+    return `[{{user}}'S PHONE NOTES — private thoughts/plans they wrote in their notes app. Background knowledge for YOU as narrator; characters DO NOT know these unless they shows or tells them]\n${lines}`;
 }

@@ -144,6 +144,30 @@
 /* Скрытие настройкой «Плавающая кнопка»: id+class перебивает #gp-fab{display:flex!important} */
 #gp-fab.gp-hidden { display: none !important; }
 
+/* Мини-кнопка пуск/пауза под FAB */
+#gp-mini-play {
+    position: fixed;
+    z-index: 2147482901;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(20, 18, 26, 0.7);
+    color: var(--gp-text, #fff);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    opacity: 0.75;
+    transition: opacity .2s, transform .15s;
+}
+#gp-mini-play:hover { opacity: 1; }
+#gp-mini-play:active { transform: scale(0.9); }
+
+
 /* Полупрозрачный силуэт без уведомлений (только на устройствах с курсором) */
 @media (hover: hover) {
     #gp-fab.gp-fab-idle { opacity: 0.35; }

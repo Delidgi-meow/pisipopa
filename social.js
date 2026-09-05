@@ -1,4 +1,4 @@
-import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced } from '../../../../script.js';
+import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced, getRequestHeaders } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext, isUserName } from './state.js';
@@ -1066,6 +1066,24 @@ function profileInfo(profileId) {
     };
 }
 
+// Прямой запрос к провайдеру со СВОИМ ключом из настроек телефона.
+// Не трогает глобальные секреты ST → чат и телефон работают параллельно, без гонки ключей.
+async function directRequest(built, messages, maxTokens, apiKey) {
+    const base = String(built.profile['api-url'] || '').replace(/\/+$/, '');
+    if (!base) throw new Error('У профиля нет «api-url» — прямой режим невозможен');
+    if (!built.profile.model) throw new Error('У профиля не указана модель');
+    const res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: built.profile.model, messages, max_tokens: maxTokens, stream: false }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.error) throw new Error(String(json.error?.message || `HTTP ${res.status}`));
+    let content = json.choices?.[0]?.message?.content ?? json.choices?.[0]?.text ?? '';
+    if (Array.isArray(content)) content = content.map(p => p?.text || '').join('');
+    return { content: String(content), info: `${built.info} · direct` };
+}
+
 async function profileRequest(profileId, messages, maxTokens) {
     const ctx = SillyTavern.getContext();
     const cm = ctx?.ConnectionManagerRequestService;
@@ -1074,10 +1092,61 @@ async function profileRequest(profileId, messages, maxTokens) {
     }
     const built = profileInfo(profileId);
     if (!built) throw new Error(`Профиль подключения не найден: ${profileId}`);
-    const res = await cm.sendRequest(profileId, messages, maxTokens, {
-        stream: false, extractData: true, includePreset: false, includeInstruct: false,
-    });
-    return { content: await extractGeneratedText(res), info: `${built.info} · Connection Manager` };
+
+    // Сервер ST берёт ключ из АКТИВНОГО секрета источника, а не из профиля —
+    // поэтому профиль «работал» только когда чат стоял на нём же. Крутим
+    // секрет на профильный перед запросом и возвращаем обратно после.
+    const secretId = built.profile['secret-id'];
+    const secretKey = secretKeyForApi(built.profile.api);
+    let prevSecretId = null;
+    let rotated = false;
+    if (secretId && secretKey) {
+        prevSecretId = await getActiveSecretId(secretKey);
+        if (prevSecretId && prevSecretId !== secretId) {
+            rotated = await rotateSecretServerOnly(secretKey, secretId);
+            if (rotated) logReq('секрет', `переключили на профильный для ${secretKey}`);
+        }
+    }
+
+    try {
+        const res = await cm.sendRequest(profileId, messages, maxTokens, {
+            stream: false, extractData: true, includePreset: false, includeInstruct: false,
+        });
+        return { content: await extractGeneratedText(res), info: `${built.info} · Connection Manager` };
+    } finally {
+        if (rotated && prevSecretId) {
+            rotateSecretServerOnly(secretKey, prevSecretId).catch(() => {});
+        }
+    }
+}
+
+// api источника → имя ключа в secrets.json (у google ключ исторически makersuite)
+const API_TO_SECRET_KEY = { google: 'api_key_makersuite', vertexai: 'api_key_vertexai_serviceaccount' };
+function secretKeyForApi(api) {
+    const a = String(api || '').toLowerCase().trim();
+    if (!a) return null;
+    return API_TO_SECRET_KEY[a] || `api_key_${a}`;
+}
+
+async function getActiveSecretId(secretKey) {
+    try {
+        const res = await fetch('/api/secrets/read', { method: 'POST', headers: getRequestHeaders() });
+        if (!res.ok) return null;
+        const state = await res.json();
+        const list = state?.[secretKey];
+        return Array.isArray(list) ? (list.find(x => x?.active)?.id || null) : null;
+    } catch { return null; }
+}
+
+async function rotateSecretServerOnly(secretKey, secretId) {
+    try {
+        const res = await fetch('/api/secrets/rotate', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ key: secretKey, id: secretId }),
+        });
+        return res.ok;
+    } catch { return false; }
 }
 
 // prefill: строка-начало ответа (учитывается только при включённой опции).
@@ -1121,8 +1190,12 @@ async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '' 
         }
         try {
             const built = profileInfo(profileId);
-            logReq('запрос (профиль)', `${built?.info || profileId}${image ? ' + фото' : ''}${usePrefill ? ' · assistant-prefill' : ''}${useFigureSpaces ? ' · U+2007' : ''} · max ${maxTokens}`);
-            const res = await profileRequest(profileId, requestMessages, maxTokens);
+            const directKey = String(st.directApiKey || '').trim();
+            const useDirect = !!(directKey && !image && built?.profile?.['api-url']);
+            logReq('запрос (профиль)', `${built?.info || profileId}${useDirect ? ' · direct' : ''}${image ? ' + фото' : ''}${usePrefill ? ' · assistant-prefill' : ''}${useFigureSpaces ? ' · U+2007' : ''} · max ${maxTokens}`);
+            const res = useDirect
+                ? await directRequest(built, requestMessages, maxTokens, directKey)
+                : await profileRequest(profileId, requestMessages, maxTokens);
             logOk('ответ (профиль)', `${String(res.content || '').length} симв.`);
             return finish(res.content);
         } catch (e) {
@@ -1212,8 +1285,11 @@ export async function testSocialProfile() {
     const st = getSettings();
     if (!st.socialProfileId) throw new Error('Профиль не выбран (стоит «Текущий API»)');
     const built = profileInfo(st.socialProfileId);
+    const directKey = String(st.directApiKey || '').trim();
     try {
-        const res = await profileRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200);
+        const res = (directKey && built?.profile?.['api-url'])
+            ? await directRequest(built, [{ role: 'user', content: 'Reply with exactly: ok' }], 200, directKey)
+            : await profileRequest(st.socialProfileId, [{ role: 'user', content: 'Reply with exactly: ok' }], 200);
         const out = String(res.content || '').trim();
         // Наружу — куда РЕАЛЬНО ушёл запрос (видно, что не основное подключение)
         const where = res.info || built?.info || '?';
@@ -1712,9 +1788,21 @@ Format: [{"store":"exact existing store name","items":[{"name":"Товар","pri
 }
 
 // ── Подбор музыки под текущую сцену ролевой ──
-export async function generateSceneMood() {
+export async function generateSceneMood(prefs = null) {
+    const vocalRule = prefs?.vocal === 'vocal'
+        ? 'The track MUST have vocals and lyrics (a song, not an instrumental).'
+        : prefs?.vocal === 'instrumental'
+            ? 'The track MUST be instrumental — no vocals, no lyrics.'
+            : '';
+    // Язык имеет смысл только когда слова вообще есть
+    const langRule = (prefs?.vocal === 'instrumental') ? '' : (
+        prefs?.lang === 'ru' ? 'The lyrics MUST be in Russian — pick a Russian-language artist and song.'
+        : prefs?.lang === 'en' ? 'The lyrics MUST be in English — pick an English-language artist and song.'
+        : prefs?.lang === 'other' ? 'Pick a song in a language OTHER than Russian or English (e.g. Japanese, French, Korean, German).'
+        : '');
+    const prefBlock = [vocalRule, langRule].filter(Boolean).join('\n');
     const prompt = `${await taskHeader(`pick ONE music track that fits the current roleplay scene — its mood, tempo and atmosphere.`)}
-The track must be REAL and easy to find on streaming services: well-known enough, correct exact artist and title. Match the genre and language to the scene and setting; if a specific song is playing or mentioned in the scene, prefer it.
+The track must be REAL and easy to find on streaming services: well-known enough, correct exact artist and title. Match the genre and language to the scene and setting; if a specific song is playing or mentioned in the scene, prefer it.${prefBlock ? '\n' + prefBlock : ''}
 "query" = "Artist - Title" for a search engine. "mood" = 2-4 words describing the scene's mood.
 ${uiLangLine()}
 ${JSON_RULES}

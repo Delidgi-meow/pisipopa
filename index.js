@@ -50,6 +50,7 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field"><span>Глубина инжекта</span><input type="number" id="gp-set-depth" class="text_pole gp-settings-number" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}"><small>0 — перед последним ходом</small></label>
                 <label class="gp-settings-field"><span>Макс. длина ответа</span><input type="number" id="gp-set-maxtokens" class="text_pole gp-settings-number" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}"><small>0 = авто</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Профиль для соцсетей</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Свой ключ API для телефона</span><input type="password" id="gp-set-apikey" class="text_pole" autocomplete="off" placeholder="пусто — ключ из профиля" value="${String(s.directApiKey || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"><small>Введён — запросы идут напрямую к провайдеру профиля, чат и телефон работают параллельно. Хранится в настройках таверны.</small></label>
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Изолированно (только срез чата)</option></select></label>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
                 <div class="gp-settings-checks gp-settings-wide">
@@ -393,6 +394,11 @@ function setupSettingsPanel() {
     $('#gp-set-figspaces').on('change', function () {
         getSettings().useFigureSpaces = this.checked;
         saveSettingsDebounced();
+    });
+    $('#gp-set-apikey').on('change', function () {
+        getSettings().directApiKey = this.value.trim();
+        saveSettingsDebounced();
+        toast(this.value.trim() ? 'Ключ телефона сохранён — прямые запросы' : 'Ключ убран — через профиль', 'fa-key');
     });
     // Проверка профиля подключения — показывает РЕАЛЬНУЮ ошибку (а не «API request failed»)
     $('#gp-profile-test').on('click', async function () {

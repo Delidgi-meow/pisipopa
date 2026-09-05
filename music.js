@@ -1,11 +1,13 @@
-// ═══ Музыка: движок плейбека, источники (Jamendo / YouTube / радио), RP-подбор ═══
+// ═══ Музыка: плейбек (Audio + YouTube iframe), источники, радио, RP-подбор ═══
 
 import { generateSceneMood } from './social.js';
 
 const LS_CFG = 'gp_music_cfg_v1';
 const LS_QUEUE = 'gp_music_queue_v1';
 const DEFAULT_JAMENDO_KEY = '6fcc94f7';
-const INVIDIOUS = ['https://inv.thepixora.com', 'https://invidious.jing.rocks', 'https://yt.artemislena.eu', 'https://invidious.private.coffee'];
+const GDS_API = 'https://music-api.gdstudio.xyz/api.php';
+const GDS_SOURCES = ['netease', 'kuwo'];   // что реально поддержано на инстансе
+const INVIDIOUS = ['https://inv.nadeko.net', 'https://invidious.nerdvpn.de', 'https://invidious.f5.si'];
 
 export const SOMA_STATIONS = [
     { name: 'Drone Zone', url: 'https://ice1.somafm.com/dronezone-128-mp3', tag: 'ambient/космос' },
@@ -40,15 +42,27 @@ export const SOMA_STATIONS = [
     { name: 'Covers', url: 'https://ice1.somafm.com/covers-128-mp3', tag: 'каверы/разное' },
 ];
 
-// ── Конфиг: ключи API + громкость ──
-let cfg = { jamendoKey: '', ytKey: '', volume: 0.8 };
+// ── Конфиг: ключи API, громкость, включённые источники ──
+let cfg = { jamendoKey: '', ytKey: '', volume: 0.8, sources: { gds: true, jamendo: true, youtube: true }, moodVocal: 'any', moodLang: 'any' };
 try { cfg = Object.assign(cfg, JSON.parse(localStorage.getItem(LS_CFG) || '{}')); } catch (_) {}
+if (!cfg.sources || typeof cfg.sources !== 'object') cfg.sources = { gds: true, jamendo: true, youtube: true };
+if (!['any', 'vocal', 'instrumental'].includes(cfg.moodVocal)) cfg.moodVocal = 'any';
+if (!['any', 'ru', 'en', 'other'].includes(cfg.moodLang)) cfg.moodLang = 'any';
 
 function saveCfg() { try { localStorage.setItem(LS_CFG, JSON.stringify(cfg)); } catch (_) {} }
-export function getMusicCfg() { return { jamendoKey: cfg.jamendoKey, ytKey: cfg.ytKey, volume: cfg.volume }; }
+export function getMusicCfg() { return { jamendoKey: cfg.jamendoKey, ytKey: cfg.ytKey, volume: cfg.volume, sources: { ...cfg.sources }, moodVocal: cfg.moodVocal, moodLang: cfg.moodLang }; }
+// Предпочтения для ✨-подбора под сцену: голос (any|vocal|instrumental), язык (any|ru|en|other)
+export function setMoodPrefs({ vocal, lang } = {}) {
+    if (vocal !== undefined && ['any', 'vocal', 'instrumental'].includes(vocal)) { cfg.moodVocal = vocal; saveCfg(); }
+    if (lang !== undefined && ['any', 'ru', 'en', 'other'].includes(lang)) { cfg.moodLang = lang; saveCfg(); }
+}
 export function setMusicKeys({ jamendoKey, ytKey }) {
     if (jamendoKey !== undefined) cfg.jamendoKey = String(jamendoKey).trim();
     if (ytKey !== undefined) cfg.ytKey = String(ytKey).trim();
+    saveCfg();
+}
+export function setMusicSourceEnabled(name, on) {
+    cfg.sources[name] = !!on;
     saveCfg();
 }
 const jamKey = () => cfg.jamendoKey || DEFAULT_JAMENDO_KEY;
@@ -93,9 +107,24 @@ export function fmtTime(sec) {
 // ── Тикер прогресса: дёргает DOM напрямую, без перерисовки экрана ──
 setInterval(() => {
     const t = curIdx >= 0 ? queue[curIdx] : null;
+    // Мини-кнопка пуск/пауза под FAB — без открытия телефона
+    const mp = document.getElementById('gp-mini-play');
+    if (mp) {
+        const fab = document.getElementById('gp-fab');
+        const fabVisible = !!(fab && fab.offsetParent !== null);
+        const show = !!(fabVisible && t);
+        mp.classList.toggle('gp-hidden', !show);
+        if (show) {
+            mp.style.left = `${fab.offsetLeft + 9}px`;
+            mp.style.top = `${fab.offsetTop + 54}px`;
+            const want = playing ? 'fa-pause' : 'fa-play';
+            const icn = mp.firstElementChild;
+            if (icn && !icn.classList.contains(want)) icn.className = `fa-solid ${want}`;
+        }
+    }
     if (!t) return;
     let cur = 0, dur = 0;
-    if (t.kind === 'radio') { cur = 0; dur = 0; }
+    if (t.kind === 'radio') { /* LIVE */ }
     else if (t.kind === 'yt') {
         if (ytReady && ytPlayer?.getCurrentTime) {
             try { cur = ytPlayer.getCurrentTime() || 0; dur = ytPlayer.getDuration() || 0; } catch (_) {}
@@ -122,14 +151,15 @@ function ensureYtApi() {
             s.onerror = () => reject(new Error('yt_api_load'));
             document.head.appendChild(s);
         }
-        setTimeout(() => window.YT?.Player ? resolve() : reject(new Error('yt_api_timeout')), 8000);
+        setTimeout(() => window.YT?.Player ? resolve() : reject(new Error('yt_api_timeout')), 10000);
     });
+    ytApiPromise.catch(() => { ytApiPromise = null; });   // дать повторить при следующей попытке
     return ytApiPromise;
 }
 
 async function ensureYtPlayer() {
     await ensureYtApi();
-    if (ytPlayer) return ytPlayer;
+    if (ytPlayer && ytReady) return ytPlayer;
     const holder = document.createElement('div');
     holder.id = 'gp-music-yt-holder';
     holder.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none';
@@ -142,13 +172,47 @@ async function ensureYtPlayer() {
                 onReady: () => { ytReady = true; resolve(ytPlayer); },
                 onStateChange: (e) => {
                     if (e.data === window.YT.PlayerState.ENDED) nextTrack(true);
-                    if (e.data === window.YT.PlayerState.PLAYING && !playing) { playing = true; emit(); }
+                    if (e.data === window.YT.PlayerState.PLAYING && !playing) { playing = true; statusMsg = ''; emit(); }
                     if (e.data === window.YT.PlayerState.PAUSED && playing) { playing = false; emit(); }
                 },
-                onError: () => { statusMsg = 'Ролик недоступен для встраивания'; nextTrack(true); },
+                onError: () => { statusMsg = 'Ролик не встраивается'; playing = false; emit(); },
             },
         });
-        setTimeout(() => ytReady ? null : reject(new Error('yt_player_timeout')), 8000);
+        setTimeout(() => ytReady ? null : reject(new Error('yt_player_timeout')), 10000);
+    });
+}
+
+// Предпроверка: официальные клипы часто запрещают встраивание (ошибка 101/150
+// прилетает только при попытке играть). Мьютим, дёргаем play, смотрим исход.
+function checkYtEmbeddable(ytid) {
+    return new Promise(async (resolve) => {
+        let done = false;
+        let p = null;
+        const holder = document.createElement('div');
+        holder.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:2px;height:2px;opacity:0;pointer-events:none';
+        document.body.appendChild(holder);
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            clearTimeout(to);
+            try { p?.stopVideo?.(); } catch (_) {}
+            try { p?.destroy?.(); } catch (_) {}
+            try { holder.remove(); } catch (_) {}
+            resolve(ok);
+        };
+        const to = setTimeout(() => finish(false), 6000);
+        try {
+            await ensureYtApi();
+            p = new window.YT.Player(holder, {
+                width: '2', height: '2', videoId: ytid,
+                playerVars: { autoplay: 0, playsinline: 1, rel: 0, origin: location.origin || undefined },
+                events: {
+                    onReady: () => { try { p.mute(); p.playVideo(); } catch (_) {} },
+                    onStateChange: (e) => { if (e.data === window.YT.PlayerState.PLAYING) finish(true); },
+                    onError: () => finish(false),
+                },
+            });
+        } catch (_) { finish(false); }
     });
 }
 
@@ -159,16 +223,68 @@ function stopAll() {
 }
 
 async function playCurrent() {
-    const t = curIdx >= 0 ? queue[curIdx] : null;
+    let t = curIdx >= 0 ? queue[curIdx] : null;
     if (!t) { playing = false; emit(); return; }
     stopAll();
     statusMsg = '';
     try {
-        if (t.kind === 'yt') {
+        if (t.kind === 'gds') {
+            statusMsg = 'Загружаю…';
+            emit();
+            const url = await resolveGdsUrl(t).catch(() => null);
+            if (queue[curIdx] !== t) return;   // трек сменили, пока резолвили
+            if (!url) {
+                statusMsg = 'Трек недоступен — попробуй другой';
+                playing = false;
+                emit();
+                return;
+            }
+            audio.src = url;
+            audio.volume = cfg.volume;
+            audio.loop = false;
+            await audio.play();
+            statusMsg = '';
+        } else if (t.kind === 'yt') {
+            statusMsg = 'Проверяю ролик…';
+            emit();
+            let ok = await checkYtEmbeddable(t.ytid).catch(() => false);
+            // Запрет встраивания — идём по остальным результатам поиска, пока не найдём играбельный
+            if (!ok) {
+                const alts = searchResults.filter(x => x.kind === 'yt' && x.ytid !== t.ytid).slice(0, 6);
+                for (const alt of alts) {
+                    statusMsg = `Пробую другой вариант: ${alt.title.slice(0, 30)}…`;
+                    emit();
+                    if (await checkYtEmbeddable(alt.ytid).catch(() => false)) {
+                        queue[curIdx] = alt;
+                        saveQueue();
+                        t = alt;
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if (queue[curIdx] !== t && !ok) return;   // трек сменили, пока проверяли
+            if (!ok) {
+                statusMsg = 'Все найденные ролики запрещают встраивание — попробуй другой запрос';
+                playing = false;
+                emit();
+                return;
+            }
             const p = await ensureYtPlayer();
             p.setVolume(Math.round(cfg.volume * 100));
+            statusMsg = '';
             p.loadVideoById(t.ytid);
             playing = true;
+            // Мобильный автоплей: если звук не пошёл сам — честно скажем
+            setTimeout(() => {
+                try {
+                    if (queue[curIdx] === t && ytPlayer.getPlayerState && ytPlayer.getPlayerState() !== window.YT.PlayerState.PLAYING) {
+                        statusMsg = 'Браузер придержал автоплей — жми ▶';
+                        playing = false;
+                        emit();
+                    }
+                } catch (_) {}
+            }, 3000);
         } else {
             audio.src = t.url;
             audio.volume = cfg.volume;
@@ -206,7 +322,7 @@ export function togglePlay() {
     if (!t) return;
     if (t.kind === 'yt') {
         if (!ytReady) return;
-        if (playing) ytPlayer.pauseVideo(); else ytPlayer.playVideo();
+        if (playing) ytPlayer.pauseVideo(); else { statusMsg = ''; ytPlayer.playVideo(); }
     } else {
         if (playing) { audio.pause(); playing = false; emit(); }
         else { audio.play().then(() => { playing = true; emit(); }).catch(() => {}); }
@@ -259,7 +375,8 @@ export function setVolume(v) {
 
 audio.addEventListener('ended', () => nextTrack(true));
 audio.addEventListener('error', () => {
-    if (curIdx >= 0 && queue[curIdx] && queue[curIdx].kind !== 'yt') {
+    const t = curIdx >= 0 ? queue[curIdx] : null;
+    if (t && t.kind !== 'yt') {
         statusMsg = 'Поток недоступен';
         emit();
     }
@@ -299,8 +416,8 @@ async function searchYouTube(query, limit = 10) {
             kind: 'yt', ytid: it.id.videoId, title: htmlDecode(it.snippet.title), artist: it.snippet.channelTitle || '', source: 'YouTube',
         }));
     }
-    // Без ключа — Invidious-публичные инстансы, по кругу
-    for (const base of [...INVIDIOUS].sort(() => 0.5 - Math.random()).slice(0, 3)) {
+    // Без ключа — что живо из Invidious (публичные API в 2026 почти все выключены, но вдруг)
+    for (const base of [...INVIDIOUS].sort(() => 0.5 - Math.random())) {
         try {
             const data = await fetchJson(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`, 5000);
             if (Array.isArray(data) && data.length) {
@@ -313,11 +430,39 @@ async function searchYouTube(query, limit = 10) {
     return [];
 }
 
+// ── GDStudio: агрегатор NetEase/Kuwo — полные треки, мейнстрим, без ключа ──
+const _gdsUrlCache = new Map();   // `${source}:${id}` -> {url, at}
+async function resolveGdsUrl(t) {
+    const key = `${t.gdsSource}:${t.gdsId}`;
+    const cached = _gdsUrlCache.get(key);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.url;
+    const data = await fetchJson(`${GDS_API}?types=url&source=${encodeURIComponent(t.gdsSource)}&id=${encodeURIComponent(t.gdsId)}&br=128`, 8000);
+    if (!data?.url) return null;
+    _gdsUrlCache.set(key, { url: data.url, at: Date.now() });
+    return data.url;
+}
+
+async function searchGDStudio(query, limit = 12) {
+    for (const src of GDS_SOURCES) {
+        try {
+            const data = await fetchJson(`${GDS_API}?types=search&source=${src}&name=${encodeURIComponent(query)}&count=${limit}`, 8000);
+            if (Array.isArray(data) && data.length) {
+                return data.map(t => ({
+                    kind: 'gds', gdsId: String(t.url_id || t.id), gdsSource: src,
+                    title: t.name || query,
+                    artist: Array.isArray(t.artist) ? t.artist.join(', ') : (t.artist || ''),
+                    source: src === 'netease' ? 'NetEase' : 'Kuwo',
+                }));
+            }
+        } catch (_) {}
+    }
+    return [];
+}
+
 function parseYtLink(query) {
-    const mList = query.match(/[?&]list=([\w-]+)/);
     const mVid = query.match(/(?:youtu\.be\/|[?&]v=|shorts\/)([\w-]{11})/);
     if (mVid) return { kind: 'yt', ytid: mVid[1], title: 'YouTube видео', artist: mVid[1], source: 'YT-ссылка' };
-    if (mList) return { kind: 'ytlist', ytlist: mList[1], title: 'YouTube плейлист', artist: 'list', source: 'YT-ссылка' };
+    if (/[?&]list=([\w-]+)/.test(query)) return { kind: 'ytlist' };
     return null;
 }
 
@@ -335,9 +480,12 @@ export async function searchMusic(query, source) {
         } else if (source === 'jamendo') {
             searchResults = await searchJamendo(q);
             statusMsg = searchResults.length ? '' : 'Ничего не найдено';
+        } else if (source === 'gds') {
+            searchResults = await searchGDStudio(q);
+            statusMsg = searchResults.length ? '' : 'Ничего не найдено';
         } else {
             searchResults = await searchYouTube(q);
-            statusMsg = searchResults.length ? '' : 'Ничего не найдено';
+            statusMsg = searchResults.length ? '' : (cfg.ytKey ? 'Ничего не найдено' : 'Без YouTube-ключа поиск почти не работает — вбей его внизу');
         }
     } catch (e) {
         searchResults = [];
@@ -352,7 +500,7 @@ export async function searchMusic(query, source) {
 // ── Радио ──
 export async function searchRadioStations(q) {
     const query = String(q || '').trim();
-    if (!query) { radioResults = null; emit(); return []; }
+    if (!query) { radioResults = null; statusMsg = ''; emit(); return []; }
     searching = true;
     statusMsg = 'Ищу радио…';
     emit();
@@ -392,11 +540,17 @@ export async function pickForScene() {
     statusMsg = 'Подбираю под сцену…';
     emit();
     try {
-        const arr = await generateSceneMood();
+        const arr = await generateSceneMood({ vocal: cfg.moodVocal, lang: cfg.moodLang });
         const pick = arr?.[0];
         if (!pick?.query) throw new Error('no_pick');
-        let found = await searchJamendo(pick.query, 1).catch(() => []);
-        if (!found.length) found = await searchYouTube(pick.query, 1).catch(() => []);
+        // Порядок: GDStudio (полные треки, мейнстрим) → Jamendo → YouTube; выключенные тумблерами пропускаем
+        let found = [];
+        if (cfg.sources.gds) found = await searchGDStudio(pick.query, 3).catch(() => []);
+        if (!found.length && cfg.sources.jamendo) found = await searchJamendo(pick.query, 1).catch(() => []);
+        if (!found.length && cfg.sources.youtube) {
+            found = await searchYouTube(pick.query + ' topic', 8).catch(() => []);
+            if (!found.length) found = await searchYouTube(pick.query, 8).catch(() => []);
+        }
         if (!found.length) throw new Error('not_found');
         playTrack(found[0]);
         statusMsg = '';

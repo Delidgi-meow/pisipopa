@@ -14,7 +14,7 @@ import {
     getBankReminders, spendingByCategory, incomeExpenseTotals, bankBadgeCount, setCurrency, convertCurrency,
 } from './bank.js';
 import { SHOP_CATS, catById, getCategory, generateCategory, buyItem, getOrders, deleteOrder, getCustomCats, addCustomCat, delCustomCat, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived, searchShopItems } from './shop.js';
-import { getMusicState, getMusicCfg, setMusicKeys, searchMusic, playTrack, playIndex, togglePlay, nextTrack, prevTrack, removeAt, clearQueue, seekFrac, setVolume, searchRadioStations, playRadioStation, pickForScene, onMusicChange, enqueue, SOMA_STATIONS } from './music.js';
+import { getMusicState, getMusicCfg, setMusicKeys, setMusicSourceEnabled, setMoodPrefs, searchMusic, playTrack, playIndex, togglePlay, nextTrack, prevTrack, removeAt, clearQueue, seekFrac, setVolume, searchRadioStations, playRadioStation, pickForScene, onMusicChange, enqueue, SOMA_STATIONS } from './music.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
@@ -150,6 +150,19 @@ function createFab() {
     fab.id = 'gp-fab';
     fab.innerHTML = `${ic('fa-mobile-screen-button')}<span id="gp-fab-badge" class="gp-hidden"></span>`;
     document.body.appendChild(fab);
+
+    // Мини-кнопка пуск/пауза под FAB — музыкой рулим без открытия телефона.
+    // Видимость/иконка/позиция — тикер в music.js (DOM напрямую).
+    if (!document.getElementById('gp-mini-play')) {
+        const mp = document.createElement('button');
+        mp.id = 'gp-mini-play';
+        mp.className = 'gp-hidden';
+        mp.type = 'button';
+        mp.title = 'Пауза / пуск';
+        mp.innerHTML = ic('fa-play');
+        mp.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); togglePlay(); });
+        document.body.appendChild(mp);
+    }
 
     // Позиция: сохранённая ВСЕГДА зажимается в текущий вьюпорт (позиция с широкого
     // монитора не должна уносить кнопку за экран телефона). Дефолт — правый край.
@@ -622,7 +635,7 @@ const BLEED_SCREENS = new Set(['discord', 'dchannel', 'twitch', 'stream', 'mystr
 
 // ═══ Музыка ═══
 let _musTab = 'search';       // search | queue | radio
-let _musSource = 'youtube';   // youtube | jamendo
+let _musSource = 'gds';         // gds (NetEase) | youtube | jamendo
 let _musQuery = '';
 let _musRadioQuery = '';
 
@@ -650,16 +663,12 @@ function renderMusic(screen) {
                 <button class="gp-iconbtn" id="gp-mus-go" title="Искать" ${st.searching ? 'disabled' : ''}>${st.searching ? ic('fa-spinner fa-spin') : ic('fa-arrow-right')}</button>
             </div>
             <div class="gp-mus-srcs">
+                <button class="gp-mus-src${_musSource === 'gds' ? ' on' : ''}" data-src="gds">NetEase</button>
                 <button class="gp-mus-src${_musSource === 'youtube' ? ' on' : ''}" data-src="youtube">YouTube</button>
                 <button class="gp-mus-src${_musSource === 'jamendo' ? ' on' : ''}" data-src="jamendo">Jamendo</button>
             </div>
             ${st.statusMsg ? `<div class="gp-empty-text" style="padding:8px;text-align:center">${esc(st.statusMsg)}</div>` : ''}
-            ${rows}
-            <div class="gp-mus-keys">
-                <div class="gp-mus-keys-title">${ic('fa-key')} API-ключи</div>
-                <input id="gp-mus-key-jam" type="text" placeholder="Jamendo Client ID" value="${esc(cfg.jamendoKey)}" autocomplete="off">
-                <input id="gp-mus-key-yt" type="text" placeholder="YouTube API key (пусто = Invidious)" value="${esc(cfg.ytKey)}" autocomplete="off">
-            </div>`;
+            ${rows}`;
     } else if (_musTab === 'queue') {
         body = st.queue.length ? `
             <div class="gp-mus-qhead">
@@ -675,6 +684,30 @@ function renderMusic(screen) {
                     <button class="gp-iconbtn" data-q-del="${i}" title="Убрать">${ic('fa-xmark')}</button>
                 </div>`).join('')}`
             : `<div class="gp-empty-text" style="padding:20px;text-align:center">Очередь пуста — найди что-нибудь в поиске</div>`;
+    } else if (_musTab === 'setup') {
+        const vocalBtn = (v, label) => `<button class="gp-mus-src${cfg.moodVocal === v ? ' on' : ''}" data-vocal="${v}">${label}</button>`;
+        const langBtn = (v, label) => `<button class="gp-mus-src${cfg.moodLang === v ? ' on' : ''}" data-lang="${v}">${label}</button>`;
+        body = `
+            <div class="gp-mus-keys">
+                <div class="gp-mus-keys-title">${ic('fa-wand-magic-sparkles')} Подбор под сцену — голос</div>
+                <div class="gp-mus-srcs" style="margin:6px 0 0">
+                    ${vocalBtn('any', 'Любое')}${vocalBtn('vocal', 'Со словами')}${vocalBtn('instrumental', 'Без слов')}
+                </div>
+                <div class="gp-mus-keys-title" style="margin-top:12px">${ic('fa-language')} Подбор под сцену — язык</div>
+                <div class="gp-mus-srcs" style="margin:6px 0 0">
+                    ${langBtn('any', 'Любой')}${langBtn('ru', 'На русском')}${langBtn('en', 'На английском')}${langBtn('other', 'Другие')}
+                </div>
+                <div class="gp-empty-text" style="padding:8px 2px">Влияет только на кнопку ✨ «под сцену». Ручной поиск — как есть.</div>
+                <div class="gp-mus-keys-title" style="margin-top:12px">${ic('fa-wand-magic-sparkles')} Подбор под сцену ищет в:</div>
+                <div class="gp-mus-srcs" style="margin:6px 0 0">
+                    <button class="gp-mus-src${cfg.sources.gds ? ' on' : ''}" data-toggle-src="gds">NetEase</button>
+                    <button class="gp-mus-src${cfg.sources.youtube ? ' on' : ''}" data-toggle-src="youtube">YouTube</button>
+                    <button class="gp-mus-src${cfg.sources.jamendo ? ' on' : ''}" data-toggle-src="jamendo">Jamendo</button>
+                </div>
+                <div class="gp-mus-keys-title" style="margin-top:10px">${ic('fa-key')} API-ключи</div>
+                <input id="gp-mus-key-jam" type="text" placeholder="Jamendo Client ID" value="${esc(cfg.jamendoKey)}" autocomplete="off">
+                <input id="gp-mus-key-yt" type="text" placeholder="YouTube API key (пусто = Invidious)" value="${esc(cfg.ytKey)}" autocomplete="off">
+            </div>`;
     } else {
         const list = st.radioResults ?? SOMA_STATIONS.map(s => ({ kind: 'radio', url: s.url, title: s.name, artist: s.tag, source: 'SomaFM' }));
         body = `
@@ -727,6 +760,7 @@ function renderMusic(screen) {
             <button class="gp-mus-tab${_musTab === 'search' ? ' on' : ''}" data-tab="search">Поиск</button>
             <button class="gp-mus-tab${_musTab === 'queue' ? ' on' : ''}" data-tab="queue">Очередь${st.queue.length ? ` (${st.queue.length})` : ''}</button>
             <button class="gp-mus-tab${_musTab === 'radio' ? ' on' : ''}" data-tab="radio">Радио</button>
+            <button class="gp-mus-tab${_musTab === 'setup' ? ' on' : ''}" data-tab="setup" title="Настройки музыки">${ic('fa-gear')}</button>
         </div>
         <div class="gp-mus-body gp-mus-scroll">${body}</div>
         ${nowBar}`);
@@ -764,6 +798,13 @@ function renderMusic(screen) {
         if (t) { playRadioStation(t); toast((t.title || t.name).slice(0, 40), 'fa-radio'); }
     }));
 
+    screen.querySelectorAll('[data-vocal]').forEach(b => b.addEventListener('click', () => { setMoodPrefs({ vocal: b.getAttribute('data-vocal') }); render(); }));
+    screen.querySelectorAll('[data-lang]').forEach(b => b.addEventListener('click', () => { setMoodPrefs({ lang: b.getAttribute('data-lang') }); render(); }));
+    screen.querySelectorAll('[data-toggle-src]').forEach(b => b.addEventListener('click', () => {
+        const name = b.getAttribute('data-toggle-src');
+        setMusicSourceEnabled(name, !getMusicCfg().sources[name]);
+        render();
+    }));
     screen.querySelector('#gp-mus-pick')?.addEventListener('click', async () => {
         const r = await pickForScene();
         if (r) toast(`${r.mood ? r.mood + ' → ' : ''}${r.track.title.slice(0, 40)}`, 'fa-wand-magic-sparkles');

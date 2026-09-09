@@ -1781,46 +1781,6 @@ Format: [{"author":"nick","text":"..."}]`;
     return await socialGenArray(prompt, { maxTokens: 1400, prefill: '[{"author":"' });
 }
 
-// ── Работа: объявления, смены, повышения ──
-export async function generateJobListings(existing = [], currentJob = null) {
-    const prompt = `${await taskHeader(`invent job openings in the local classifieds app on ${getUserName()}'s phone.`)}
-${currentJob ? `They already work as ${currentJob.title}${currentJob.company ? ` at ${currentJob.company}` : ''} — these are other offers they are browsing.` : ''}
-${existing.length ? `Already listed (invent different ones): ${existing.join('; ')}` : ''}
-Invent 5-7 openings that fit ${getUserName()}'s world, city and background: what a person like them could realistically apply for, from simple shifts to qualified work. For each: title, company, field, monthly salary as a NUMBER in the local currency, schedule, short requirements, short duties, and a career ladder of 2-4 steps upward with the salary of each step (the first step is the promotion right after this position).
-Salaries must be believable for that country and era, and grow along the ladder.
-${uiLangLine()}
-Also give 2-3 starting tasks the newcomer would be given in the first days — concrete, small, checkable.
-${JSON_RULES}
-Format: [{"title":"...","company":"...","field":"...","salary":45000,"schedule":"...","requirements":"...","duties":"...","tasks":["...","..."],"ladder":[{"title":"...","salary":60000}]}]`;
-    return await socialGenArray(prompt, { maxTokens: 2600, prefill: '[{"title":"' });
-}
-
-export async function generateShiftOutcome(job) {
-    const prompt = `${await taskHeader(`describe ONE work shift ${getUserName()} just finished.`)}
-Job: ${job.title}${job.company ? ` at ${job.company}` : ''} (${job.field || 'general'}). Duties: ${job.duties || 'as expected for the role'}. Schedule: ${job.schedule || 'regular'}.
-Shifts worked so far: ${job.shifts}. How they have been coping lately: ${job.performance}/100.
-Write what happened during this shift: 2-4 sentences, concrete and ordinary — colleagues, customers, small wins and screw-ups, fatigue, an unexpected task. Tie it to the current roleplay if something there is relevant. Then rate how it went: performance_delta from -15 (a disaster) to +15 (excellent), usually between -5 and +7.
-${uiLangLine()}
-If the shift naturally leaves something to do next time, add 1-2 new tasks; otherwise leave the list empty.
-${JSON_RULES}
-Format: [{"summary":"...","performance_delta":3,"tasks":["..."]}]`;
-    const arr = await socialGenArray(prompt, { maxTokens: 700, prefill: '[{"summary":"' });
-    return Array.isArray(arr) ? arr[0] : null;
-}
-
-export async function generatePromotionVerdict(job, step, readiness) {
-    const prompt = `${await taskHeader(`decide how ${getUserName()}'s request for a promotion goes.`)}
-Current position: ${job.title}${job.company ? ` at ${job.company}` : ''}, ${job.shifts} shifts worked, coping ${job.performance}/100.
-They are asking to be promoted to: ${step.title}.
-By the company's own bar they are ${readiness.ready ? 'READY' : 'NOT ready yet'} (needs about ${readiness.need?.shifts} shifts and ${readiness.need?.performance}/100 of steady work).
-Answer as their manager would: grant it or refuse, and say why in 1-3 sentences — plain workplace talk, not a speech. A refusal must name what is missing. Follow the readiness above; only in a rare, well-motivated case may it go the other way.
-${uiLangLine()}
-${JSON_RULES}
-Format: [{"granted":true,"text":"..."}]`;
-    const arr = await socialGenArray(prompt, { maxTokens: 500, prefill: '[{"granted":' });
-    return Array.isArray(arr) ? arr[0] : null;
-}
-
 // ── Курьер: кто везёт заказ и переписка с ним в приложении магазина ──
 // Имя не берём из готового списка — курьер должен быть из того же мира,
 // что и ролевая (страна, язык, реалии).

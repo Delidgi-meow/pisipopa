@@ -5,7 +5,6 @@ import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel } from './social.js';
 import { harvestBankTags } from './bank.js';
-import { harvestWorkTags } from './work.js';
 import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
 import { buildReport, clearLog } from './debug-log.js';
@@ -439,11 +438,6 @@ jQuery(async () => {
             try {
                 const n = harvestBankTags();
                 if (n > 0) toast(`Банк: ${n} ${n === 1 ? 'операция' : 'операции'} из ролевой`, 'fa-building-columns');
-            } catch (e) { /* ignore */ }
-            // Смены и задания, отыгранные в самой ролевой
-            try {
-                const n = harvestWorkTags();
-                if (n > 0) toast(`Работа: засчитано ${n}`, 'fa-briefcase');
             } catch (e) { /* ignore */ }
             notifyBankReminders();
             notifyDeliveries();   // курьер выехал / заказ приехал

@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.14.4';
+export const GP_VERSION = '2.14.5';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -494,28 +494,6 @@ export function extraImageOf(msg) {
     const desc = Object.getOwnPropertyDescriptor(ex, 'image');
     if (desc && 'value' in desc && typeof desc.value === 'string') return desc.value;
     return '';
-}
-
-// Прикрепить картинку к сообщению. На свежем extra пишем старый плоский формат
-// (ST сам мигрирует в media при рендере — совместимо и со старыми версиями);
-// если ST уже поставил геттер-обёртку (сеттер молча ГЛОТАЕТ запись!) — пишем
-// прямо в массив extra.media.
-export function attachImageToMessage(msg, src) {
-    if (!msg || !src) return;
-    if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
-    const ex = msg.extra;
-    const desc = Object.getOwnPropertyDescriptor(ex, 'image');
-    const hasGetter = desc && (typeof desc.get === 'function' || typeof desc.set === 'function');
-    if (!hasGetter && !Array.isArray(ex.media)) {
-        ex.image = String(src);
-        ex.inline_image = true;
-        return;
-    }
-    if (!Array.isArray(ex.media)) ex.media = [];
-    if (!ex.media.some(m => m && m.url === src)) {
-        ex.media.push({ type: 'image', url: String(src) });
-    }
-    ex.inline_image = true;
 }
 
 // ── Вырезать CoT-блоки (<think> и подобные) ──

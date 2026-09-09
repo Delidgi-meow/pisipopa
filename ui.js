@@ -4,7 +4,7 @@ import { saveBase64AsFile } from '../../../utils.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes,
-    addGroup, delGroup, updateGroupMembers, attachImageToMessage, renameContact, banAccount,
+    addGroup, delGroup, updateGroupMembers, renameContact, banAccount,
     isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache, getMeta,
 } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
@@ -2173,18 +2173,22 @@ function renderThread(screen) {
         }
     }));
 
-    // Удаление отдельного SMS
-    screen.querySelectorAll('[data-smsdel]').forEach(b => b.addEventListener('click', (e) => {
+    // Удаление одного сообщения — и из телефона, и из истории чата
+    screen.querySelectorAll('[data-smsdel]').forEach(b => b.addEventListener('click', async (e) => {
         e.stopPropagation();
         const mi = parseInt(b.getAttribute('data-smsdel'));
         const msg = t.messages[mi];
         if (!msg) return;
-        if (!confirm('Удалить это сообщение?')) return;
-        deleteSmsFromChat(msg);
+        if (!confirm('Удалить это сообщение? Оно уйдёт и из истории чата.')) return;
+        logAct('удаление смс', `${msg.dir === 'in' ? 'входящее' : 'своё'} #${msg.idx}`);
+        const ok = await deleteSmsFromChat(msg);
+        if (!ok) { render(); return; }
+        _reactPickerFor = null;
         render();
         updatePhoneInjection();
         applyChatHiding();
         updateFabBadge();
+        toast('Сообщение удалено', 'fa-trash-can');
     }));
     // Фокус только при первом входе в тред: при перерисовке (реакция, тап по
     // фото, новое сообщение) экран больше не прыгает к полю ввода
@@ -3168,11 +3172,13 @@ function renderIgNewStory(screen) {
         clearDraft('gp-st-desc'); clearDraft('gp-st-caption');
         const story = addStory({ image: _storyDraftImage, imgDesc: desc, caption });
         _storyDraftImage = null;
-        // Журнал: ролевая знает про сторис (с фото — vision-модель видит сама)
-        logSocialToChat(
-            `${getUserName()} выложила сторис в Instagram${desc ? ` (на фото: ${desc})` : ''}${caption ? `, текст: «${caption}»` : ''} — исчезнет через 24 часа`,
-            story.image,
+        // Журнал: в чат уходит описание, а не сам снимок. Если фото выбрано,
+        // а описания нет — ждём его от vision-запроса с реакциями ниже
+        const logStory = (d) => logSocialToChat(
+            `${getUserName()} выложила сторис в Instagram${d ? ` (на фото: ${d})` : ''}${caption ? `, текст: «${caption}»` : ''} — исчезнет через 24 часа`,
         );
+        const waitDesc = !!story.image && !desc;
+        if (!waitDesc) logStory(desc);
         applyChatHiding();
         toast('Сторис опубликована', 'fa-instagram');
         _storyAuthor = null;
@@ -3185,12 +3191,16 @@ function renderIgNewStory(screen) {
             (async () => {
                 try {
                     const r = await generateStoryReactions(story);
+                    if (waitDesc) { logStory(story.imgDesc || ''); applyChatHiding(); }
                     if (r?.reactions?.length) toast(`Реакции на сторис: ${r.reactions.length}`, 'fa-fire');
                     for (const dm of (r?.dms || [])) {
                         deliverScamSms(dm); // тот же призрак-канал, что у любых входящих смс
                     }
                     if (currentScreen === 'igstory' || currentScreen === 'ig') render();
-                } catch (e) { console.warn('[GlassPhone] story reactions failed:', e); }
+                } catch (e) {
+                    console.warn('[GlassPhone] story reactions failed:', e);
+                    if (waitDesc) { logStory(''); applyChatHiding(); }
+                }
                 try {
                     const n = await generateContactStories();
                     if (n > 0) toast('Появились сторис знакомых', 'fa-instagram');
@@ -3198,6 +3208,10 @@ function renderIgNewStory(screen) {
                 _othersStoriesBusy = false;
                 if (currentScreen === 'ig' || currentScreen === 'igstory') render();
             })();
+        } else if (waitDesc) {
+            // Цепочка занята соседней сторис — описания не дождёмся, но запись нужна
+            logStory('');
+            applyChatHiding();
         }
     });
 }
@@ -3360,9 +3374,8 @@ function renderIgNew(screen) {
         goto('igview');
         toast('Опубликовано', 'fa-instagram');
 
-        // Журнал: пост уходит в чат сразу, ВМЕСТЕ С ФОТО (extra.image) —
-        // vision-модель видит снимок в РП по месту истории, описание не требуется.
-        // Затем авто-комменты; их ветка тоже логируется.
+        // Журнал ждёт авто-комментов: тот же vision-запрос заполняет imgDesc,
+        // а в историю чата уходит описание снимка, а не сам снимок.
         if (!genBusy) {
             genBusy = true;
             render();
@@ -3376,7 +3389,6 @@ function renderIgNew(screen) {
                 // Журнал — уже с готовым описанием
                 await logSocialToChat(
                     `${getUserName()} публикует фото в Instagram${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
-                    post.image,
                 );
                 applyChatHiding();
                 logNewReplies('фото в Instagram', post.caption || post.imgDesc, post.comments, before);
@@ -3630,10 +3642,9 @@ function renderOfNew(screen) {
                 await generateOfComments(post);
                 updatePhoneInjection();
                 render();
-                // Журнал: с готовым описанием, текст жёстко помечает приватность
+                // Журнал: только описание, текст жёстко помечает приватность
                 await logSocialToChat(
                     `${getUserName()} публикует пост на своей ПРИВАТНОЙ странице OnlyFans (видят только анонимные подписчики; персонажи НЕ знают, если сюжет не установил обратное)${post.imgDesc ? ` — на фото: ${post.imgDesc}` : ''}${post.caption ? `, подпись: «${post.caption}»` : ''}`,
-                    post.image,
                 );
                 applyChatHiding();
                 logNewReplies('приватным OnlyFans-постом', post.caption || post.imgDesc, post.comments, before);
@@ -5133,64 +5144,98 @@ export function deliverScamSms(sms) {
 }
 
 
-// ═══ Удаление отдельного SMS из чата ═══
-// SMS = HTML-коммент внутри сообщения чата. Вырезаем конкретный тег,
-// а если сообщение стало пустым — удаляем само сообщение.
+// ═══ Удаление одного сообщения ═══
+// Сообщение телефона — это тег внутри реплики чата. Вырезаем ровно его: если в
+// той же реплике были другие теги или текст ролевой, она остаётся на месте, а
+// уходит только этот пузырь. Опустевшая реплика (своя смс, «призрак» с ответом)
+// удаляется из истории целиком.
 
-function deleteSmsFromChat(msg) {
+// Видимая строка своей смс: «[СМС → Вера] привет», «[Голосовое в чат «Клуб»] …»
+const OUT_LINE_RE = /^[ \t]*\[(?:СМС|SMS|Голосовое|Voice)[^\]\n]*\][^\n]*\n?/im;
+
+// Удалить сообщение из истории. deleteMessage у ST сам убирает пузырь из ленты и
+// перенумеровывает mesid — без этого applyChatHiding прятал бы чужие реплики.
+async function removeChatMessage(ctx, idx) {
+    const drawn = !!document.querySelector(`#chat .mes[mesid="${idx}"]`);
+    if (drawn && typeof ctx.deleteMessage === 'function') {
+        await ctx.deleteMessage(idx);
+        return;
+    }
+    // Старая реплика не отрисована (лента подгружается кусками) — ST её не найдёт
+    ctx.chat.splice(idx, 1);
+    invalidateChatCache();
+    await saveChatConditional();
+    if (typeof ctx.reloadCurrentChat === 'function') await ctx.reloadCurrentChat();
+}
+
+async function deleteSmsFromChat(msg) {
     try {
         const ctx = SillyTavern.getContext();
-        const chat = ctx?.chat;
-        if (!chat || !chat[msg.idx]) return;
-        const chatMsg = chat[msg.idx];
-        let text = chatMsg.mes;
-
-        if (msg.dir === 'out') {
-            // Юзерское сообщение: вырезаем tel:out тег + видимую часть [СМС → ...]
-            text = text.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->\s*/i, '');
-            text = text.replace(/\[(?:СМС|SMS)\s*→\s*[^\]]+\]\s*[\s\S]*/i, '');
-        } else {
-            // Ищем тег по его тексту: индексы посчитаны по версии без <think>,
-            // и при мыслях модели съезжают — вырезался бы кусок сообщения.
-            const at = msg.tagText ? text.indexOf(msg.tagText) : -1;
-            if (at !== -1) {
-                text = text.slice(0, at) + text.slice(at + msg.tagText.length);
-            } else if (Number.isInteger(msg.tagStart) && Number.isInteger(msg.tagEnd)
-                && /^<!--\s*tel:sms:/i.test(text.slice(msg.tagStart, msg.tagEnd))) {
-                text = text.slice(0, msg.tagStart) + text.slice(msg.tagEnd);
-            } else {
-                // Совместимость с объектом сообщения, открытым до обновления.
-                const tags = [...text.matchAll(/<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/gi)];
-                const hit = tags.find(x => {
-                    try {
-                        const j = JSON.parse(x[1]);
-                        return String(j.from || '') === String(msg.from || '') && String(j.text || '') === String(msg.text || '');
-                    } catch (e) { return false; }
-                });
-                if (hit) text = text.slice(0, hit.index) + text.slice(hit.index + hit[0].length);
-            }
+        const chatMsg = ctx?.chat?.[msg.idx];
+        if (!chatMsg || typeof chatMsg.mes !== 'string') {
+            logFail('удаление смс', `нет сообщения #${msg.idx}`);
+            toast('Сообщение не найдено — история изменилась', 'fa-circle-exclamation');
+            return false;
         }
 
-        text = text.trim();
-        // Если после удаления тега сообщение стало пустым (или осталось \u003c5 видимых символов) — удаляем сообщение
+        let text = chatMsg.mes;
+        let cut = false;
+        // 1) по точному тексту тега: индексы из scanChat посчитаны по версии без
+        //    <think> и съезжают, если модель писала в размышлениях
+        if (msg.tagText) {
+            const at = text.indexOf(msg.tagText);
+            if (at !== -1) { text = text.slice(0, at) + text.slice(at + msg.tagText.length); cut = true; }
+        }
+        // 2) по сохранённым индексам — только если там действительно наш тег
+        if (!cut && Number.isInteger(msg.tagStart) && Number.isInteger(msg.tagEnd)
+            && /^<!--\s*tel:(?:sms|out):/i.test(text.slice(msg.tagStart, msg.tagEnd))) {
+            text = text.slice(0, msg.tagStart) + text.slice(msg.tagEnd);
+            cut = true;
+        }
+        // 3) тег переписали после скана (реакция, дорисованное фото) — ищем по содержимому
+        if (!cut) {
+            const re = msg.dir === 'out'
+                ? /<!--\s*tel:out:(\{[\s\S]*?\})\s*-->/gi
+                : /<!--\s*tel:sms:(\{[\s\S]*?\})\s*-->/gi;
+            const hit = [...text.matchAll(re)].find(x => {
+                let j = null;
+                try { j = JSON.parse(x[1]); } catch (e) { return false; }
+                const sameText = String(j.text || '') === String(msg.text || '');
+                return msg.dir === 'out' ? sameText : (keyOf(j.from || '') === keyOf(msg.from || '') && sameText);
+            });
+            if (hit) { text = text.slice(0, hit.index) + text.slice(hit.index + hit[0].length); cut = true; }
+        }
+        if (!cut) {
+            logFail('удаление смс', 'тег не найден (правка/свайп?)');
+            toast('Не нашла это сообщение в истории', 'fa-circle-exclamation');
+            return false;
+        }
+
+        // Своя смс: вместе с маркером уходит и видимая строка — она и есть пузырь
+        if (msg.dir === 'out') text = text.replace(OUT_LINE_RE, '');
+
+        text = text.replace(/\n{3,}/g, '\n\n').trim();
+        // В реплике мог быть не один пузырь: «призрак» с ответами часто держит
+        // несколько тегов, и соседние удалять нельзя
+        const otherTags = /<!--\s*tel:(?:sms|out):/i.test(text);
         const visible = text.replace(/<!--[\s\S]*?-->/g, '').trim();
-        if (visible.length < 5) {
-            // Удаляем сообщение из чата
-            if (typeof ctx.deleteMessageByIndex === 'function') {
-                ctx.deleteMessageByIndex(msg.idx, false);
-            } else {
-                chat.splice(msg.idx, 1);
-                if (typeof ctx.saveChat === 'function') ctx.saveChat();
-            }
+
+        if (!otherTags && !visible) {
+            await removeChatMessage(ctx, msg.idx);
+            logOk('удаление смс', `сообщение #${msg.idx} целиком`);
         } else {
-            // Обновляем текст сообщения
             chatMsg.mes = text;
             invalidateChatCache();
-            if (typeof ctx.saveChat === 'function') ctx.saveChat();
+            await saveChatConditional();
+            logOk('удаление смс', `тег в #${msg.idx}`);
         }
+        invalidateChatCache();
+        return true;
     } catch (e) {
         console.error('[GlassPhone] deleteSmsFromChat failed:', e);
+        logFail('удаление смс', String(e?.message || e));
         toast('Не удалось удалить', 'fa-circle-exclamation');
+        return false;
     }
 }
 
@@ -5261,6 +5306,8 @@ async function doSend(key) {
         //  1) файл + img в маркер → рендер: МИНИАТЮРА СРАЗУ
         //  2) ОДИН vision-запрос: описание + ответ собеседника (экономия: картинка
         //     в API один раз; описание → в mes «*фото: ...*», ответ → призраком)
+        // Сам файл к сообщению чата НЕ приклеивается: в телефоне миниатюра
+        // берётся из маркера, а в истории остаётся описание — без второй копии снимка.
         let photoHandled = false;
         if (draftImg) {
             try {
@@ -5274,11 +5321,7 @@ async function doSend(key) {
                     } catch (e) {
                         console.warn('[GlassPhone] saveBase64AsFile failed, keeping dataURL:', e);
                     }
-                    // extra.image в ST 1.18 — deprecated-сеттер, молча ГЛОТАЕТ запись;
-                    // пишем через attachImageToMessage (в extra.media, если обёртка стоит)
-                    attachImageToMessage(lastMsg, src);
-
-                    // Надёжный путь миниатюры: img в маркере tel:out (mes переживает всё)
+                    // Миниатюра телефона: img в маркере tel:out (mes переживает всё)
                     const markerJson = JSON.stringify({ ...markerBase, img: src });
                     lastMsg.mes = lastMsg.mes.replace(/<!--\s*tel:out:\{[\s\S]*?\}\s*-->/, `<!--tel:out:${markerJson}-->`);
                     invalidateChatCache();

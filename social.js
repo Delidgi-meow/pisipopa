@@ -71,18 +71,29 @@ export function addStory({ image = null, imgDesc = '', caption = '' }) {
 export async function generateStoryReactions(story) {
     const m = getMeta();
     const names = [...new Set((m.contacts || []).map(c => c.name))].slice(0, 12);
+    // Снимок и так уходит в этот запрос — просим заодно описать его: в историю
+    // чата кладётся описание, а не сам файл
+    const wantDesc = !!story.image && !story.imgDesc;
     const prompt = `${await taskHeader(`react to the Instagram story ${getUserName()} just posted.`)}
 Story: ${story.imgDesc || 'photo'}${story.caption ? ` — text on it: «${story.caption}»` : ''}${story.image ? ' (the ACTUAL image is attached — LOOK at it and react to what you actually SEE, details included)' : ''}
 Their contacts who могли увидеть: ${names.join(', ') || 'random followers'}.
 Return:
-"reactions" — 2-6 quick story reactions [{"author":"Имя","icon":"fire|heart|laugh|wow|sad"}] — authors from their contacts (or 1-2 invented followers); icon matches how THAT person would react in-character.
+${wantDesc ? '"photo" — one sentence describing what is ACTUALLY on the attached image (who/what, setting, clothes, mood).\n' : ''}"reactions" — 2-6 quick story reactions [{"author":"Имя","icon":"fire|heart|laugh|wow|sad"}] — authors from their contacts (or 1-2 invented followers); icon matches how THAT person would react in-character.
 "dms" — 0-2 direct replies that arrive as SMS on ${getUserName()}'s phone [{"from":"Имя СТРОГО из её контактов","text":"short in-character reply referencing what's ON the story"}] — ONLY if that person would really slide into DMs (close, flirty, worried, provoked); otherwise [].
 ${uiLangLine()}
 ${JSON_RULES}
-Format: [{"reactions":[{"author":"Имя","icon":"fire"}],"dms":[{"from":"Имя","text":"..."}]}]`;
-    const arr = await socialGenArray(prompt, { maxTokens: 700, image: story.image || null, prefill: '[{"reactions":' });
+Format: [{${wantDesc ? '"photo":"...",' : ''}"reactions":[{"author":"Имя","icon":"fire"}],"dms":[{"from":"Имя","text":"..."}]}]`;
+    const arr = await socialGenArray(prompt, {
+        maxTokens: wantDesc ? 900 : 700,
+        image: story.image || null,
+        prefill: wantDesc ? '[{"photo":"' : '[{"reactions":',
+    });
     const r = Array.isArray(arr) ? arr[0] : null;
     if (!r) return null;
+    if (wantDesc && r.photo) {
+        story.imgDesc = String(r.photo).trim().slice(0, 600);
+        saveMeta();
+    }
     const ICONS = ['fire', 'heart', 'laugh', 'wow', 'sad'];
     const reactions = (Array.isArray(r.reactions) ? r.reactions : [])
         .filter(x => x && x.author)
@@ -2945,27 +2956,15 @@ async function _generateViaBuiltin(post, { prompt, wantChar, isUserPost, onStatu
 // без событий — другие расширения не триггерятся). Зачем: событие остаётся в
 // контексте модели ПО МЕСТУ в истории и попадает в саммарайз — долговременная
 // память о соц-активности без вечного роста инжекта.
-export async function logSocialToChat(text, image = null) {
+//
+// Сам снимок в чат НЕ уходит: он уже есть в телефоне, а вторым вложением в
+// истории он бы дублировался. Модели достаётся готовое описание — его составляет
+// vision-запрос, который и так идёт на каждый пост и сторис.
+export async function logSocialToChat(text) {
     if (getSettings().socialLogToChat === false) return;
     try {
         const ctx = SillyTavern.getContext();
         if (!ctx?.chat) return;
-
-        // Фото поста прикладывается к журнальной записи (extra.image) —
-        // vision-модель видит сам снимок в РП-контексте, описание не обязательно.
-        // dataURL сохраняем файлом, чтобы не раздувать файл чата.
-        let imgSrc = null;
-        if (image) {
-            imgSrc = String(image);
-            if (imgSrc.startsWith('data:')) {
-                try {
-                    const base64 = imgSrc.replace(/^data:image\/[a-z]+;base64,/i, '');
-                    imgSrc = await saveBase64AsFile(base64, 'glassphone', `post_${Date.now()}`, 'jpeg');
-                } catch (e) {
-                    console.warn('[GlassPhone] журнал: не сохранилось файлом, кладу dataURL:', e);
-                }
-            }
-        }
 
         // Нейтральная служебная реплика, а не пользовательский ход. Она остаётся
         // в истории и саммари, но не подменяет последнее сообщение {{user}} и не
@@ -2982,7 +2981,6 @@ export async function logSocialToChat(text, image = null) {
                 gen_id: Date.now(),
                 api: 'manual',
                 model: 'GlassPhone',
-                ...(imgSrc ? { image: imgSrc, inline_image: true } : {}),
             },
         });
         if (typeof ctx.saveChat === 'function') await ctx.saveChat();

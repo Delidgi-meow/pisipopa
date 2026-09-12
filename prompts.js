@@ -4,6 +4,7 @@ import { getSettings, getMeta, scanChat, getBlockedSmsKeys, keyOf, EXT_NAME } fr
 import { getSocialActivitySummary } from './social.js';
 import { getBankSummaryLine, bankInjectRule } from './bank.js';
 import { notesInjectBlock } from './notes.js';
+import { channelInjectLine } from './channels.js';
 import { pendingConsequences } from './social-events.js';
 
 const CHAT_KEY = EXT_NAME;
@@ -99,7 +100,7 @@ function buildPrompt() {
             c += `0. End EVERY reply with the in-world clock as the last line: <!--tel:time:HH:MM DD.MM.YYYY--> (advance it by how much time this reply took).\n`;
         }
         c += `1. Character gives {{user}} their number → <!--tel:contact:{"name":"X","number":"phone in the local format"}-->\n`;
-        c += `2. Character texts {{user}}'s phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say). Only if they plausibly have {{user}}'s number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
+        c += `2. Character texts {{user}}'s phone → one tag per message: <!--tel:sms:{"from":"X","text":"..."}--> (MMS: +"photo":"desc"; group chat: +"chat":"Name"; voice message: +"voice":true, "text" = transcript of what they say; screenshot of an EXISTING post: +"shot":{"app":"tw|ig|ch","author":"post author","text":"the post's own text"}). Only if they plausibly have {{user}}'s number and are NOT listed as BLOCKED. ONLY {{user}}'s phone: what OTHER characters receive on their phones — prose only, NEVER a tag.\n`;
         c += `3. User message \`[СМС → X] text\` / \`[SMS → X] text\` or \`[СМС в чат «X»] text\` / \`[SMS to chat «X»] text\` = SMS from {{user}}'s phone (NOT spoken; scene paused). \`[Голосовое → X]\` / \`[Voice → X]\` = {{user}}'s VOICE message, text = transcript (the character hears {{user}}'s voice). Reply ONLY with tel:sms tags (or <!--tel:silent--> if the character wouldn't answer) — zero visible prose. Resume prose on {{user}}'s next normal message, weaving the texting into the scene as a real event.\n`;
         c += `4. Character posts publicly → <!--tel:tweet:{"author":"X","text":"..."}--> / <!--tel:insta:{"author":"X","photo":"desc","caption":"..."}-->\n`;
         c += `NEVER write literal tag syntax inside <think>/reasoning — plan in plain words; each tag exactly once, in the final reply. Never paraphrase tags into visible text.\n`;
@@ -112,6 +113,10 @@ function buildPrompt() {
             if (bankRule) c += `\n${bankRule}\n`;
             const bankSum = getBankSummaryLine();
             if (bankSum) c += `${bankSum}\n`;
+        } catch (e) { /* ignore */ }
+        try {
+            const chan = channelInjectLine();
+            if (chan) c += `[{{user}}'S CHANNELS] ${chan}\n`;
         } catch (e) { /* ignore */ }
         try {
             const notesBlock = notesInjectBlock();
@@ -147,7 +152,7 @@ function buildPrompt() {
 
     p += `[RULE 2 — SMS TAG] If in THIS reply a character texts {{user}}'s phone, append ONE hidden comment PER message at the very END:\n`;
     p += `<!--tel:sms:{"from":"CharacterName","text":"the exact message text"}-->\n`;
-    p += `Optional fields: "photo":"what the photo shows" (MMS) · "voice":true — then "text" is the transcript of what they SAY, spoken register (use when it fits the moment, not every message)${hasGroups ? ' · "chat":"GroupChatName" for a group chat, where several members may text in a row (one tag each)' : ''}.\n`;
+    p += `Optional fields: "shot":{"app":"tw|ig|ch","author":"who posted it","text":"the post's own text"} — they forward a SCREENSHOT of a post that ALREADY exists (a tweet, an Instagram post, a channel post they or {{user}} can see); quote enough of its text for the app to find it · "photo":"what the photo shows" (MMS) · "voice":true — then "text" is the transcript of what they SAY, spoken register (use when it fits the moment, not every message)${hasGroups ? ' · "chat":"GroupChatName" for a group chat, where several members may text in a row (one tag each)' : ''}.\n`;
     p += `You may also narrate the buzz in prose and show the text in your usual visible style (backticks). Duplicate as a tag ONLY what {{user}} receives. Only characters who plausibly have {{user}}'s number can text {{user}}.\n`;
     p += `NEVER emit a tel:sms whose "from" is {{user}} — their own messages are sent from the app, not written by you.\n`;
     p += `CRITICAL SCOPE: tel:sms is EXCLUSIVELY for messages arriving on {{user}}'s OWN phone. What ANY other character (including yours) gets on THEIR phone — prose only, NEVER a tag; if tagged anyway it MUST carry "to":"RecipientName" so the app discards it.\n\n`;
@@ -184,6 +189,11 @@ function buildPrompt() {
             const bankSum = getBankSummaryLine();
             if (bankSum) p += `[{{user}}'S FINANCES] ${bankSum}\n`;
         }
+    } catch (e) { /* ignore */ }
+    // Каналы — одной строкой, только если она их завела или на что-то подписана
+    try {
+        const chan = channelInjectLine();
+        if (chan) p += `\n[{{user}}'S CHANNELS] ${chan}\n`;
     } catch (e) { /* ignore */ }
     // Заметки — только расшаренные (секретные не инжектятся никогда)
     try {

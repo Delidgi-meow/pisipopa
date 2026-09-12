@@ -27,9 +27,17 @@ import {
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
     generateRepLabel, generateGroupChats,
+    generateChannels, generateChannelPosts, generateChannelComments, generateMyChannelFeedback,
 } from './social.js';
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
+import {
+    getChannels, allChannels, findChannel, findChanPost, createMyChannel, deleteMyChannel,
+    addFoundChannels, toggleSubscribe, deleteChannel, addChannelPosts, publishToMyChannel,
+    deleteChanPost, toggleComments, toggleReact, addReacts, addComments, addMyComment,
+    deleteComment, bumpViews, addSubs, matchPostByText, markChannelRead, unreadChannels,
+    CHAN_REACTS,
+} from './channels.js';
 import { casinoStats, spinSlots, spinRoulette, canBet } from './casino.js';
 import { getNews, refreshNews, shareNews, deleteNews } from './news.js';
 import { getDiscord, findDServer, findDChannel, refreshDiscordServers, createOwnDServer, refreshDChannel, postToDChannel, deleteDServer, addDMember, delDMember } from './discord.js';
@@ -657,6 +665,9 @@ export function render() {
     else if (currentScreen === 'ordchat') renderCourierChat(screen);
     else if (currentScreen === 'casino') renderCasino(screen);
     else if (currentScreen === 'news') renderNews(screen);
+    else if (currentScreen === 'chans') renderChannels(screen);
+    else if (currentScreen === 'chan') renderChannel(screen);
+    else if (currentScreen === 'chanpost') renderChanPost(screen);
     else if (currentScreen === 'discord') renderDiscord(screen);
     else if (currentScreen === 'dchannel') renderDChannel(screen);
     else if (currentScreen === 'twitch') renderTwitch(screen);
@@ -1193,6 +1204,10 @@ function renderHome(screen) {
                 <div class="gp-app" data-app="shop">
                     <div class="gp-app-icon gp-app-shop">${ic('fa-bag-shopping')}${pendingOrders() > 0 ? `<span class="gp-app-badge">${pendingOrders()}</span>` : ''}</div>
                     <div class="gp-app-name">Магазин</div>
+                </div>
+                <div class="gp-app" data-app="chans">
+                    <div class="gp-app-icon gp-app-chans">${ic('fa-tower-broadcast')}${unreadChannels() > 0 ? `<span class="gp-app-badge">${unreadChannels()}</span>` : ''}</div>
+                    <div class="gp-app-name">Каналы</div>
                 </div>
                 <div class="gp-app" data-app="casino">
                     <div class="gp-app-icon gp-app-casino">${ic('fa-dice')}</div>
@@ -1739,6 +1754,7 @@ async function rewriteSmsTag(m, t, mutate) {
             if (m.photoDesc) j.photo = m.photoDesc;
             if (m.voice) j.voice = true;
             if (m.img) j.img = m.img;
+            if (m.shot) j.shot = m.shot;
         }
         mutate(j);
         const kind = m.dir === 'out' ? 'out' : 'sms';
@@ -1836,7 +1852,7 @@ function renderThread(screen) {
         bubbles += `
         <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}${reaction ? ' gp-has-react' : ''}">
             ${picker}
-            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}" data-bmi="${mi}">${senderLabel}${media}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button>${reactChip}</div>
+            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}" data-bmi="${mi}">${senderLabel}${media}${shotHtml(m)}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button>${reactChip}</div>
             ${tm ? `<div class="gp-bubble-time">${esc(tm)}</div>` : ''}
         </div>`;
     }
@@ -2173,6 +2189,12 @@ function renderThread(screen) {
         }
     }));
 
+    // Скрин поста: тап открывает исходный пост в его приложении
+    screen.querySelectorAll('[data-shot]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openShot(b.getAttribute('data-shot'));
+    }));
+
     // Удаление одного сообщения — и из телефона, и из истории чата
     screen.querySelectorAll('[data-smsdel]').forEach(b => b.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -2354,6 +2376,7 @@ function twCard(t, { clickable = true } = {}) {
                 <button class="gp-tw-act" data-open="${esc(t.id)}">${ic('fa-comment')}<span>${replyCount || ''}</span></button>
                 <button class="gp-tw-act${t.rted ? ' gp-tw-on-rt' : ''}" data-rt="${esc(t.id)}">${ic('fa-retweet')}<span>${t.rts || ''}</span></button>
                 <button class="gp-tw-act${t.liked ? ' gp-tw-on' : ''}" data-like="${esc(t.id)}">${ic('fa-heart')}<span>${t.likes || ''}</span></button>
+                <button class="gp-tw-act" data-share-tw="${esc(t.id)}" title="Отправить в лс">${ic('fa-share')}</button>
             </div>
             ${performanceHtml(t)}
         </div>
@@ -2392,6 +2415,11 @@ function bindTwCardActions(root, rerender) {
         delTweet(tw.id);
         rerender();
         toast(`«${tw.author}» заблокирован`, 'fa-ban');
+    }));
+    root.querySelectorAll('[data-share-tw]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tw = getTweets().find(x => x.id === b.getAttribute('data-share-tw'));
+        if (tw) openShareSheet({ app: 'tw', id: tw.id, author: tw.author, text: String(tw.text || '').slice(0, 200) });
     }));
     root.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); currentTweetId = b.getAttribute('data-open'); goto('twthread');
@@ -2753,6 +2781,7 @@ function igCard(p, { clickable = true } = {}) {
         <div class="gp-ig-actions">
             <button class="gp-tw-act${p.liked ? ' gp-tw-on' : ''}" data-like-ig="${esc(p.id)}">${ic('fa-heart')}<span>${p.likes || ''}</span></button>
             <button class="gp-tw-act" data-open-ig2="${esc(p.id)}">${ic('fa-comment')}<span>${p.comments?.length || ''}</span></button>
+            <button class="gp-tw-act" data-share-ig="${esc(p.id)}" title="Отправить в лс">${ic('fa-share')}</button>
         </div>
         ${p.caption ? `<div class="gp-ig-caption"><b>${esc(p.author)}</b> ${esc(p.caption)}</div>` : ''}
         ${performanceHtml(p)}
@@ -2761,6 +2790,12 @@ function igCard(p, { clickable = true } = {}) {
 
 function bindIgCardActions(root) {
     bindSocialSystemLinks(root);
+    root.querySelectorAll('[data-share-ig]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = b.getAttribute('data-share-ig');
+        const post = getIgPosts().find(x => x.id === id) || getOfPosts().find(x => x.id === id);
+        if (post) openShareSheet({ app: post.price !== undefined ? 'of' : 'ig', id: post.id, author: post.author, text: String(post.caption || post.imgDesc || '').slice(0, 200) });
+    }));
     root.querySelectorAll('[data-like-ig]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation(); likeIg(b.getAttribute('data-like-ig')); render();
     }));
@@ -5133,7 +5168,9 @@ function renderNotes(screen) {
 
 export function deliverScamSms(sms) {
     if (!sms || !sms.from || !sms.text) return;
-    const mesText = `<!--tel:sms:${JSON.stringify({ from: sms.from, text: sms.text })}-->`;
+    const tag = { from: sms.from, text: sms.text };
+    if (sms.shot) tag.shot = sms.shot;
+    const mesText = `<!--tel:sms:${JSON.stringify(tag)}-->`;
     insertGhostReply(sms.from, mesText);
     setTimeout(() => {
         checkNewIncoming();
@@ -5143,6 +5180,584 @@ export function deliverScamSms(sms) {
     }, 300);
 }
 
+
+// ═══ КАНАЛЫ ═══
+// Свой канал и чужие: посты, реакции, просмотры, обсуждение. Отклик приходит
+// двумя путями — комментами под постом и личными сообщениями в смс.
+
+let _chanId = null;
+let _chanPostId = null;
+let _chanBusy = false;
+let _chanReplyTo = null;     // имя комментатора, которому она отвечает
+let _chanDraftImage = null;  // фото к своему посту
+
+function chanAvatar(ch, cls = 'gp-avatar gp-avatar-sm') {
+    return `<div class="${cls} gp-chan-ava" style="${avatarStyle('ch' + ch.name)}">${esc(ch.name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'K')}</div>`;
+}
+
+function fmtSubs(n) {
+    const v = Math.max(0, Math.round(n || 0));
+    return v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}K` : String(v);
+}
+
+function chanPostHtml(ch, post) {
+    bumpViews(ch, post);
+    const busy = _imgGenBusy.has(post.id);
+    let media = '';
+    if (post.image) {
+        media = `<div class="gp-chan-img"><img src="${esc(post.image)}" alt=""></div>`;
+    } else if (post.imgDesc) {
+        media = `<button class="gp-chan-img gp-chan-img-gen" data-chanimg="${esc(post.id)}" style="${avatarStyle(post.imgDesc)}" ${busy ? 'disabled' : ''}>
+            <span>${ic(busy ? 'fa-spinner fa-spin' : 'fa-image')}</span><i>${esc(post.imgDesc)}</i>${busy ? stopGenBtn(post.id) : ''}</button>`;
+    }
+    const reacts = (post.reacts || []).map(r => `
+        <button class="gp-chan-react${r.mine ? ' gp-mine' : ''}" data-chanreact="${esc(post.id)}|${esc(r.emoji)}">${r.emoji} ${r.n}</button>`).join('');
+    const comments = post.commentsOn
+        ? `<button class="gp-chan-comments" data-chanopen="${esc(post.id)}">
+               ${ic('fa-comment')} ${post.comments?.length ? `${post.comments.length} ${plural(post.comments.length, 'комментарий', 'комментария', 'комментариев')}` : 'Обсудить'}
+               ${ic('fa-chevron-right')}
+           </button>`
+        : `<div class="gp-chan-comments gp-off">${ic('fa-comment-slash')} обсуждение выключено</div>`;
+    return `
+    <div class="gp-chan-post" data-chanpost="${esc(post.id)}">
+        ${media}
+        ${post.text ? `<div class="gp-chan-text">${esc(post.text)}</div>` : ''}
+        <div class="gp-chan-foot">
+            <div class="gp-chan-reacts">${reacts}<button class="gp-chan-react gp-chan-react-add" data-chanreactadd="${esc(post.id)}">${ic('fa-plus')}</button></div>
+            <span class="gp-chan-views">${ic('fa-eye')} ${fmtSubs(post.views)} · ${esc(timeAgo(post.time))}</span>
+        </div>
+        <div class="gp-chan-tools">
+            ${comments}
+            <button class="gp-chan-tool" data-chanshare="${esc(post.id)}" title="Отправить в лс">${ic('fa-share')}</button>
+            ${ch.mine ? `<button class="gp-chan-tool" data-chantoggle="${esc(post.id)}" title="${post.commentsOn ? 'Выключить обсуждение' : 'Включить обсуждение'}">${ic(post.commentsOn ? 'fa-comment-slash' : 'fa-comment')}</button>
+            <button class="gp-chan-tool gp-danger" data-chandel="${esc(post.id)}" title="Удалить пост">${ic('fa-xmark')}</button>` : ''}
+        </div>
+    </div>`;
+}
+
+function renderChannels(screen) {
+    currentScreen = 'chans';
+    const c = getChannels();
+    const subs = c.list.filter(x => x.subscribed);
+    const found = c.list.filter(x => !x.subscribed);
+
+    const row = (ch) => {
+        const last = ch.posts?.[0];
+        return `
+        <button class="gp-chan-row${ch.mine ? ' gp-chan-row-mine' : ''}" data-chanopenrow="${esc(ch.id)}">
+            ${chanAvatar(ch, 'gp-avatar gp-avatar-sm')}
+            <span class="gp-chan-rowbody">
+                <span class="gp-chan-rowname">${esc(ch.name)}</span>
+                <span class="gp-chan-rowsub">${ch.mine ? `${fmtSubs(ch.subs)} ${plural(ch.subs, 'подписчик', 'подписчика', 'подписчиков')}` : esc(last ? (last.text || last.imgDesc || 'фото') : (ch.desc || `${fmtSubs(ch.subs)} подписчиков`))}</span>
+            </span>
+            ${ch.unread ? `<span class="gp-chan-unread">${ch.unread}</span>` : ''}
+        </button>`;
+    };
+
+    setHtmlKeepScroll(screen, '.gp-chan-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-title gp-title-app">${ic('fa-tower-broadcast')} Каналы</div>
+            <button class="gp-iconbtn" id="gp-chan-find" title="Найти каналы" ${_chanBusy ? 'disabled' : ''}>${ic(_chanBusy ? 'fa-spinner fa-spin' : 'fa-magnifying-glass')}</button>
+        </div>
+        <div class="gp-chan-scroll">
+            <div class="gp-chan-section">Мой канал</div>
+            ${c.mine ? row(c.mine) : `
+                <button class="gp-chan-create" id="gp-chan-create">
+                    ${ic('fa-plus')}<span>Завести свой канал</span>
+                </button>`}
+            ${subs.length ? `<div class="gp-chan-section">Подписки</div>${subs.map(row).join('')}` : ''}
+            ${found.length ? `<div class="gp-chan-section">Можно подписаться</div>${found.map(row).join('')}` : ''}
+            ${!subs.length && !found.length ? `
+                <div class="gp-empty"><div class="gp-empty-icon">${ic('fa-tower-broadcast')}</div>
+                <div class="gp-empty-text">Нажми поиск — модель соберёт каналы<br>этого города и мира</div></div>` : ''}
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+    screen.querySelectorAll('[data-chanopenrow]').forEach(b => b.addEventListener('click', () => {
+        _chanId = b.getAttribute('data-chanopenrow');
+        markChannelRead(_chanId);
+        goto('chan');
+    }));
+    screen.querySelector('#gp-chan-create')?.addEventListener('click', () => {
+        const name = prompt('Как назовём канал?', '');
+        if (name === null || !name.trim()) return;
+        const desc = prompt('О чём он? (одной строкой)', '') || '';
+        try {
+            const ch = createMyChannel(name.trim(), desc.trim());
+            _chanId = ch.id;
+            updatePhoneInjection();
+            applyChatHiding();
+            goto('chan');
+            toast('Канал создан', 'fa-tower-broadcast');
+        } catch (e) {
+            toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        }
+    });
+    screen.querySelector('#gp-chan-find')?.addEventListener('click', () => chanBusyRun(async () => {
+        const arr = await generateChannels(allChannels().map(x => x.name));
+        const n = addFoundChannels(arr);
+        if (!n) throw new Error('Каналов не нашлось — попробуй ещё раз');
+        toast(`Найдено каналов: ${n}`, 'fa-tower-broadcast');
+    }));
+}
+
+async function chanBusyRun(fn) {
+    if (_chanBusy) return;
+    _chanBusy = true;
+    render();
+    try { await fn(); }
+    catch (e) { toast(String(e?.message || e).slice(0, 70), 'fa-circle-exclamation'); }
+    finally { _chanBusy = false; render(); }
+}
+
+function renderChannel(screen) {
+    const ch = findChannel(_chanId);
+    if (!ch) { goto('chans'); return; }
+    currentScreen = 'chan';
+    markChannelRead(ch.id);
+    const lastViews = ch.posts?.[0]?.views || 0;
+
+    const stats = ch.mine ? `
+        <div class="gp-chan-stats">
+            <div><span>подписчики</span><b>${fmtSubs(ch.subs)}</b>${ch.subsDelta ? `<i class="${ch.subsDelta > 0 ? 'gp-up' : 'gp-down'}">${ch.subsDelta > 0 ? '+' : ''}${ch.subsDelta}</i>` : ''}</div>
+            <div><span>просмотры</span><b>${fmtSubs(lastViews)}</b><i>за последний пост</i></div>
+        </div>` : '';
+
+    const composer = ch.mine ? `
+        <div class="gp-chan-composer">
+            ${_chanDraftImage ? `<div class="gp-sms-attach"><img src="${esc(_chanDraftImage)}" alt=""><span>Фото приложено</span><button class="gp-iconbtn gp-danger" id="gp-chan-imgclear">${ic('fa-xmark')}</button></div>` : ''}
+            <textarea id="gp-chan-text" rows="2" placeholder="Написать в канал…"></textarea>
+            <div class="gp-chan-composer-row">
+                <input type="file" id="gp-chan-file" accept="image/*" style="display:none">
+                <button class="gp-iconbtn" id="gp-chan-pick" title="Приложить фото">${ic('fa-image')}</button>
+                <button class="gp-iconbtn" id="gp-chan-draw" title="Нарисовать по описанию">${ic('fa-wand-magic-sparkles')}</button>
+                <button class="gp-primary" id="gp-chan-post" ${_chanBusy ? 'disabled' : ''}>${_chanBusy ? ic('fa-spinner fa-spin') : ic('fa-paper-plane')} Опубликовать</button>
+            </div>
+        </div>` : `
+        <div class="gp-chan-composer">
+            <button class="${ch.subscribed ? 'gp-secondary' : 'gp-primary'}" id="gp-chan-sub">${ic(ch.subscribed ? 'fa-bell-slash' : 'fa-bell')} ${ch.subscribed ? 'Отписаться' : 'Подписаться'}</button>
+        </div>`;
+
+    setHtmlKeepScroll(screen, '.gp-chan-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            ${chanAvatar(ch)}
+            <div class="gp-thread-title">
+                <div class="gp-row-name">${esc(ch.name)}</div>
+                <div class="gp-thread-number">${fmtSubs(ch.subs)} ${plural(ch.subs, 'подписчик', 'подписчика', 'подписчиков')}${ch.author && !ch.mine ? ` · ${esc(ch.author)}` : ''}</div>
+            </div>
+            ${ch.mine
+                ? `<button class="gp-iconbtn gp-danger" id="gp-chan-drop" title="Удалить канал">${ic('fa-trash-can')}</button>`
+                : `<button class="gp-iconbtn" id="gp-chan-refresh" title="Свежие посты" ${_chanBusy ? 'disabled' : ''}>${ic(_chanBusy ? 'fa-spinner fa-spin' : 'fa-rotate')}</button>
+                   <button class="gp-iconbtn gp-danger" id="gp-chan-drop" title="Убрать канал">${ic('fa-trash-can')}</button>`}
+        </div>
+        <div class="gp-chan-scroll">
+            ${ch.desc ? `<div class="gp-chan-desc">${esc(ch.desc)}</div>` : ''}
+            ${stats}
+            ${(ch.posts || []).map(p => chanPostHtml(ch, p)).join('') || `
+                <div class="gp-empty"><div class="gp-empty-icon">${ic('fa-tower-broadcast')}</div>
+                <div class="gp-empty-text">${ch.mine ? 'Напиши первый пост — подписчики<br>отреагируют сами' : 'Нажми ↻ — канал наполнится'}</div></div>`}
+        </div>
+        ${composer}`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('chans'));
+    bindChanPostActions(screen, ch);
+
+    screen.querySelector('#gp-chan-refresh')?.addEventListener('click', () => chanBusyRun(async () => {
+        const arr = await generateChannelPosts(ch, (ch.posts || []).slice(0, 5).map(x => x.text || x.imgDesc));
+        const n = addChannelPosts(ch.id, arr);
+        if (!n) throw new Error('Канал молчит — попробуй ещё раз');
+        markChannelRead(ch.id);
+        toast(`Новых постов: ${n}`, 'fa-tower-broadcast');
+    }));
+
+    screen.querySelector('#gp-chan-sub')?.addEventListener('click', () => {
+        const on = toggleSubscribe(ch.id);
+        updatePhoneInjection();
+        applyChatHiding();
+        render();
+        toast(on ? 'Подписка оформлена' : 'Отписались', on ? 'fa-bell' : 'fa-bell-slash');
+    });
+
+    screen.querySelector('#gp-chan-drop')?.addEventListener('click', () => {
+        if (ch.mine) {
+            if (!confirm('Удалить свой канал вместе со всеми постами?')) return;
+            deleteMyChannel();
+        } else {
+            if (!confirm(`Убрать канал «${ch.name}» из телефона?`)) return;
+            deleteChannel(ch.id);
+        }
+        updatePhoneInjection();
+        applyChatHiding();
+        _chanId = null;
+        goto('chans');
+    });
+
+    // Фото к своему посту
+    const file = screen.querySelector('#gp-chan-file');
+    screen.querySelector('#gp-chan-pick')?.addEventListener('click', () => file?.click());
+    file?.addEventListener('change', async () => {
+        const f = file.files?.[0];
+        if (!f) return;
+        try {
+            _chanDraftImage = await compressImage(f, 900, 0.82);
+            render();
+        } catch (e) { toast('Не удалось загрузить фото', 'fa-circle-exclamation'); }
+    });
+    screen.querySelector('#gp-chan-imgclear')?.addEventListener('click', () => { _chanDraftImage = null; render(); });
+    screen.querySelector('#gp-chan-draw')?.addEventListener('click', async () => {
+        const desc = (screen.querySelector('#gp-chan-text')?.value || '').trim();
+        if (!desc) { toast('Сначала напиши текст поста — по нему и рисуем', 'fa-circle-exclamation'); return; }
+        if (!_imgGenReady) {
+            const ready = await isImageGenAvailable();
+            if (!ready) { toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation'); return; }
+            _imgGenReady = true;
+        }
+        await chanBusyRun(async () => {
+            _chanDraftImage = await generatePostImage(
+                { ak: 'user', kind: 'ig', author: getUserName(), imgDesc: desc, aspect: '4:3' }, null, 'chan-draft');
+            toast('Фото готово', 'fa-image');
+        });
+    });
+
+    screen.querySelector('#gp-chan-post')?.addEventListener('click', async () => {
+        const box = screen.querySelector('#gp-chan-text');
+        const text = (box?.value || '').trim();
+        if (!text && !_chanDraftImage) { toast('Пустой пост', 'fa-circle-exclamation'); return; }
+        let post;
+        try {
+            post = publishToMyChannel({ text, image: _chanDraftImage, imgDesc: '' });
+        } catch (e) { toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation'); return; }
+        _chanDraftImage = null;
+        if (box) box.value = '';
+        clearDraft('gp-chan-text');
+        render();
+        await chanBusyRun(async () => {
+            const r = await generateMyChannelFeedback(ch, post);
+            if (!r) throw new Error('Подписчики молчат — реакции не пришли');
+            if (r.photo && !post.imgDesc) post.imgDesc = String(r.photo).slice(0, 300);
+            addReacts(post, r.reactions);
+            if (post.commentsOn) addComments(post, r.comments);
+            const delta = Math.max(-50, Math.min(300, Math.round(Number(r.new_subs) || 0)));
+            if (delta) addSubs(ch, delta);
+            saveMeta();
+            // Журнал: описание фото уже готово, сам снимок в чат не уходит
+            logSocialToChat(`${getUserName()} публикует пост в своём канале «${ch.name}»${post.text ? `: «${post.text.slice(0, 300)}»` : ''}${post.imgDesc ? ` (на фото: ${post.imgDesc})` : ''}. Подписчиков: ${ch.subs}.`);
+            applyChatHiding();
+            // Личка от тех, кто не стал писать при всех
+            for (const dm of (Array.isArray(r.dms) ? r.dms : []).slice(0, 2)) {
+                if (!dm?.from || !dm?.text) continue;
+                deliverScamSms({
+                    from: dm.from,
+                    text: dm.text,
+                    shot: { app: 'ch', id: post.id, author: ch.name, text: (post.text || post.imgDesc || '').slice(0, 200) },
+                });
+            }
+            updatePhoneInjection();
+            toast(`Пост опубликован${delta ? ` · ${delta > 0 ? '+' : ''}${delta} подписчиков` : ''}`, 'fa-tower-broadcast');
+        });
+    });
+}
+
+// Общие действия над карточкой поста (лента канала и экран обсуждения)
+function bindChanPostActions(root, ch) {
+    root.querySelectorAll('[data-chanreact]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const [pid, emoji] = b.getAttribute('data-chanreact').split('|');
+        toggleReact(ch.id, pid, emoji);
+        render();
+    }));
+    root.querySelectorAll('[data-chanreactadd]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pid = b.getAttribute('data-chanreactadd');
+        const wrap = b.parentElement;
+        if (wrap?.querySelector('.gp-chan-react-picker')) { render(); return; }
+        const picker = document.createElement('div');
+        picker.className = 'gp-chan-react-picker';
+        picker.innerHTML = CHAN_REACTS.map(x => `<button data-chanreact="${esc(pid)}|${esc(x)}">${x}</button>`).join('');
+        wrap?.appendChild(picker);
+        picker.querySelectorAll('[data-chanreact]').forEach(x => x.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const [pid2, emoji] = x.getAttribute('data-chanreact').split('|');
+            toggleReact(ch.id, pid2, emoji);
+            render();
+        }));
+    }));
+    root.querySelectorAll('[data-chanopen]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _chanPostId = b.getAttribute('data-chanopen');
+        _chanReplyTo = null;
+        goto('chanpost');
+    }));
+    root.querySelectorAll('[data-chantoggle]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const on = toggleComments(ch.id, b.getAttribute('data-chantoggle'));
+        render();
+        toast(on ? 'Обсуждение включено' : 'Обсуждение выключено', on ? 'fa-comment' : 'fa-comment-slash');
+    }));
+    root.querySelectorAll('[data-chandel]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!confirm('Удалить пост из канала?')) return;
+        deleteChanPost(ch.id, b.getAttribute('data-chandel'));
+        render();
+    }));
+    root.querySelectorAll('[data-chanshare]').forEach(b => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const post = findChanPost(ch.id, b.getAttribute('data-chanshare'));
+        if (!post) return;
+        openShareSheet({ app: 'ch', id: post.id, author: ch.name, text: (post.text || post.imgDesc || '').slice(0, 200) });
+    }));
+    root.querySelectorAll('[data-chanimg]').forEach(b => b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const post = findChanPost(ch.id, b.getAttribute('data-chanimg'));
+        if (!post || !post.imgDesc || _imgGenBusy.has(post.id)) return;
+        if (!_imgGenReady) {
+            const ready = await isImageGenAvailable();
+            if (!ready) { toast('Картинко-расширение не установлено — генерация недоступна', 'fa-circle-exclamation'); return; }
+            _imgGenReady = true;
+        }
+        _imgGenBusy.add(post.id);
+        render();
+        try {
+            post.image = await generatePostImage(
+                { ak: ch.mine ? 'user' : 'random', kind: 'ig', author: ch.mine ? getUserName() : (ch.author || ch.name), imgDesc: post.imgDesc, aspect: '4:3' },
+                null, post.id);
+            saveMeta();
+            toast('Фото готово', 'fa-image');
+        } catch (err) {
+            if (err?.name === 'ImageGenCancelled' || err?.name === 'AbortError') toast('Генерация остановлена', 'fa-circle-stop');
+            else toast(`Не получилось: ${String(err?.message || err).slice(0, 60)}`, 'fa-circle-exclamation');
+        } finally {
+            _imgGenBusy.delete(post.id);
+            render();
+        }
+    }));
+}
+
+function renderChanPost(screen) {
+    const ch = findChannel(_chanId);
+    const post = ch ? findChanPost(ch.id, _chanPostId) : null;
+    if (!ch || !post) { goto('chans'); return; }
+    currentScreen = 'chanpost';
+
+    const comments = (post.comments || []).map(c => {
+        const mine = c.ak === 'user';
+        return `
+        <div class="gp-chan-comment${mine ? ' gp-mine' : ''}${c.replyTo ? ' gp-reply' : ''}">
+            ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
+            <div class="gp-chan-comment-body">
+                <div class="gp-chan-comment-name" style="color:${senderColor(c.author)}">${esc(c.author)}${c.replyTo ? `<span> · ответ ${esc(c.replyTo)}</span>` : ''}</div>
+                <div class="gp-chan-comment-text">${esc(c.text)}</div>
+                <div class="gp-chan-comment-foot">
+                    ${esc(fmtTime(new Date(c.ts)))}
+                    ${!mine ? `<button data-chanreply="${esc(c.author)}">Ответить</button>` : ''}
+                    <button class="gp-danger" data-chancdel="${esc(c.id)}">Удалить</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    setHtmlKeepScroll(screen, '.gp-chan-scroll', `
+        <div class="gp-header gp-thread-header">
+            <button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button>
+            <div class="gp-thread-title">
+                <div class="gp-row-name">Обсуждение</div>
+                <div class="gp-thread-number">${esc((post.text || post.imgDesc || 'пост').slice(0, 40))}</div>
+            </div>
+            <button class="gp-iconbtn" id="gp-chan-more" title="Ещё комментарии" ${_chanBusy ? 'disabled' : ''}>${ic(_chanBusy ? 'fa-spinner fa-spin' : 'fa-rotate')}</button>
+        </div>
+        <div class="gp-chan-scroll">
+            ${comments || `<div class="gp-empty"><div class="gp-empty-icon">${ic('fa-comment')}</div>
+                <div class="gp-empty-text">Пока тихо. Напиши первой<br>или нажми ↻</div></div>`}
+        </div>
+        <div class="gp-chan-composer">
+            ${_chanReplyTo ? `<div class="gp-chan-replychip">${ic('fa-reply')} ${esc(_chanReplyTo)}<button id="gp-chan-replyoff">${ic('fa-xmark')}</button></div>` : ''}
+            <div class="gp-chan-composer-row">
+                <textarea id="gp-chan-comment" rows="1" placeholder="Написать в обсуждение…"></textarea>
+                <button class="gp-primary" id="gp-chan-send" ${_chanBusy ? 'disabled' : ''}>${_chanBusy ? ic('fa-spinner fa-spin') : ic('fa-paper-plane')}</button>
+            </div>
+        </div>`);
+
+    screen.querySelector('#gp-back')?.addEventListener('click', () => goto('chan'));
+    screen.querySelector('#gp-chan-replyoff')?.addEventListener('click', () => { _chanReplyTo = null; render(); });
+    screen.querySelectorAll('[data-chanreply]').forEach(b => b.addEventListener('click', () => {
+        _chanReplyTo = b.getAttribute('data-chanreply');
+        render();
+    }));
+    screen.querySelectorAll('[data-chancdel]').forEach(b => b.addEventListener('click', () => {
+        deleteComment(post, b.getAttribute('data-chancdel'));
+        render();
+    }));
+
+    screen.querySelector('#gp-chan-more')?.addEventListener('click', () => chanBusyRun(async () => {
+        const n = addComments(post, await generateChannelComments(ch, post));
+        if (!n) throw new Error('Обсуждение молчит — попробуй ещё раз');
+        toast(`Новых комментариев: ${n}`, 'fa-comment');
+    }));
+
+    screen.querySelector('#gp-chan-send')?.addEventListener('click', async () => {
+        const box = screen.querySelector('#gp-chan-comment');
+        const text = (box?.value || '').trim();
+        if (!text) return;
+        const replyTo = _chanReplyTo;
+        addMyComment(post, text, replyTo);
+        _chanReplyTo = null;
+        if (box) box.value = '';
+        clearDraft('gp-chan-comment');
+        logSocialToChat(replyTo
+            ? `${getUserName()} отвечает ${replyTo} в обсуждении канала «${ch.name}»: «${text}»`
+            : `${getUserName()} пишет в обсуждении канала «${ch.name}» (пост «${String(post.text || post.imgDesc || '').slice(0, 60)}»): «${text}»`);
+        applyChatHiding();
+        render();
+        await chanBusyRun(async () => {
+            addComments(post, await generateChannelComments(ch, post, { userComment: text, replyTo }));
+            updatePhoneInjection();
+        });
+    });
+}
+
+// ═══ Скрин поста в личку ═══
+// Пересылается не картинка, а ссылка на пост: карточку телефон рисует сам,
+// тап открывает исходный пост в его приложении.
+
+const SHOT_APPS = {
+    tw: { icon: 'fa-x-twitter', label: 'твиттер' },
+    ig: { icon: 'fa-instagram', label: 'инстаграм' },
+    st: { icon: 'fa-circle-play', label: 'сторис' },
+    of: { icon: 'fa-lock', label: 'OnlyFans' },
+    ch: { icon: 'fa-tower-broadcast', label: 'канал' },
+};
+
+// Короткая подпись скрина для видимой строки и для промпта
+function shotLabel(shot) {
+    const meta = SHOT_APPS[String(shot?.app || '').toLowerCase()];
+    const who = shot?.author ? ` ${shot.author}` : '';
+    const txt = shot?.text ? `: «${String(shot.text).slice(0, 100)}»` : '';
+    return `${meta ? meta.label : 'пост'}${who}${txt}`;
+}
+
+// Что именно прислали: ищем пост по id, а если модель его выдумала — по автору
+// и тексту. Не нашли — карточка останется серой заглушкой без перехода.
+function resolveShot(shot) {
+    if (!shot || !shot.app) return null;
+    const app = String(shot.app).toLowerCase();
+    const byId = (arr) => (shot.id ? arr.find(x => x.id === shot.id) : null);
+    if (app === 'tw') {
+        const arr = getTweets();
+        return byId(arr) || matchPostByText(arr, shot.text, shot.author);
+    }
+    if (app === 'ig') {
+        const arr = getIgPosts();
+        return byId(arr) || matchPostByText(arr, shot.text, shot.author);
+    }
+    if (app === 'of') {
+        const arr = getOfPosts();
+        return byId(arr) || matchPostByText(arr, shot.text, shot.author);
+    }
+    if (app === 'st') {
+        const arr = getStories();
+        return byId(arr) || matchPostByText(arr, shot.text, shot.author);
+    }
+    if (app === 'ch') {
+        for (const ch of allChannels()) {
+            const hit = (ch.posts || []).find(x => shot.id && x.id === shot.id) || matchPostByText(ch.posts || [], shot.text, '');
+            if (hit) return { ...hit, _chanId: ch.id };
+        }
+    }
+    return null;
+}
+
+function shotHtml(m) {
+    const shot = m.shot;
+    if (!shot || !shot.app) return '';
+    const meta = SHOT_APPS[String(shot.app).toLowerCase()] || { icon: 'fa-image', label: 'пост' };
+    const found = resolveShot(shot);
+    const author = shot.author || found?.author || '';
+    const text = String(found?.text || found?.caption || shot.text || found?.imgDesc || '').slice(0, 220);
+    const img = found?.image || null;
+    return `
+    <div class="gp-shot${found ? ' gp-shot-live' : ''}" ${found ? `data-shot="${esc(JSON.stringify({ app: shot.app, id: found.id, chan: found._chanId || '' }))}"` : ''}>
+        <div class="gp-shot-head">${ic(meta.icon)} ${esc(meta.label)}${author ? ` · ${esc(author)}` : ''}</div>
+        ${img ? `<div class="gp-shot-img"><img src="${esc(img)}" alt=""></div>` : ''}
+        ${text ? `<div class="gp-shot-text">${esc(text)}</div>` : ''}
+        ${found ? '' : `<div class="gp-shot-dead">${ic('fa-link-slash')} поста нет в телефоне</div>`}
+    </div>`;
+}
+
+function openShot(raw) {
+    let j = null;
+    try { j = JSON.parse(raw); } catch (e) { return; }
+    const app = String(j?.app || '').toLowerCase();
+    if (app === 'tw') { currentTweetId = j.id; goto('twthread'); }
+    else if (app === 'ig') { currentPostId = j.id; goto('igview'); }
+    else if (app === 'of') { currentPostId = j.id; goto('ofview'); }
+    else if (app === 'st') { goto('igstory'); }
+    else if (app === 'ch') {
+        _chanId = j.chan || _chanId;
+        _chanPostId = j.id;
+        const ch = findChannel(_chanId);
+        if (ch) { markChannelRead(ch.id); goto('chan'); }
+    }
+}
+
+// Выбор адресата: один контакт или групповой чат + подпись
+let _shareShot = null;
+let _shareTo = null;
+
+function openShareSheet(shot) {
+    if (!shot) return;
+    _shareShot = shot;
+    _shareTo = null;
+    renderShareSheet();
+}
+
+function renderShareSheet() {
+    const screen = document.getElementById('gp-screen');
+    if (!screen || !_shareShot) return;
+    screen.querySelector('.gp-share-overlay')?.remove();
+    const threads = getThreadList();
+    const overlay = document.createElement('div');
+    overlay.className = 'gp-member-overlay gp-share-overlay';
+    overlay.innerHTML = `
+        <div class="gp-member-overlay-panel">
+            <div class="gp-member-overlay-header">
+                <span>Отправить в лс</span>
+                <button class="gp-iconbtn" id="gp-share-close">${ic('fa-xmark')}</button>
+            </div>
+            <div class="gp-member-overlay-list">
+                ${threads.length ? threads.map(t => `
+                    <button class="gp-share-row${_shareTo === t.key ? ' gp-selected' : ''}" data-shareto="${esc(t.key)}">
+                        ${t.isGroup ? `<div class="gp-avatar gp-avatar-xs gp-avatar-group">${ic('fa-users')}</div>` : avatarHtml(t.name, getContactAvatar(t.key), 'gp-avatar gp-avatar-xs')}
+                        <span>${esc(t.name)}</span>
+                        ${ic(_shareTo === t.key ? 'fa-circle-check' : 'fa-circle')}
+                    </button>`).join('') : '<div class="gp-empty-text">Сначала заведи контакты</div>'}
+            </div>
+            <textarea id="gp-share-note" rows="1" placeholder="Подписать…"></textarea>
+            <button class="gp-primary" id="gp-share-send" ${_shareTo ? '' : 'disabled'}>${ic('fa-paper-plane')} Отправить</button>
+        </div>`;
+    screen.appendChild(overlay);
+    const close = () => { _shareShot = null; _shareTo = null; overlay.remove(); };
+    overlay.querySelector('#gp-share-close')?.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelectorAll('[data-shareto]').forEach(b => b.addEventListener('click', () => {
+        const note = overlay.querySelector('#gp-share-note')?.value || '';
+        _shareTo = b.getAttribute('data-shareto');
+        renderShareSheet();
+        const box = document.getElementById('gp-share-note');
+        if (box) box.value = note;
+    }));
+    overlay.querySelector('#gp-share-send')?.addEventListener('click', async () => {
+        const note = (overlay.querySelector('#gp-share-note')?.value || '').trim();
+        const to = _shareTo;
+        const shot = _shareShot;
+        close();
+        if (!to || !shot) return;
+        currentThreadKey = to;
+        goto('thread');
+        await doSend(to, { text: note, shot });
+    });
+}
 
 // ═══ Удаление одного сообщения ═══
 // Сообщение телефона — это тег внутри реплики чата. Вырезаем ровно его: если в
@@ -5270,11 +5885,15 @@ async function insertGhostReply(name, mesText) {
     }, 1500);
 }
 
-async function doSend(key) {
+// opts: {text, shot} — так уходит пересланный скрин поста (адресата и подпись
+// выбирают в шторке, поле ввода треда при этом не участвует)
+async function doSend(key, opts = {}) {
     if (sending) return;
     const input = document.getElementById('gp-input');
-    const text = (input?.value || '').trim();
-    if (!text && !_smsDraftImage) return;
+    const fromInput = opts.text === undefined;
+    const text = (fromInput ? (input?.value || '') : opts.text).trim();
+    const shot = opts.shot || null;
+    if (!text && !_smsDraftImage && !shot) return;
     const t = getThread(key);
     const name = t ? t.name : key;
     const isGroup = !!t?.isGroup;
@@ -5284,11 +5903,12 @@ async function doSend(key) {
     _smsDraftVoice = false;
 
     sending = true;
-    if (input) input.value = '';
+    if (input && fromInput) input.value = '';
 
     // Сообщение чата: скрытый маркер + видимый текст (модель и без инжекции поймёт формат)
     const markerBase = isGroup ? { to: `группа:${name}` } : { to: name };
     if (asVoice) markerBase.voice = true;
+    if (shot) markerBase.shot = shot;
     const marker = `<!--tel:out:${JSON.stringify(markerBase)}-->`;
     // Видимый формат по языку интерфейса ([SMS → X] на англ); сканер понимает оба
     const en = lang() === 'en';
@@ -5297,7 +5917,9 @@ async function doSend(key) {
         ? (en ? `[${kindTok} to chat «${name}»]` : `[${kindTok} в чат «${name}»]`)
         : `[${kindTok} → ${name}]`;
     const photoTok = en ? '*photo*' : '*фото*';
-    const mes = `${marker}\n${visible} ${draftImg ? photoTok + ' ' : ''}${text}`;
+    // Скрин виден и модели: она должна понимать, ЧТО именно переслали
+    const shotTok = shot ? `*${en ? 'screenshot' : 'скрин'}: ${shotLabel(shot)}*` : '';
+    const mes = `${marker}\n${visible} ${draftImg ? photoTok + ' ' : ''}${shotTok ? shotTok + ' ' : ''}${text}`;
 
     try {
         await sendMessageAsUser(mes);
@@ -5371,8 +5993,8 @@ async function doSend(key) {
         const ctx = SillyTavern.getContext();
         const msgKind = asVoice ? 'VOICE message (they hear their voice; this is the transcript)' : 'message';
         const quietPrompt = isGroup
-            ? `Continue the roleplay. The group chat «${name}» (members: ${(t.members || []).join(', ')}) just received this ${msgKind} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply as the group members — ONLY hidden tel:sms tags with the "chat" field (RULE 3 — PHONE-ONLY MODE), one tag per message, several members may text. No visible prose.`
-            : `Continue the roleplay. ${name} just received this ${asVoice ? msgKind : 'SMS'} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
+            ? `Continue the roleplay. The group chat «${name}» (members: ${(t.members || []).join(', ')}) just received this ${msgKind} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}${shot ? ` (with a forwarded screenshot — ${shotLabel(shot)})` : ''}. Reply as the group members — ONLY hidden tel:sms tags with the "chat" field (RULE 3 — PHONE-ONLY MODE), one tag per message, several members may text. No visible prose.`
+            : `Continue the roleplay. ${name} just received this ${asVoice ? msgKind : 'SMS'} from ${ctx?.name1 || 'User'}: "${text}"${draftImg ? ' (with a photo attached)' : ''}${shot ? ` (with a forwarded screenshot — ${shotLabel(shot)}; react to what is IN it)` : ''}. Reply in-character with ONLY hidden tel:sms tags (RULE 3 — PHONE-ONLY MODE). No visible prose.`;
         const rawReply = await generateQuietPrompt(quietPrompt, false, false);
         if (rawReply && rawReply.trim()) {
             await insertGhostReply(name, rawReply.trim());

@@ -1462,6 +1462,7 @@ This is a STANDALONE task — do NOT roleplay, do NOT write for characters outsi
     return block;
 }
 
+const CHAN_REACT_LINE = '🔥 ❤️ 😮 😂 💔 👍';
 const JSON_RULES = `Output STRICT JSON array ONLY. No markdown, no backticks, no commentary, no <think>, no hidden HTML comments. Text values in the same language as the roleplay excerpt (Russian). Keep it varied and alive.
 CRITICAL — "author" is ALWAYS the person's real DISPLAY NAME (e.g. «Вадим Огнев», «Алиса»), NEVER an @handle/nickname. The @handle belongs ONLY in the separate "handle" field. For known characters use their EXACT name as listed above so the app links them correctly.`;
 
@@ -1739,6 +1740,72 @@ Format: [{"tag":"категория","title":"заголовок","text":"тек
 
 
 // ── Дискорд: серверы и жизнь каналов ──
+// ── Каналы (как в телеграме): чужие каналы, их посты и обсуждение ──
+export async function generateChannels(existing = []) {
+    const prompt = `${await taskHeader(`invent Telegram-style channels ${getUserName()} could come across on their phone.`)}
+Invent 3-4 channels that belong to THIS world and city: local news and incidents, weather and transport, a neighbourhood or campus channel, a hobby/fandom one, a small blog run by someone they might know. For each: name, one-line description, who runs it (a display name or a nickname), a believable subscriber count as a NUMBER, and 3-4 recent posts — short, concrete, in the voice of that channel. A post may have "photo" — one sentence of what the picture shows (or "" for a text-only post).
+${existing.length ? `Channels they already see (do NOT duplicate): ${existing.join('; ')}` : ''}
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"name":"...","desc":"...","author":"...","subs":8900,"posts":[{"text":"...","photo":""}]}]`;
+    return await socialGenArray(prompt, { maxTokens: 2400, prefill: '[{"name":"' });
+}
+
+export async function generateChannelPosts(channel, existing = []) {
+    const prompt = `${await taskHeader(`write new posts for the channel «${channel.name}» on ${getUserName()}'s phone.`)}
+Channel: «${channel.name}»${channel.desc ? ` — ${channel.desc}` : ''}${channel.author ? `, run by ${channel.author}` : ''}, ${channel.subs} subscribers.
+${existing.length ? `Its latest posts (continue the tone, do NOT repeat):\n${existing.slice(0, 5).map(x => `- ${x}`).join('\n')}` : ''}
+Write 2-4 new posts as this channel would publish them right now — tied to the current moment of the roleplay if it is relevant to them. Keep them short and concrete. "photo" — one sentence of what the picture shows, or "" for text-only.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"text":"...","photo":""}]`;
+    return await socialGenArray(prompt, { maxTokens: 1200, prefill: '[{"text":"' });
+}
+
+export async function generateChannelComments(channel, post, { userComment = null, replyTo = null } = {}) {
+    const existing = (post.comments || []).slice(-8).map(c => `${c.author}: ${c.text}`).join('\n');
+    const event = userComment
+        ? (replyTo
+            ? `${getUserName()} just replied to ${replyTo}'s comment: «${userComment}». ${replyTo} answers FIRST, then 1-2 others react.`
+            : `${getUserName()} just commented: «${userComment}». Someone answers them.`)
+        : '';
+    const prompt = `${await taskHeader(`write the discussion under a post in the channel «${channel.name}».`)}
+Channel: «${channel.name}»${channel.desc ? ` — ${channel.desc}` : ''}${channel.mine ? ` — this is ${getUserName()}'s OWN channel` : ''}.
+Post: ${post.text || post.imgDesc || '(photo)'}
+${existing ? `Comments so far (do NOT repeat):\n${existing}` : ''}
+${event}
+${contactsBlock()}
+Write ${userComment ? '2-3' : '3-5'} comments from subscribers: known characters in character (only those who would really be here), plus strangers under nicknames. Short, spoken, sometimes arguing with each other — use "reply_to" with the exact name of the person being answered. NO emojis.
+${uiLangLine()}
+${JSON_RULES}
+Format: [{"author":"Имя","handle":"@nick","text":"...","reply_to":""}]`;
+    return await socialGenArray(prompt, { maxTokens: 1200, prefill: '[{"author":"' });
+}
+
+// Свой пост: реакции, комменты, личные сообщения и прирост подписчиков —
+// одним запросом (картинка уходит в него один раз).
+export async function generateMyChannelFeedback(channel, post) {
+    const wantDesc = !!post.image && !post.imgDesc;
+    const prompt = `${await taskHeader(`react to the post ${getUserName()} just published in their own channel «${channel.name}».`)}
+Channel: «${channel.name}»${channel.desc ? ` — ${channel.desc}` : ''}, ${channel.subs} subscribers.
+Post: ${post.text || post.imgDesc || '(photo)'}${post.image ? ' (the ACTUAL image is attached — look at it and react to what you see)' : ''}
+${contactsBlock()}
+Return:
+${wantDesc ? '"photo" — one sentence describing what is ACTUALLY on the attached image.\n' : ''}"reactions" — 1-3 of ${CHAN_REACT_LINE}, with a plausible count each: [{"emoji":"🔥","n":24}]
+${post.commentsOn ? '"comments" — 2-4 comments under the post (known characters in character + strangers under nicknames); use "reply_to" when answering another commenter.' : '"comments" — [] (the discussion is closed for this post)'}
+"dms" — 0-2 people who would rather write PRIVATELY than comment (someone close, jealous, worried, or with something to hide): [{"from":"Имя СТРОГО из её контактов","text":"short in-character message about this exact post"}]. Otherwise [].
+"new_subs" — how many subscribers this post brings, a small realistic NUMBER (can be 0 or negative if it would push people away).
+${uiLangLine()}
+${JSON_RULES}
+Format: [{${wantDesc ? '"photo":"...",' : ''}"reactions":[{"emoji":"🔥","n":24}],"comments":[{"author":"Имя","handle":"@nick","text":"...","reply_to":""}],"dms":[{"from":"Имя","text":"..."}],"new_subs":12}]`;
+    const arr = await socialGenArray(prompt, {
+        maxTokens: 1800,
+        image: post.image || null,
+        prefill: wantDesc ? '[{"photo":"' : '[{"reactions":',
+    });
+    return Array.isArray(arr) ? arr[0] : null;
+}
+
 export async function generateDiscordServers(existing = []) {
     const prompt = `${await taskHeader(`invent Discord servers that ${getUserName()} would realistically be a member of.`)}
 Invent 2-4 servers fitting their interests, city, work and the roleplay setting (fandom, hobby, game, neighborhood, professional...). For each: name, one-line description, 2-4 text channels (channel name latin-lowercase-with-dashes, short topic), 8-12 member nicknames (varied and believable; story characters MAY appear under their handles if they'd plausibly be there).

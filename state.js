@@ -5,7 +5,7 @@ import { extension_settings, saveMetadataDebounced } from '../../../extensions.j
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.14.5';
+export const GP_VERSION = '2.15.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -1037,6 +1037,7 @@ function scanChatUncached() {
                     if (ei) entry.img = ei;
                 }
                 if (j.photo) entry.photoDesc = String(j.photo).slice(0, 200);
+                if (j.shot) entry.shot = j.shot;
                 if (groupName) {
                     if (body || entry.img) pushMsg(`group:${keyOf(groupName)}`, entry, groupName);
                 } else if (to && (body || entry.img)) {
@@ -1101,6 +1102,8 @@ function scanChatUncached() {
                 if (j.img) entry.img = String(j.img);
                 // Реакция юзера на сообщение (пишется в тег из UI)
                 if (j.react) entry.react = String(j.react);
+                // Скрин поста из соцсети или канала: карточку рисует телефон
+                if (j.shot) entry.shot = j.shot;
                 if (j.chat) {
                     // Сообщение в групповой чат
                     pushMsg(`group:${keyOf(j.chat)}`, entry, String(j.chat));

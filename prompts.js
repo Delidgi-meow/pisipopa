@@ -116,7 +116,7 @@ function buildPrompt() {
         } catch (e) { /* ignore */ }
         try {
             const chan = channelInjectLine();
-            if (chan) c += `[{{user}}'S CHANNELS] ${chan}\n`;
+            if (chan) c += `[{{user}}'S CHANNELS] ${chan}\n5. A channel they follow publishes → <!--tel:chan:{"channel":"Name","text":"the post","photo":"what the picture shows, or omit"}-->. Never into their own channel.\n`;
         } catch (e) { /* ignore */ }
         try {
             const notesBlock = notesInjectBlock();
@@ -190,10 +190,15 @@ function buildPrompt() {
             if (bankSum) p += `[{{user}}'S FINANCES] ${bankSum}\n`;
         }
     } catch (e) { /* ignore */ }
-    // Каналы — одной строкой, только если она их завела или на что-то подписана
+    // Каналы — одной строкой, только если она их завела или на что-то подписана.
+    // Правило про тег идёт следом: чужие каналы ведёт модель, свой — она сама.
     try {
         const chan = channelInjectLine();
-        if (chan) p += `\n[{{user}}'S CHANNELS] ${chan}\n`;
+        if (chan) {
+            p += `\n[{{user}}'S CHANNELS] ${chan}\n`;
+            p += `[RULE 5 — CHANNEL POST] When a channel above would really publish something about what is happening now (news, a warning, the blogger's own remark), append at the END: <!--tel:chan:{"channel":"exact channel name","text":"the post as that channel writes it","photo":"one line of what the picture shows — or omit the field"}-->\n`;
+            p += `A channel not listed above may appear this way too — give it a plain "channel" name and the app adds it. NEVER post into {{user}}'s OWN channel: those are written by them in the app, and such a tag is discarded. Do not spam: at most 1-2 channel posts per reply, and only when the story gives a reason.\n`;
+        }
     } catch (e) { /* ignore */ }
     // Заметки — только расшаренные (секретные не инжектятся никогда)
     try {

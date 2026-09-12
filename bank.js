@@ -353,9 +353,13 @@ function chatLen() {
 function takeSynced(b, amount, msgIndex) {
     const amt = Math.round(Number(amount) || 0);
     if (!amt || !Array.isArray(b.syncQueue) || !b.syncQueue.length) return false;
-    // Окно по ходам: старые покупки не должны глотать законные траты ролевой
+    // Окно по ходам: старые покупки не должны глотать законные траты ролевой.
+    // x.at <= msgIndex обязательно: записи «из будущего» — те же теги,
+    // что обработаны этим же проходом (их at = chatLen() > msgIndex), и два
+    // одинаковых перевода в одном сообщении съедали друг друга
     const hit = b.syncQueue.find(x => !x.confirmed
         && Math.round(Number(x.amount) || 0) === amt
+        && (Number(x.at) || 0) <= msgIndex
         && (msgIndex - (Number(x.at) || 0)) <= 10);
     if (!hit) return false;
     hit.confirmed = true;

@@ -1,7 +1,7 @@
 // Каналы: свой и чужие, посты с реакциями, просмотрами и обсуждением.
 // Данные лежат per-chat в meta; генерация — по кнопкам и после своих постов.
 
-import { getMeta, saveMeta, keyOf } from './state.js';
+import { getMeta, saveMeta, keyOf, stripThink } from './state.js';
 import { logSocialToChat, getUserName } from './social.js';
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -305,6 +305,82 @@ export function matchPostByText(posts, text, author = '') {
         if (score > bestScore) { bestScore = score; best = p; }
     }
     return bestScore >= 2 ? best : null;
+}
+
+
+// ── Посты из ролевой ──
+// Модель ведёт чужие каналы сама: <!--tel:chan:{"channel":"Имя","text":"…","photo":"…"}-->
+// Свой канал пишет только она — тег с его именем игнорируется.
+
+const CHAN_TAG_RE = /<!--\s*tel:chan:(\{[\s\S]*?\})\s*-->/gi;
+
+function hash32(str) {
+    let h = 0;
+    const t = String(str);
+    for (let i = 0; i < t.length; i++) h = ((h << 5) - h + t.charCodeAt(i)) | 0;
+    return String(h);
+}
+
+function safeJson(raw) {
+    try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+function applyChannelTag(j) {
+    const name = String(j?.channel || j?.name || '').trim().slice(0, 60);
+    const text = String(j?.text || '').trim();
+    const photo = String(j?.photo || '').trim();
+    if (!name || (!text && !photo)) return null;
+    const c = getChannels();
+    if (c.mine && keyOf(c.mine.name) === keyOf(name)) return null;
+    let ch = c.list.find(x => keyOf(x.name) === keyOf(name));
+    if (!ch) {
+        // Канал, о котором ролевая заговорила впервые, появляется в списке
+        // найденных — подписаться на него она решает сама
+        addFoundChannels([{
+            name,
+            desc: String(j.desc || '').slice(0, 200),
+            author: String(j.author || '').slice(0, 40),
+            subs: Number(j.subs) || 0,
+            posts: [],
+        }]);
+        ch = getChannels().list.find(x => keyOf(x.name) === keyOf(name));
+        if (!ch) return null;
+        ch.fromRp = true;
+    }
+    return addChannelPosts(ch.id, [{ text, photo }]) ? ch.name : null;
+}
+
+export function harvestChannelTags() {
+    const c = getChannels();
+    if (!Array.isArray(c.seenTags)) c.seenTags = [];
+    let chat = [];
+    try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return { n: 0, names: [] }; }
+    const seen = new Set(c.seenTags);
+    const names = [];
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        // Свои сообщения не сканируем: посты в каналы она публикует из телефона
+        if (!msg || !msg.mes || msg.is_user || !/tel:chan/i.test(msg.mes)) continue;
+        const text = stripThink(msg.mes);
+        const occ = {};
+        CHAN_TAG_RE.lastIndex = 0;
+        let m;
+        while ((m = CHAN_TAG_RE.exec(text)) !== null) {
+            // Ключ как у банка: содержимое + сообщение + номер повтора. Позиция
+            // тега не годится — она съезжает от любой правки текста
+            const base = `cp${hash32(m[1])}:${String(msg.send_date || msg.extra?.gen_id || i)}`;
+            const n = occ[base] = (occ[base] || 0) + 1;
+            const key = `${base}#${n}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            c.seenTags.push(key);
+            const added = applyChannelTag(safeJson(m[1]));
+            if (added) names.push(added);
+        }
+    }
+    if (c.seenTags.length > 300) c.seenTags = c.seenTags.slice(-300);
+    saveMeta();
+    return { n: names.length, names: [...new Set(names)] };
 }
 
 // ── Инжект ──
